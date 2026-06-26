@@ -192,11 +192,7 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
                             editState.open(mcpConfig)
                         },
                         onDelete = {
-                            vm.updateSettings(
-                                settings.copy(
-                                    mcpServers = mcpConfigs.filter { it.id != mcpConfig.id }
-                                )
-                            )
+                            vm.deleteMcpServer(mcpConfig.id)
                         },
                         modifier = Modifier.animateItem()
                     )
