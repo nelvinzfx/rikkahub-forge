@@ -28,7 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.adaptive.currentWindowDpSize
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -131,10 +131,16 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
         }
     }
 
-    @Suppress("DEPRECATION")  // LocalWindowInfo replaces this in a future Compose bump
-    val windowAdaptiveInfo = currentWindowDpSize()
+    // Use LocalConfiguration (not currentWindowDpSize) for the big-screen decision.
+    // RouteActivity declares configChanges="orientation|screenSize", so the Activity is
+    // NOT recreated on rotation — currentWindowDpSize() from material3.adaptive can get
+    // stuck at the landscape value when returning to portrait, leaving the
+    // PermanentNavigationDrawer (which has no close button) rendered in portrait with a
+    // permanently-open side drawer. LocalConfiguration always reflects the current config.
+    val configuration = LocalConfiguration.current
     val isBigScreen =
-        windowAdaptiveInfo.width > windowAdaptiveInfo.height && windowAdaptiveInfo.width >= 1100.dp
+        configuration.screenWidthDp > configuration.screenHeightDp &&
+            configuration.screenWidthDp >= 1100
 
     // Reset drawer state when transitioning between big/small screen to prevent
     // the PermanentNavigationDrawer's always-open state from leaking into the
