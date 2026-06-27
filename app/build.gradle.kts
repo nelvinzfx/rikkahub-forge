@@ -25,7 +25,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            val abis = (project.findProperty("abiFilters") as? String)
+                ?.split(",")
+                ?.map { it.trim() }
+                ?: listOf("arm64-v8a", "x86_64")
+            abiFilters += abis
         }
     }
 
