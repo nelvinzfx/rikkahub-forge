@@ -83,10 +83,46 @@ interface ToolUIRenderer {
     /** Inline parameters tree, shown when step is expanded */
     @Composable
     fun InlineParams(context: ToolUIContext) {
+        Text(
+            text = stringResource(R.string.chat_message_tool_call_label, context.tool.toolName),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         ToolParamTree(
             element = context.arguments,
             loading = context.loading,
         )
+    }
+
+    /** Whether to show inline raw result when step is expanded. */
+    fun hasInlineResult(context: ToolUIContext): Boolean =
+        context.tool.isExecuted && context.tool.output.isNotEmpty()
+
+    /** Inline raw JSON result, shown when step is expanded */
+    @Composable
+    fun InlineResult(context: ToolUIContext) {
+        FormItem(
+            label = {
+                Text(stringResource(R.string.chat_message_tool_call_result))
+            }
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                context.tool.output.fastForEach { part ->
+                    when (part) {
+                        is UIMessagePart.Text -> HighlightCodeBlock(
+                            code = runCatching {
+                                JsonInstantPretty.encodeToString(
+                                    JsonInstant.parseToJsonElement(part.text)
+                                )
+                            }.getOrElse { part.text },
+                            language = "json",
+                            style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
+                        )
+                        else -> {}
+                    }
+                }
+            }
+        }
     }
 
     /** 点击步骤后的详情, 渲染在 BottomSheet 内 */
