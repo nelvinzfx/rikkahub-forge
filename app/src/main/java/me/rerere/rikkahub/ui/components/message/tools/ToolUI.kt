@@ -98,28 +98,37 @@ interface ToolUIRenderer {
     fun hasInlineResult(context: ToolUIContext): Boolean =
         context.tool.isExecuted && context.tool.output.isNotEmpty()
 
-    /** Inline raw JSON result, shown when step is expanded */
+    /** Inline raw JSON result, shown as tree-style like params */
     @Composable
     fun InlineResult(context: ToolUIContext) {
-        FormItem(
-            label = {
-                Text(stringResource(R.string.chat_message_tool_call_result))
-            }
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                context.tool.output.fastForEach { part ->
-                    when (part) {
-                        is UIMessagePart.Text -> HighlightCodeBlock(
-                            code = runCatching {
-                                JsonInstantPretty.encodeToString(
-                                    JsonInstant.parseToJsonElement(part.text)
-                                )
-                            }.getOrElse { part.text },
-                            language = "json",
-                            style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
-                        )
-                        else -> {}
+        Text(
+            text = stringResource(R.string.chat_message_tool_call_result),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            context.tool.output.fastForEach { part ->
+                when (part) {
+                    is UIMessagePart.Text -> {
+                        val parsed = remember(part.text) {
+                            runCatching {
+                                JsonInstant.parseToJsonElement(part.text)
+                            }.getOrNull()
+                        }
+                        if (parsed != null) {
+                            ToolParamTree(
+                                element = parsed,
+                                loading = false,
+                            )
+                        } else {
+                            HighlightCodeBlock(
+                                code = part.text,
+                                language = "text",
+                                style = TextStyle(fontSize = 10.sp, lineHeight = 12.sp)
+                            )
+                        }
                     }
+                    else -> {}
                 }
             }
         }
