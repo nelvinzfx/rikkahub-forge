@@ -171,7 +171,7 @@ private fun JsonTreeNode(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = indent + 14.dp, vertical = 0.5.dp),
+                    .padding(start = indent + 14.dp, vertical = 1.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.Top,
             ) {
