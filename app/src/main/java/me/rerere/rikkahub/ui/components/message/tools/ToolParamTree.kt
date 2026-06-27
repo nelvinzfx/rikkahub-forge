@@ -1,8 +1,6 @@
 package me.rerere.rikkahub.ui.components.message.tools
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateIntAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,8 +37,14 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowRight01
 
+private const val BRANCH_MID = "├── "
+private const val BRANCH_END = "└── "
+private const val PIPE = "│   "
+private const val SPACE = "    "
+
 /**
  * Tree-style JSON parameter display for tool calls.
+ * Renders like the Unix `tree` command with ├── │ └── box-drawing characters.
  * Skips empty objects/arrays/blank values entirely.
  * Fast typing animation when [loading] is true.
  */
@@ -50,7 +54,7 @@ fun ToolParamTree(
     modifier: Modifier = Modifier,
     loading: Boolean = false,
 ) {
-    // Skip empty root object
+    // Skip empty root
     if (element is JsonObject && element.isEmpty()) return
     if (element is JsonArray && element.isEmpty()) return
 
@@ -60,106 +64,120 @@ fun ToolParamTree(
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f))
             .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(1.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        JsonTreeNodes(element, loading = loading, depth = 0)
+        TreeChildren(element, prefix = "", loading = loading)
     }
 }
 
 @Composable
-private fun JsonTreeNodes(
+private fun TreeChildren(
     element: JsonElement,
+    prefix: String,
     loading: Boolean,
-    depth: Int,
 ) {
-    when (element) {
-        is JsonObject -> {
-            element.entries
-                .filterNot { (_, v) -> isEmptyValue(v) }
-                .forEach { (key, value) ->
-                    JsonTreeNode(key = key, value = value, loading = loading, depth = depth)
-                }
-        }
-        is JsonArray -> {
-            element.filterNot { isEmptyValue(it) }
-                .forEachIndexed { index, value ->
-                    JsonTreeNode(key = "[$index]", value = value, loading = loading, depth = depth)
-                }
-        }
-        else -> {}
+    val children: List<Pair<String, JsonElement>> = when (element) {
+        is JsonObject -> element.entries
+            .filterNot { (_, v) -> isEmptyValue(v) }
+            .map { it.key to it.value }
+        is JsonArray -> element
+            .filterNot { isEmptyValue(it) }
+            .mapIndexed { i, v -> "[$i]" to v }
+        else -> emptyList()
+    }
+
+    children.forEachIndexed { index, (key, value) ->
+        val isLast = index == children.lastIndex
+        val branch = if (isLast) BRANCH_END else BRANCH_MID
+        val childPrefix = prefix + (if (isLast) SPACE else PIPE)
+
+        TreeNode(
+            key = key,
+            value = value,
+            prefix = prefix,
+            branch = branch,
+            childPrefix = childPrefix,
+            loading = loading,
+        )
     }
 }
 
 @Composable
-private fun JsonTreeNode(
+private fun TreeNode(
     key: String,
     value: JsonElement,
+    prefix: String,
+    branch: String,
+    childPrefix: String,
     loading: Boolean,
-    depth: Int,
 ) {
-    val indent = (depth * 14).dp
-
     when (value) {
         is JsonObject -> {
             if (value.isEmpty()) return
-            var expanded by remember(key, depth) { mutableStateOf(depth == 0) }
+            var expanded by remember(key, prefix) { mutableStateOf(true) }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = indent)
                     .clip(RoundedCornerShape(4.dp))
                     .clickable { expanded = !expanded }
-                    .padding(vertical = 1.dp, horizontal = 2.dp),
+                    .padding(vertical = 0.5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
+                Text(
+                    text = prefix + branch,
+                    style = treeStyle,
+                    color = treeColor,
+                )
                 Icon(
                     imageVector = if (expanded) HugeIcons.ArrowDown01 else HugeIcons.ArrowRight01,
                     contentDescription = null,
-                    modifier = Modifier.size(12.dp),
+                    modifier = Modifier.size(11.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = key,
-                    style = MaterialTheme.typography.labelSmall,
+                    text = " $key",
+                    style = treeKeyStyle,
                     color = MaterialTheme.colorScheme.secondary,
                 )
             }
             AnimatedVisibility(visible = expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    JsonTreeNodes(value, loading = loading, depth = depth + 1)
+                Column {
+                    TreeChildren(value, prefix = childPrefix, loading = loading)
                 }
             }
         }
 
         is JsonArray -> {
             if (value.isEmpty()) return
-            var expanded by remember(key, depth) { mutableStateOf(depth == 0) }
+            var expanded by remember(key, prefix) { mutableStateOf(true) }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = indent)
                     .clip(RoundedCornerShape(4.dp))
                     .clickable { expanded = !expanded }
-                    .padding(vertical = 1.dp, horizontal = 2.dp),
+                    .padding(vertical = 0.5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
+                Text(
+                    text = prefix + branch,
+                    style = treeStyle,
+                    color = treeColor,
+                )
                 Icon(
                     imageVector = if (expanded) HugeIcons.ArrowDown01 else HugeIcons.ArrowRight01,
                     contentDescription = null,
-                    modifier = Modifier.size(12.dp),
+                    modifier = Modifier.size(11.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "$key (${value.size})",
-                    style = MaterialTheme.typography.labelSmall,
+                    text = " $key (${value.size})",
+                    style = treeKeyStyle,
                     color = MaterialTheme.colorScheme.secondary,
                 )
             }
             AnimatedVisibility(visible = expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    JsonTreeNodes(value, loading = loading, depth = depth + 1)
+                Column {
+                    TreeChildren(value, prefix = childPrefix, loading = loading)
                 }
             }
         }
@@ -171,21 +189,23 @@ private fun JsonTreeNode(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = indent + 14.dp, top = 1.dp, bottom = 1.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .padding(vertical = 0.5.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 Text(
-                    text = "$key:",
-                    style = MaterialTheme.typography.labelSmall,
+                    text = prefix + branch,
+                    style = treeStyle,
+                    color = treeColor,
+                )
+                Text(
+                    text = "$key: ",
+                    style = treeKeyStyle,
                     color = MaterialTheme.colorScheme.secondary,
                 )
                 TypingText(
                     text = content,
                     loading = loading,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                    ),
+                    style = treeValueStyle,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -218,7 +238,7 @@ private fun TypingText(
     val visibleCount by produceState(initialValue = 1, text) {
         for (i in 1..text.length) {
             value = i
-            delay(8) // fast typing
+            delay(8)
         }
     }
 
@@ -230,6 +250,27 @@ private fun TypingText(
         overflow = TextOverflow.Ellipsis,
     )
 }
+
+private val treeColor
+    @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+
+private val treeStyle = TextStyle(
+    fontFamily = FontFamily.Monospace,
+    fontSize = 11.sp,
+    lineHeight = 15.sp,
+)
+
+private val treeKeyStyle = TextStyle(
+    fontFamily = FontFamily.Monospace,
+    fontSize = 11.sp,
+    lineHeight = 15.sp,
+)
+
+private val treeValueStyle = TextStyle(
+    fontFamily = FontFamily.Monospace,
+    fontSize = 11.sp,
+    lineHeight = 15.sp,
+)
 
 private fun isEmptyValue(element: JsonElement): Boolean = when (element) {
     is JsonObject -> element.isEmpty()
