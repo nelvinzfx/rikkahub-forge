@@ -394,7 +394,7 @@ private fun TreeRow(
         modifier = modifier
             .fillMaxWidth()
             .then(drawModifier)
-            .padding(start = (depth + 1) * INDENT_WIDTH + BRANCH_HORIZONTAL + 2.dp),
+            .padding(start = ((depth + 1) * 16 + 14).dp),
         verticalAlignment = verticalAlignment,
     ) {
         content()
