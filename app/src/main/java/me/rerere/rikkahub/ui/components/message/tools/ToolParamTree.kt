@@ -337,10 +337,11 @@ private fun TreeRow(
     content: @Composable () -> Unit,
 ) {
     val drawModifier = Modifier.drawBehind {
-        val strokeRound = Stroke(width = STROKE_WIDTH, cap = StrokeCap.Round)
+        val strokeSquare = Stroke(width = STROKE_WIDTH, cap = StrokeCap.Square)
         val strokeButt = Stroke(width = STROKE_WIDTH, cap = StrokeCap.Butt)
 
         // --- Ancestor vertical lines (continuous, extended to overlap) ---
+        // Square cap: flat ends, extends half-width for clean overlap with adjacent rows
         for (i in 0 until depth) {
             if (ancestorHasMore.getOrElse(i) { false }) {
                 val x = (i + 1) * INDENT_PX
@@ -349,7 +350,7 @@ private fun TreeRow(
                     start = Offset(x, -1f),
                     end = Offset(x, size.height + 1f),
                     strokeWidth = STROKE_WIDTH,
-                    cap = StrokeCap.Round,
+                    cap = StrokeCap.Square,
                 )
             }
         }
@@ -360,13 +361,13 @@ private fun TreeRow(
         val centerY = rowHeight / 2f
 
         if (!isLast) {
-            // Non-last: full height vertical line (round cap for row continuity)
+            // Non-last: full height vertical (square cap for row continuity)
             drawLine(
                 color = lineColor,
                 start = Offset(spineX, -1f),
                 end = Offset(spineX, size.height + 1f),
                 strokeWidth = STROKE_WIDTH,
-                cap = StrokeCap.Round,
+                cap = StrokeCap.Square,
             )
             // Branch curve: butt cap — no dot where it meets the vertical
             val branchPath = Path().apply {
@@ -379,7 +380,6 @@ private fun TreeRow(
             drawPath(branchPath, color = lineColor, style = strokeButt)
         } else {
             // Last child: merge vertical + curve into ONE continuous path
-            // No junction point, no overlapping caps, no dot
             val fullPath = Path().apply {
                 moveTo(spineX, -1f)
                 lineTo(spineX, centerY)
@@ -388,7 +388,7 @@ private fun TreeRow(
                     contentX, centerY,
                 )
             }
-            drawPath(fullPath, color = lineColor, style = strokeRound)
+            drawPath(fullPath, color = lineColor, style = strokeSquare)
         }
     }
 
