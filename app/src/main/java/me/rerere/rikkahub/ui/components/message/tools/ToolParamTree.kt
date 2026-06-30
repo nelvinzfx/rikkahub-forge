@@ -3,6 +3,12 @@ package me.rerere.rikkahub.ui.components.message.tools
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -32,6 +38,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -61,6 +68,16 @@ private const val BRANCH_PX = 18f
 private const val STROKE_WIDTH = 1.5f
 private const val MAX_VALUE_LINES = 15
 private const val MAX_TREE_HEIGHT = 300
+
+// --- Electric-flow animation (experimental, active only while a tool is running) ---
+// A bright silver/white pulse travels along each connector path like current in a wire.
+private const val FLOW_CYCLE_MS = 900            // one head sweep top->content; lower = faster
+private const val FLOW_PULSE_FRACTION = 0.28f    // length of the bright pulse as a fraction of path
+private const val FLOW_SEGMENTS = 14             // sub-segments used to fade the pulse tail
+private const val FLOW_GLOW_WIDTH = 4.5f         // wide, low-alpha underlay = glow halo
+private const val FLOW_CORE_WIDTH = 1.8f         // bright core stroke width
+private val flowSilver = Color(0xFFB8C2CC)       // silver
+private val flowWhite = Color(0xFFFFFFFF)        // white-hot head
 
 private val treeFont = FontFamily.Monospace
 private const val treeFontSize = 11f
@@ -170,6 +187,7 @@ private fun TreeNode(
                 ancestorHasMore = ancestorHasMore,
                 lineColor = lineColor,
                 rowHeight = rowHeight,
+                loading = loading,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(4.dp))
@@ -208,6 +226,7 @@ private fun TreeNode(
                 ancestorHasMore = ancestorHasMore,
                 lineColor = lineColor,
                 rowHeight = rowHeight,
+                loading = loading,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(4.dp))
@@ -281,6 +300,7 @@ private fun TreeNode(
                     ancestorHasMore = ancestorHasMore,
                     lineColor = lineColor,
                     rowHeight = rowHeight,
+                    loading = loading,
                     modifier = Modifier.fillMaxWidth().then(copyModifier),
                     verticalAlignment = Alignment.Top,
                 ) {
@@ -298,6 +318,7 @@ private fun TreeNode(
                     ancestorHasMore = ancestorHasMore,
                     lineColor = lineColor,
                     rowHeight = rowHeight,
+                    loading = loading,
                     modifier = Modifier.fillMaxWidth().then(copyModifier),
                     verticalAlignment = Alignment.Top,
                 ) {
@@ -333,9 +354,26 @@ private fun TreeRow(
     lineColor: Color,
     rowHeight: Float,
     modifier: Modifier = Modifier,
+    loading: Boolean = false,
     verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
     content: @Composable () -> Unit,
 ) {
+    // Electric-flow phase: 0f..1f looping. The pulse head position along each path is
+    // derived from this. Only spun up while loading so idle rows cost nothing. Read
+    // .value INSIDE drawBehind so each frame redraws without recomposing the tree.
+    val flowPhase = if (loading) {
+        val transition = rememberInfiniteTransition(label = "toolFlow")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = FLOW_CYCLE_MS, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "toolFlowPhase",
+        )
+    } else null
+
     val drawModifier = Modifier.drawBehind {
         // Butt cap = line ends exactly at endpoint, no overhang. Adjacent rows draw
         // from y=0..height so the verticals meet seamlessly with zero overlap = no dots.
@@ -344,18 +382,18 @@ private fun TreeRow(
         // Curve radius: how far up the vertical the bend starts AND how far right it
         // reaches before settling horizontal. Bigger = rounder, gentler corner.
         val curveRadius = BRANCH_PX * 0.9f
+        val phase = flowPhase?.value
 
         // --- Ancestor vertical lines (continuous through the row) ---
         for (i in 0 until depth) {
             if (ancestorHasMore.getOrElse(i) { false }) {
                 val x = (i + 1) * INDENT_PX
-                drawLine(
-                    color = lineColor,
-                    start = Offset(x, 0f),
-                    end = Offset(x, size.height),
-                    strokeWidth = STROKE_WIDTH,
-                    cap = StrokeCap.Butt,
-                )
+                val ancestorPath = Path().apply {
+                    moveTo(x, 0f)
+                    lineTo(x, size.height)
+                }
+                drawPath(ancestorPath, color = lineColor, style = strokeButt)
+                if (phase != null) drawFlowPulse(ancestorPath, phase)
             }
         }
 
@@ -364,7 +402,7 @@ private fun TreeRow(
         val contentX = spineX + BRANCH_PX
         val centerY = size.height / 2f
 
-        if (!isLast) {
+        val connector = if (!isLast) {
             // Non-last: full-height vertical, drawn 0..height to butt against neighbours.
             drawLine(
                 color = lineColor,
@@ -375,7 +413,7 @@ private fun TreeRow(
             )
             // Rounded branch: come down to (centerY - curveRadius), then a smooth
             // cubic bend out to the content. Single path, no junction dot.
-            val branchPath = Path().apply {
+            Path().apply {
                 moveTo(spineX, centerY - curveRadius)
                 cubicTo(
                     spineX, centerY,
@@ -384,11 +422,10 @@ private fun TreeRow(
                 )
                 lineTo(contentX, centerY)
             }
-            drawPath(branchPath, color = lineColor, style = strokeButt)
         } else {
             // Last child: vertical from top down to where the bend begins, then the
             // same rounded corner out to the content — one continuous path.
-            val fullPath = Path().apply {
+            Path().apply {
                 moveTo(spineX, 0f)
                 lineTo(spineX, centerY - curveRadius)
                 cubicTo(
@@ -398,7 +435,22 @@ private fun TreeRow(
                 )
                 lineTo(contentX, centerY)
             }
-            drawPath(fullPath, color = lineColor, style = strokeButt)
+        }
+        drawPath(connector, color = lineColor, style = strokeButt)
+
+        if (phase != null) {
+            // Offset the branch pulse slightly in phase so the current visibly travels
+            // DOWN the spine and THEN out the branch, instead of both lighting at once.
+            drawFlowPulse(connector, phase)
+            if (!isLast) {
+                // Non-last rows also have the full-height spine line above; let the
+                // pulse ride it too for continuity between stacked rows.
+                val spinePath = Path().apply {
+                    moveTo(spineX, 0f)
+                    lineTo(spineX, size.height)
+                }
+                drawFlowPulse(spinePath, phase)
+            }
         }
     }
 
@@ -413,6 +465,61 @@ private fun TreeRow(
         verticalAlignment = verticalAlignment,
     ) {
         content()
+    }
+}
+
+/**
+ * Draws a travelling "electric current" pulse along [path]: a bright silver→white head
+ * with a fading tail, plus a wide low-alpha glow underlay. [phase] (0f..1f, looping)
+ * positions the head along the path length. Walks the path once via [PathMeasure] and
+ * paints short sub-segments whose brightness ramps toward the head, so the result reads
+ * as a comet of current rather than a uniform glowing line.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFlowPulse(
+    path: Path,
+    phase: Float,
+) {
+    val measure = PathMeasure().apply { setPath(path, false) }
+    val total = measure.length
+    if (total <= 0f) return
+
+    val pulseLen = (total * FLOW_PULSE_FRACTION).coerceAtLeast(6f)
+    // Head sweeps from -pulseLen (just off the top) to total, so the pulse enters and
+    // exits cleanly each cycle instead of popping into existence mid-path.
+    val headDist = phase * (total + pulseLen) - pulseLen
+    val step = pulseLen / FLOW_SEGMENTS
+
+    for (s in 0 until FLOW_SEGMENTS) {
+        val segEnd = headDist - s * step
+        val segStart = segEnd - step
+        if (segEnd <= 0f || segStart >= total) continue
+        val a = segStart.coerceIn(0f, total)
+        val b = segEnd.coerceIn(0f, total)
+        if (b <= a) continue
+
+        val p0 = measure.getPosition(a)
+        val p1 = measure.getPosition(b)
+        // Brightness ramps from tail (s = last, dim) to head (s = 0, white-hot).
+        val t = 1f - s.toFloat() / FLOW_SEGMENTS
+        val color = androidx.compose.ui.graphics.lerp(flowSilver, flowWhite, t)
+        val alpha = t * t // ease-in so the tail fades faster than it brightens
+
+        // Glow halo: wide, very transparent, drawn first so the core sits on top.
+        drawLine(
+            color = color.copy(alpha = alpha * 0.25f),
+            start = p0,
+            end = p1,
+            strokeWidth = FLOW_GLOW_WIDTH,
+            cap = StrokeCap.Round,
+        )
+        // Bright core.
+        drawLine(
+            color = color.copy(alpha = alpha),
+            start = p0,
+            end = p1,
+            strokeWidth = FLOW_CORE_WIDTH,
+            cap = StrokeCap.Round,
+        )
     }
 }
 
