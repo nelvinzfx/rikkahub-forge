@@ -189,6 +189,14 @@ class ChatService(
      */
     suspend fun ensureHydrated(conversationId: Uuid) {
         val session = getOrCreateSession(conversationId)
+        // Never clobber a session that has a live generation in flight. With two
+        // conversations generating in parallel, switching between them can re-enter this
+        // path; if the DB still holds an older snapshot (a stale write that won a prior
+        // last-writer-wins race), overwriting state.value here REVERTS the in-memory live
+        // turn back to that stale snapshot — the visible "reverted to first message /
+        // stuck" symptom. The live state is the source of truth while a job runs; only
+        // hydrate a genuinely cold, idle session.
+        if (session.isGenerating) return
         if (session.state.value.messageNodes.isEmpty()) {
             val fromDb = conversationRepo.getConversationById(conversationId) ?: return
             if (fromDb.messageNodes.isNotEmpty()) {
