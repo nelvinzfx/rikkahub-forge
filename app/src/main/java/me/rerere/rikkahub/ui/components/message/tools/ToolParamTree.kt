@@ -145,6 +145,7 @@ private fun TreeChildren(
 
     children.forEachIndexed { index, (key, value) ->
         val isLast = index == children.lastIndex
+        val isFirst = index == 0
         val hasMore = !isLast
         val childAncestors = ancestorHasMore + hasMore
 
@@ -153,6 +154,7 @@ private fun TreeChildren(
             value = value,
             depth = depth,
             isLast = isLast,
+            isFirst = isFirst,
             loading = loading,
             ancestorHasMore = ancestorHasMore,
             childAncestorHasMore = childAncestors,
@@ -166,6 +168,7 @@ private fun TreeNode(
     value: JsonElement,
     depth: Int,
     isLast: Boolean,
+    isFirst: Boolean,
     loading: Boolean,
     ancestorHasMore: List<Boolean>,
     childAncestorHasMore: List<Boolean>,
@@ -184,6 +187,7 @@ private fun TreeNode(
             TreeRow(
                 depth = depth,
                 isLast = isLast,
+                isFirst = isFirst,
                 ancestorHasMore = ancestorHasMore,
                 lineColor = lineColor,
                 rowHeight = rowHeight,
@@ -223,6 +227,7 @@ private fun TreeNode(
             TreeRow(
                 depth = depth,
                 isLast = isLast,
+                isFirst = isFirst,
                 ancestorHasMore = ancestorHasMore,
                 lineColor = lineColor,
                 rowHeight = rowHeight,
@@ -297,6 +302,7 @@ private fun TreeNode(
                 TreeRow(
                     depth = depth,
                     isLast = isLast,
+                    isFirst = isFirst,
                     ancestorHasMore = ancestorHasMore,
                     lineColor = lineColor,
                     rowHeight = rowHeight,
@@ -315,6 +321,7 @@ private fun TreeNode(
                 TreeRow(
                     depth = depth,
                     isLast = isLast,
+                    isFirst = isFirst,
                     ancestorHasMore = ancestorHasMore,
                     lineColor = lineColor,
                     rowHeight = rowHeight,
@@ -350,6 +357,7 @@ private fun TreeNode(
 private fun TreeRow(
     depth: Int,
     isLast: Boolean,
+    isFirst: Boolean,
     ancestorHasMore: List<Boolean>,
     lineColor: Color,
     rowHeight: Float,
@@ -402,49 +410,71 @@ private fun TreeRow(
         val contentX = spineX + BRANCH_PX
         val centerY = size.height / 2f
 
-        val connector = if (!isLast) {
-            // Non-last: full-height vertical, drawn 0..height to butt against neighbours.
-            drawLine(
-                color = lineColor,
-                start = Offset(spineX, 0f),
-                end = Offset(spineX, size.height),
-                strokeWidth = STROKE_WIDTH,
-                cap = StrokeCap.Butt,
-            )
-            // Rounded branch: come down to (centerY - curveRadius), then a smooth
-            // cubic bend out to the content. Single path, no junction dot.
-            Path().apply {
-                moveTo(spineX, centerY - curveRadius)
-                cubicTo(
-                    spineX, centerY,
-                    spineX, centerY,
-                    spineX + curveRadius, centerY,
-                )
-                lineTo(contentX, centerY)
+        // Three connector shapes, all corner-rounded with NO sharp/pointed tips:
+        //  - First child (top of the brace): vertical continues DOWN to its siblings,
+        //    and the branch curls OUT from the top — a smooth inverted bend. No straight
+        //    vertical run above the bend (first child is the topmost, nothing above it).
+        //  - Last child (bottom of the brace): vertical comes from the top, then curls
+        //    out at the bottom. Mirror of the first.
+        //  - Middle child: plain right-angle tee — full vertical + a straight horizontal
+        //    branch. Square corner (90°), which is tidy, not a pointed tip.
+        // first && last (sole child) falls through to the last-child rounded shape.
+        val connector = when {
+            isFirst && !isLast -> {
+                // Top of the brace. Vertical from the bend down to the bottom (feeds the
+                // siblings below); branch curls outward from the top edge.
+                Path().apply {
+                    moveTo(spineX, size.height)
+                    lineTo(spineX, centerY + curveRadius)
+                    cubicTo(
+                        spineX, centerY,
+                        spineX, centerY,
+                        spineX + curveRadius, centerY,
+                    )
+                    lineTo(contentX, centerY)
+                }
             }
-        } else {
-            // Last child: vertical from top down to where the bend begins, then the
-            // same rounded corner out to the content — one continuous path.
-            Path().apply {
-                moveTo(spineX, 0f)
-                lineTo(spineX, centerY - curveRadius)
-                cubicTo(
-                    spineX, centerY,
-                    spineX, centerY,
-                    spineX + curveRadius, centerY,
+
+            !isFirst && !isLast -> {
+                // Middle: full-height vertical (butts against neighbours) + straight branch.
+                drawLine(
+                    color = lineColor,
+                    start = Offset(spineX, 0f),
+                    end = Offset(spineX, size.height),
+                    strokeWidth = STROKE_WIDTH,
+                    cap = StrokeCap.Butt,
                 )
-                lineTo(contentX, centerY)
+                Path().apply {
+                    moveTo(spineX, centerY)
+                    lineTo(contentX, centerY)
+                }
+            }
+
+            else -> {
+                // Last child (and sole child): vertical from the top down to the bend,
+                // then a rounded corner out to the content — bottom of the brace.
+                Path().apply {
+                    moveTo(spineX, 0f)
+                    lineTo(spineX, centerY - curveRadius)
+                    cubicTo(
+                        spineX, centerY,
+                        spineX, centerY,
+                        spineX + curveRadius, centerY,
+                    )
+                    lineTo(contentX, centerY)
+                }
             }
         }
         drawPath(connector, color = lineColor, style = strokeButt)
 
         if (phase != null) {
-            // Offset the branch pulse slightly in phase so the current visibly travels
-            // DOWN the spine and THEN out the branch, instead of both lighting at once.
+            // The pulse rides whatever path this row actually drew.
             drawFlowPulse(connector, phase)
-            if (!isLast) {
-                // Non-last rows also have the full-height spine line above; let the
-                // pulse ride it too for continuity between stacked rows.
+            // Middle rows ALSO drew a separate full-height spine line (the connector is
+            // just the straight branch there) — let the pulse ride that spine too so the
+            // current stays continuous across stacked rows. First/last already fold their
+            // vertical into the connector path, so no extra spine pulse for them.
+            if (!isFirst && !isLast) {
                 val spinePath = Path().apply {
                     moveTo(spineX, 0f)
                     lineTo(spineX, size.height)
