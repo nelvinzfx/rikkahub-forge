@@ -421,6 +421,20 @@ class ChatCompletionsAPI(
                         }
                     }
 
+                    "api.blackbox.ai", "enterprise.blackbox.ai" -> {
+                        // Blackbox LiteLLM proxy → Vertex AI upstream
+                        // Opus 4.7+ requires adaptive thinking, not enabled
+                        put("thinking", buildJsonObject {
+                            put("type", if (!level.isEnabled) "disabled" else "adaptive")
+                            if (level.isEnabled) put("display", "summarized")
+                        })
+                        if (level.isEnabled && level != ReasoningLevel.AUTO) {
+                            put("output_config", buildJsonObject {
+                                put("effort", level.effort)
+                            })
+                        }
+                    }
+
                     else -> {
                         // OpenAI 官方
                         // 文档中，completions API 只支持 "low", "medium", "high"
