@@ -2,6 +2,11 @@ name: Release Build
 
 on:
   workflow_dispatch:
+    inputs:
+      abi:
+        description: 'Target ABI (arm64-v8a only, or all)'
+        required: false
+        default: 'arm64-v8a'
 
 jobs:
   build:
@@ -49,7 +54,7 @@ jobs:
       - name: Gradle Build
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease -PabiFilters=arm64-v8a
+          ./gradlew assembleRelease -PabiFilters=${{ github.event.inputs.abi }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
