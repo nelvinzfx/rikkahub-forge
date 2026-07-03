@@ -545,6 +545,7 @@
   <string name="reasoning_picker_hint">並非所有模型都支援深度調整。請參閱模型與提供者文件。</string>
   <string name="reasoning_picker_title">調整模型思考深度</string>
   <string name="reasoning_xhigh">超高</string>
+  <string name="reasoning_max">最高</string>
   <string name="regenerate">重新生成</string>
   <string name="regenerate_confirm_message">您確定要重新產生這則訊息嗎？</string>
   <string name="render_with_webview">網頁視圖渲染</string>
@@ -1713,7 +1714,7 @@
   <string name="codex_resets_at">重設時間：%1$s</string>
   <string name="codex_refresh">重新整理</string>
   <string name="codex_reauthenticate">重新驗證</string>
-  <string name="codex_reasoning_auto_unsupported">Codex 不支援自動思考強度。請選擇低、中、高或超高。</string>
+  <string name="codex_reasoning_auto_unsupported">Codex 不支援自動思考強度。請選擇低、中、高、超高或最高。</string>
   <string name="codex_response_failed">Codex 回應失敗。</string>
   <string name="codex_monthly_limit">每月限額</string>
   <string name="codex_oauth_ports_unavailable">本機回呼連接埠已被占用，無法啟動 Codex 登入。請關閉占用連接埠的應用程式後重試。</string>

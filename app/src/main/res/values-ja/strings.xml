@@ -545,6 +545,7 @@
   <string name="reasoning_picker_hint">すべてのモデルが深さ調整に対応しているわけではありません。モデルおよびプロバイダーのドキュメントを参照してください。</string>
   <string name="reasoning_picker_title">モデルの思考深度を調整</string>
   <string name="reasoning_xhigh">XHigh</string>
+  <string name="reasoning_max">Max</string>
   <string name="regenerate">再生成</string>
   <string name="regenerate_confirm_message">このメッセージを再生成してもよろしいですか？</string>
   <string name="render_with_webview">WebViewで表示</string>
@@ -1715,7 +1716,7 @@ mDNSアドレス: .localホスト名を使用し、IPを知らなくても同じ
   <string name="codex_resets_at">リセット：%1$s</string>
   <string name="codex_refresh">更新</string>
   <string name="codex_reauthenticate">再認証</string>
-  <string name="codex_reasoning_auto_unsupported">Codex は思考強度の自動設定に対応していません。低、中、高、最高のいずれかを選択してください。</string>
+  <string name="codex_reasoning_auto_unsupported">Codex は思考強度の自動設定に対応していません。低、中、高、最高、最大のいずれかを選択してください。</string>
   <string name="codex_response_failed">Codex の応答に失敗しました。</string>
   <string name="codex_monthly_limit">月間上限</string>
   <string name="codex_oauth_ports_unavailable">ローカルのコールバックポートが使用中のため、Codex のサインインを開始できません。ポートを使用しているアプリを終了して、もう一度お試しください。</string>

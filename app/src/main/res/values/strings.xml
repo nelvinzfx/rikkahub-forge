@@ -549,6 +549,7 @@
   <string name="reasoning_picker_hint">Not all models support depth adjustment. Refer to the model and provider documentation.</string>
   <string name="reasoning_picker_title">Adjust Model Thinking Depth</string>
   <string name="reasoning_xhigh">XHigh</string>
+  <string name="reasoning_max">Max</string>
   <string name="regenerate">Regenerate</string>
   <string name="regenerate_confirm_message">Are you sure you want to regenerate this message?</string>
   <string name="render_with_webview">Render with WebView</string>
@@ -1799,7 +1800,7 @@
   <string name="codex_resets_at">Resets %1$s</string>
   <string name="codex_refresh">Refresh</string>
   <string name="codex_reauthenticate">Re-auth</string>
-  <string name="codex_reasoning_auto_unsupported">Codex does not support automatic reasoning effort. Select Low, Medium, High, or Extra High.</string>
+  <string name="codex_reasoning_auto_unsupported">Codex does not support automatic reasoning effort. Select Low, Medium, High, Extra High, or Max.</string>
   <string name="codex_response_failed">The Codex response failed.</string>
   <string name="codex_monthly_limit">Monthly limit</string>
   <string name="codex_oauth_ports_unavailable">Codex sign-in cannot start because the local callback ports are in use. Close the app using them and try again.</string>
