@@ -132,7 +132,7 @@ class SubAgentRegistry {
      * Phase D — sum tokens across an entire subtree (root + descendants).
      * Returns (totalIn, totalOut).
      */
-    fun subtreeTokenSum(rootRunId: String): Pair<Int, Int> {
+    fun subtreeTokenSum(rootRunId: String): Pair<Long, Long> {
         val runs = getSubtree(rootRunId)
         val totalIn = runs.sumOf { it.tokensIn }
         val totalOut = runs.sumOf { it.tokensOut }
