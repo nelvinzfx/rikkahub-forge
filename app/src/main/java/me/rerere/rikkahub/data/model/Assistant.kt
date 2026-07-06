@@ -50,6 +50,13 @@ data class Assistant(
     val subAgentModelId: Uuid? = null,
     val subAgentSystemPrompt: String = "",
     val maxConcurrentSubAgents: Int = 3,
+    // Phase 30 (Orchestrator Mode Phase B) — per-worker inclusion defaults. When the LLM
+    // omits the corresponding include_* arg in subagent_dispatch, these determine whether
+    // the worker gets the parent's memory / soul / recent chats injected. Default true =
+    // workers inherit everything (existing behaviour pre-Phase B).
+    val subAgentDefaultIncludeMemory: Boolean = true,
+    val subAgentDefaultIncludeSoul: Boolean = true,
+    val subAgentDefaultIncludeRecentChats: Boolean = true,
     // Phase 15 — Per-task token budget. Both null = no budget enforcement. The LLM
     // checks via `check_token_usage`; auto-stop integration into GenerationHandler is
     // Phase 15.5 follow-up.

@@ -305,6 +305,10 @@ class ConversationRepository(
             modeInjectionIds = JsonInstant.encodeToString(conversation.modeInjectionIds),
             lorebookIds = JsonInstant.encodeToString(conversation.lorebookIds),
             workspaceCwd = conversation.workspaceCwd ?: "",
+            suppressMemory = conversation.suppressMemory,
+            suppressAssistantPrompt = conversation.suppressAssistantPrompt,
+            suppressRecentChats = conversation.suppressRecentChats,
+            enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
         )
     }
 
@@ -325,6 +329,10 @@ class ConversationRepository(
             modeInjectionIds = JsonInstant.decodeFromString(conversationEntity.modeInjectionIds),
             lorebookIds = JsonInstant.decodeFromString(conversationEntity.lorebookIds),
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
+            suppressMemory = conversationEntity.suppressMemory,
+            suppressAssistantPrompt = conversationEntity.suppressAssistantPrompt,
+            suppressRecentChats = conversationEntity.suppressRecentChats,
+            enforceSubAgentPromptRules = conversationEntity.enforceSubAgentPromptRules,
         )
     }
 

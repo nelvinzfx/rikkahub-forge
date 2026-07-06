@@ -305,6 +305,11 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        // Phase 30 (Orchestrator Mode Phase B) — sub-agent prompt/memory gating.
+        suppressMemory: Boolean = false,
+        suppressAssistantPrompt: Boolean = false,
+        suppressRecentChats: Boolean = false,
+        enforceSubAgentPromptRules: Boolean = false,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -441,6 +446,10 @@ class GenerationHandler(
                         conversationModeInjectionIds = conversationModeInjectionIds,
                         conversationLorebookIds = conversationLorebookIds,
                         workspaceCwd = workspaceCwd,
+                        suppressMemory = suppressMemory,
+                        suppressAssistantPrompt = suppressAssistantPrompt,
+                        suppressRecentChats = suppressRecentChats,
+                        enforceSubAgentPromptRules = enforceSubAgentPromptRules,
                     )
                 } catch (t: Throwable) {
                     // CancellationException is honoured verbatim — stopGeneration has its
@@ -953,20 +962,46 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        suppressMemory: Boolean = false,
+        suppressAssistantPrompt: Boolean = false,
+        suppressRecentChats: Boolean = false,
+        enforceSubAgentPromptRules: Boolean = false,
     ) {
         val internalMessages = buildList {
             // Conversation-level system prompt override (upstream): when the assistant
             // allows it and the conversation supplies one, it replaces the assistant prompt.
+            //
+            // Phase B (Orchestrator Mode): sub-agent conversations (enforceSubAgentPromptRules)
+            // bypass the allowConversationSystemPrompt gate so the worker-specific prompt is
+            // always used. When suppressAssistantPrompt is true (include_soul=false), only
+            // the worker prompt is kept. When false (include_soul=true), soul + worker prompt
+            // are concatenated so the worker gets BOTH.
             val effectiveSystemPrompt =
-                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                if (enforceSubAgentPromptRules) {
+                    when {
+                        !conversationSystemPrompt.isNullOrBlank() && suppressAssistantPrompt -> {
+                            // include_soul=false: only worker prompt
+                            conversationSystemPrompt
+                        }
+                        !conversationSystemPrompt.isNullOrBlank() -> {
+                            // include_soul=true: soul + worker prompt appended
+                            listOfNotNull(
+                                assistant.systemPrompt.takeIf { it.isNotBlank() },
+                                conversationSystemPrompt,
+                            ).joinToString("\n\n")
+                        }
+                        suppressAssistantPrompt -> ""  // no worker prompt + soul suppressed
+                        else -> assistant.systemPrompt  // no worker prompt + soul kept
+                    }
+                } else if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
                     conversationSystemPrompt
                 } else {
                     assistant.systemPrompt
                 }
-            val memoryPrompt = if (assistant.enableMemory) {
+            val memoryPrompt = if (assistant.enableMemory && !suppressMemory) {
                 buildMemoryPrompt(memories = memories)
             } else ""
-            val recentChatsPrompt = if (assistant.enableRecentChatsReference) {
+            val recentChatsPrompt = if (assistant.enableRecentChatsReference && !suppressRecentChats) {
                 buildRecentChatsPrompt(assistant, conversationRepo)
             } else ""
             val toolPrompts = tools.map { tool -> tool.systemPrompt(model, messages) }

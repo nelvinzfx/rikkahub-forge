@@ -275,6 +275,10 @@ class SubAgentEngine(
         }
         val workerSystemPrompt = (request.systemPrompt ?: parentAssistant?.subAgentSystemPrompt)
             ?.takeIf { it.isNotBlank() }
+        // Phase B — resolve include_* args against assistant defaults. suppress = !(include).
+        val suppressMemory = !(request.includeMemory ?: parentAssistant?.subAgentDefaultIncludeMemory ?: true)
+        val suppressSoul = !(request.includeSoul ?: parentAssistant?.subAgentDefaultIncludeSoul ?: true)
+        val suppressChats = !(request.includeRecentChats ?: parentAssistant?.subAgentDefaultIncludeRecentChats ?: true)
         val conv = Conversation.ofId(
             id = Uuid.random(),
             assistantId = parentAsstUuid,
@@ -283,6 +287,10 @@ class SubAgentEngine(
             title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}",
             chatModelId = chosenModelId,
             customSystemPrompt = workerSystemPrompt,
+            suppressMemory = suppressMemory,
+            suppressAssistantPrompt = suppressSoul,
+            suppressRecentChats = suppressChats,
+            enforceSubAgentPromptRules = true,
         )
         conversationRepo.insertConversation(conv)
         chatService.initializeConversation(conv.id)

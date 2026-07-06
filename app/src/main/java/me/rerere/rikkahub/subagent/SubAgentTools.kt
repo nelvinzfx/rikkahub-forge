@@ -85,7 +85,10 @@ fun subagentDispatchTool(
                 })
                 put("run_in_background", buildJsonObject { put("type", "boolean") })
                 put("timeout_seconds", buildJsonObject { put("type", "integer") })
-                put("max_trips", buildJsonObject { put("type", "integer") })
+                put("max_trips", buildJsonObject { put("type", "integer") }),
+                put("include_memory", buildJsonObject { put("type", "boolean") }),
+                put("include_soul", buildJsonObject { put("type", "boolean") }),
+                put("include_recent_chats", buildJsonObject { put("type", "boolean") })
             },
             required = listOf("task"),
         )
@@ -117,6 +120,9 @@ fun subagentDispatchTool(
             maxTrips = params["max_trips"]?.jsonPrimitive?.intOrNull
                 ?: SubAgentDefaults.DEFAULT_MAX_TRIPS,
             label = params["label"]?.jsonPrimitive?.contentOrNull,
+            includeMemory = params["include_memory"]?.jsonPrimitive?.booleanOrNull,
+            includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
+            includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
         )
         // The engine's recursion guard checks `HeadlessConversations.isHeadless(parentChatId)`
         // — if the calling conversation is itself headless (cron / sub-agent / workflow /

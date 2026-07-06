@@ -1812,4 +1812,10 @@
   <string name="assistant_page_sub_agent_model_inherit">Inherit from assistant</string>
   <string name="assistant_page_sub_agent_prompt">Default worker system prompt</string>
   <string name="assistant_page_sub_agent_prompt_desc">Custom instructions for workers. Empty = built-in focused sub-agent prompt.</string>
+  <string name="assistant_page_sub_agent_include_memory">Workers inherit memory</string>
+  <string name="assistant_page_sub_agent_include_memory_desc">Inject the assistant memory into worker sub-agents by default.</string>
+  <string name="assistant_page_sub_agent_include_soul">Workers inherit soul</string>
+  <string name="assistant_page_sub_agent_include_soul_desc">Inject the assistant system prompt (persona/soul) into workers by default.</string>
+  <string name="assistant_page_sub_agent_include_chats">Workers inherit recent chats</string>
+  <string name="assistant_page_sub_agent_include_chats_desc">Inject recent chats reference into workers by default.</string>
 </resources>

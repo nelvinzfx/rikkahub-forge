@@ -878,6 +878,10 @@ class ChatService(
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
                 workspaceCwd = conversation.workspaceCwd,
+                suppressMemory = conversation.suppressMemory,
+                suppressAssistantPrompt = conversation.suppressAssistantPrompt,
+                suppressRecentChats = conversation.suppressRecentChats,
+                enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
                 memories = if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {

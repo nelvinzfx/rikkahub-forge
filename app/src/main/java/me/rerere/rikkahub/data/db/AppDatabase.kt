@@ -58,7 +58,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         AgentRun::class,
         WorkspaceEntity::class,
     ],
-    version = 26,
+    version = 27,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -83,6 +83,10 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // v26: the 2.3.1 merge brings upstream's workspaces table (WorkspaceEntity). Existing
         // fork users never had it, so Room auto-creates the table on this step.
         AutoMigration(from = 25, to = 26),
+        // v27: Phase 30 (Orchestrator Mode Phase B) — sub-agent prompt/memory gating.
+        // 4 new boolean columns on ConversationEntity, all defaulted to 0 (false). Plain
+        // auto-migration since each column carries a defaultValue in @ColumnInfo.
+        AutoMigration(from = 26, to = 27),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)

@@ -1033,6 +1033,54 @@ private fun AssistantLocalToolContent(
                         )
                     }
                 )
+                item(
+                    headlineContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_include_memory))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_include_memory_desc))
+                    },
+                    trailingContent = {
+                        PermissionedSwitch(
+                            checked = assistant.subAgentDefaultIncludeMemory,
+                            onCheckedChange = { v ->
+                                onUpdateAssistant { it.copy(subAgentDefaultIncludeMemory = v) }
+                            }
+                        )
+                    }
+                )
+                item(
+                    headlineContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_include_soul))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_include_soul_desc))
+                    },
+                    trailingContent = {
+                        PermissionedSwitch(
+                            checked = assistant.subAgentDefaultIncludeSoul,
+                            onCheckedChange = { v ->
+                                onUpdateAssistant { it.copy(subAgentDefaultIncludeSoul = v) }
+                            }
+                        )
+                    }
+                )
+                item(
+                    headlineContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_include_chats))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_include_chats_desc))
+                    },
+                    trailingContent = {
+                        PermissionedSwitch(
+                            checked = assistant.subAgentDefaultIncludeRecentChats,
+                            onCheckedChange = { v ->
+                                onUpdateAssistant { it.copy(subAgentDefaultIncludeRecentChats = v) }
+                            }
+                        )
+                    }
+                )
             }
         }
 

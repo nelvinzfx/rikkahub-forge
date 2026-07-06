@@ -88,6 +88,11 @@ data class SubAgentRequest(
     val timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
     val maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
     val label: String? = null,
+    // Phase 30 (Orchestrator Mode Phase B) — per-dispatch inclusion overrides. Null = use
+    // the parent assistant's default (subAgentDefaultInclude*). Boolean = override.
+    val includeMemory: Boolean? = null,
+    val includeSoul: Boolean? = null,
+    val includeRecentChats: Boolean? = null,
 )
 
 object SubAgentRequestValidator {
