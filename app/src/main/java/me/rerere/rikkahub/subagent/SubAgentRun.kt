@@ -32,6 +32,13 @@ data class SubAgentRun(
     val tokensIn: Long = 0,
     val tokensOut: Long = 0,
     val tripCount: Int = 0,
+    // Phase 30 (Orchestrator Mode Phase A) — runtime model fallback diagnostics.
+    // Set when the requested model was valid at dispatch time but its provider
+    // was disabled / unreachable at generation time, so the engine fell back to
+    // the next candidate in the resolution chain. Lets the user (and Phase D's
+    // cost telemetry) see that a substitution happened.
+    val fallbackModelUsed: Boolean = false,
+    val fallbackReason: String? = null,
 )
 
 @Serializable

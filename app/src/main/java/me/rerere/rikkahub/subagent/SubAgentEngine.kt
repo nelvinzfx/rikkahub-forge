@@ -9,12 +9,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.provider.Model
 import me.rerere.rikkahub.AppScope
+import me.rerere.rikkahub.costguards.TokenBudgetTracker
 import me.rerere.rikkahub.data.agentrun.AgentRunKind
 import me.rerere.rikkahub.data.agentrun.AgentRunRepository
 import me.rerere.rikkahub.data.agentrun.AgentRunStatus
 import me.rerere.rikkahub.data.ai.tools.HeadlessConversations
+import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
@@ -87,6 +92,113 @@ class SubAgentEngine(
     }
 
     /**
+     * Phase 30 (Orchestrator Mode Phase A) — model resolution result for worker
+     * sub-agents. The engine resolves the model BEFORE creating the conversation so
+     * it can set [Conversation.chatModelId] and let ChatService pick it up without
+     * duplicating the resolution logic.
+     *
+     * Resolution order (first non-null with enabled provider wins):
+     *   1. SubAgentRequest.modelId  (LLM per-call, strict-validated)
+     *   2. Assistant.subAgentModelId (assistant default for sub-agents)
+     *   3. Assistant.chatModelId     (assistant default overall)
+     *   4. Settings.chatModelId      (global default)
+     *
+     * If the requested model's provider is disabled/unreachable, the engine falls
+     * back to the next candidate and records [fallbackUsed] so the user can see it.
+     */
+    sealed class ModelResolution {
+        data class Resolved(
+            val chatModelId: Uuid?,          // null = let ChatService resolve from assistant/global
+            val fallbackUsed: Boolean,
+            val fallbackReason: String?,
+        ) : ModelResolution()
+        data class Invalid(val error: String, val detail: String) : ModelResolution()
+    }
+
+    private fun resolveWorkerModel(
+        request: SubAgentRequest,
+        parentAssistant: Assistant?,
+        settings: Settings,
+    ): ModelResolution {
+        // 1. request.modelId — strict validation
+        val requestModelId = request.modelId
+            ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+        if (request.modelId != null && requestModelId == null) {
+            return ModelResolution.Invalid(
+                "invalid_model_id",
+                "model_id '${request.modelId}' is not a valid UUID",
+            )
+        }
+        if (requestModelId != null) {
+            val model = settings.findModelById(requestModelId) ?: return ModelResolution.Invalid(
+                "invalid_model_id",
+                "No model found with id $requestModelId",
+            )
+            val provider = model.findProvider(settings.providers)
+            if (provider != null && provider.enabled) {
+                return ModelResolution.Resolved(requestModelId, false, null)
+            }
+            // Provider disabled or missing — try fallback chain
+            val fallback = resolveFallback(parentAssistant, settings, requestModelId)
+            if (fallback != null) {
+                return ModelResolution.Resolved(
+                    fallback, true,
+                    "Provider for requested model is ${if (provider == null) "missing" else "disabled"}",
+                )
+            }
+            return ModelResolution.Invalid(
+                "no_model_available",
+                "Requested model's provider is ${if (provider == null) "missing" else "disabled"} and no fallback model available",
+            )
+        }
+
+        // 2. assistant.subAgentModelId
+        val subAgentModelId = parentAssistant?.subAgentModelId
+        if (subAgentModelId != null) {
+            val model = settings.findModelById(subAgentModelId)
+            if (model != null) {
+                val provider = model.findProvider(settings.providers)
+                if (provider != null && provider.enabled) {
+                    return ModelResolution.Resolved(subAgentModelId, false, null)
+                }
+                val fallback = resolveFallback(parentAssistant, settings, subAgentModelId)
+                if (fallback != null) {
+                    return ModelResolution.Resolved(
+                        fallback, true,
+                        "Provider for sub-agent default model is ${if (provider == null) "missing" else "disabled"}",
+                    )
+                }
+            }
+        }
+
+        // 3-4. Fall through to assistant / global default — don't set chatModelId,
+        // let ChatService resolve from assistant.chatModelId ?: settings.chatModelId
+        return ModelResolution.Resolved(null, false, null)
+    }
+
+    private fun resolveFallback(
+        parentAssistant: Assistant?,
+        settings: Settings,
+        skipId: Uuid?,
+    ): Uuid? {
+        // Try assistant.chatModelId, then settings.chatModelId — skip the one that
+        // already failed (skipId) and skip duplicates.
+        val assistantDefault = parentAssistant?.chatModelId
+        if (assistantDefault != null && assistantDefault != skipId) {
+            val model = settings.findModelById(assistantDefault) ?: return null
+            val provider = model.findProvider(settings.providers)
+            if (provider != null && provider.enabled) return assistantDefault
+        }
+        val globalDefault = settings.chatModelId
+        if (globalDefault != null && globalDefault != skipId && globalDefault != assistantDefault) {
+            val model = settings.findModelById(globalDefault) ?: return null
+            val provider = model.findProvider(settings.providers)
+            if (provider != null && provider.enabled) return globalDefault
+        }
+        return null
+    }
+
+    /**
      * Dispatch a sub-agent. For foreground runs, blocks until terminal status; for
      * background, returns immediately with a PENDING-then-RUNNING run that the caller
      * can poll via subagent_get.
@@ -128,6 +240,17 @@ class SubAgentEngine(
             )
         }
 
+        // Phase 30 (Orchestrator Mode Phase A) — strict model validation.
+        // Resolve the worker model BEFORE creating the run so we can reject
+        // early with a clear error if the requested model_id is invalid.
+        val settings = settingsStore.settingsFlow.first()
+        val parentAssistant = settings.assistants.firstOrNull { it.id == runCatching { Uuid.parse(parentAssistantId) }.getOrNull() }
+        val modelResolution = resolveWorkerModel(cleaned, parentAssistant, settings)
+        if (modelResolution is ModelResolution.Invalid) {
+            return@withContext DispatchResult.Reject(modelResolution.error, modelResolution.detail)
+        }
+        val resolvedModel = modelResolution as ModelResolution.Resolved
+
         val runId = Uuid.random().toString()
         val now = System.currentTimeMillis()
         val initialRun = SubAgentRun(
@@ -143,6 +266,8 @@ class SubAgentEngine(
             maxTrips = cleaned.maxTrips,
             status = SubAgentStatus.PENDING,
             startedAtMs = now,
+            fallbackModelUsed = resolvedModel.fallbackUsed,
+            fallbackReason = resolvedModel.fallbackReason,
         )
         registry.addPending(initialRun)
 
@@ -164,7 +289,7 @@ class SubAgentEngine(
         ledgerIds[runId] = ledgerId
 
         val executionJob = appScope.launch(Dispatchers.IO) {
-            executeRun(runId, parentAssistantId, parentChatId, cleaned)
+            executeRun(runId, parentAssistantId, parentChatId, cleaned, resolvedModel)
         }
         registry.setJob(runId, executionJob)
 
@@ -198,6 +323,7 @@ class SubAgentEngine(
         parentAssistantId: String,
         parentChatId: String?,
         request: SubAgentRequest,
+        resolvedModel: ModelResolution.Resolved,
     ) {
         registry.update(runId) { it.copy(status = SubAgentStatus.RUNNING) }
         ledgerIds[runId]?.let { agentRunRepo.setStatus(it, AgentRunStatus.running) }
@@ -207,11 +333,30 @@ class SubAgentEngine(
                 markTerminal(runId, SubAgentStatus.FAILED, "bad parent assistant id")
                 return
             }
+
+        // Phase 30 (Orchestrator Mode Phase A) — set per-conversation model override
+        // and system prompt on the worker conversation. ChatService.handleMessageComplete
+        // reads conversation.chatModelId first, falling back to assistant/global. The
+        // customSystemPrompt is respected because executeRun marks the conversation
+        // headless, and ChatService passes forceConversationSystemPrompt=true for
+        // headless runs (new in Phase A), bypassing the assistant's
+        // allowConversationSystemPrompt gate.
+        val workerModelId = resolvedModel.chatModelId
+        val workerSystemPrompt = request.systemPrompt
+            ?.takeIf { it.isNotBlank() }
+            ?: parentAssistant?.subAgentSystemPrompt
+                ?.takeIf { it.isNotBlank() }
+            ?: SubAgentDefaults.DEFAULT_SYSTEM_PROMPT
+
         val conv = Conversation.ofId(
             id = Uuid.random(),
             assistantId = parentAsstUuid,
             newConversation = true,
-        ).copy(title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}")
+        ).copy(
+            title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}",
+            chatModelId = workerModelId,
+            customSystemPrompt = workerSystemPrompt,
+        )
         conversationRepo.insertConversation(conv)
         chatService.initializeConversation(conv.id)
         HeadlessConversations.mark(conv.id)
@@ -247,11 +392,20 @@ class SubAgentEngine(
             // text parts from the last assistant message. This mirrors how the
             // CronJobWorker treats LLM-mode jobs.
             val finalText = harvestFinalText(conv.id)
+
+            // Phase 30 (Orchestrator Mode Phase A) — token telemetry.
+            // Walk the conversation's selected branch and sum TokenUsage across
+            // all assistant messages. This populates the previously-dead
+            // tokensIn/tokensOut fields so Phase D's subtree cap has real numbers.
+            val tokenTotals = harvestTokenUsage(conv.id)
             registry.update(runId) {
                 it.copy(
                     status = SubAgentStatus.SUCCEEDED,
                     result = finalText,
                     finishedAtMs = System.currentTimeMillis(),
+                    tokensIn = tokenTotals.first,
+                    tokensOut = tokenTotals.second,
+                    tripCount = tokenTotals.third,
                 )
             }
             ledgerIds.remove(runId)?.let {
@@ -371,5 +525,24 @@ class SubAgentEngine(
                 .joinToString("\n") { it.text }
                 .trim()
         }.getOrDefault("")
+    }
+
+    /**
+     * Phase 30 (Orchestrator Mode Phase A) — token telemetry harvester.
+     *
+     * Walks the conversation's selected branch and sums [TokenUsage] across all
+     * messages via [TokenBudgetTracker.aggregate]. Returns (inputTokens, outputTokens).
+     * Also returns the number of assistant messages as a proxy for trip count.
+     */
+    private suspend fun harvestTokenUsage(conversationId: Uuid): Triple<Long, Long, Int> {
+        return runCatching {
+            val conv = conversationRepo.getConversationById(conversationId)
+                ?: return@runCatching Triple(0L, 0L, 0)
+            val totals = TokenBudgetTracker.aggregate(conv)
+            val trips = conv.messageNodes.mapNotNull { node ->
+                node.messages.getOrNull(node.selectIndex)
+            }.count { it.role.name.equals("assistant", ignoreCase = true) }
+            Triple(totals.inputTokens, totals.outputTokens, trips)
+        }.getOrDefault(Triple(0L, 0L, 0))
     }
 }

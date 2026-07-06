@@ -764,7 +764,13 @@ class ChatService(
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
             ?: settings.getCurrentAssistant()
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
+        val model = settings.findModelById(
+            // Phase 30 (Orchestrator Mode Phase A) — per-conversation model
+            // override takes priority. SubAgentEngine sets this on worker
+            // conversations; for regular chats it's null and resolution falls
+            // through to assistant / global default as before.
+            initialConversation.chatModelId ?: assistant.chatModelId ?: settings.chatModelId
+        )
             ?: throw IllegalStateException(
                 "No chat model selected. Pick one in Settings → Default models, or send /model in Telegram."
             )
@@ -871,6 +877,11 @@ class ChatService(
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
                 workspaceCwd = conversation.workspaceCwd,
+                // Phase 30 — headless runs (sub-agent / cron / workflow) set the system
+                // prompt programmatically; bypass the assistant's allowConversationSystemPrompt
+                // gate so the engine's customSystemPrompt is always respected.
+                forceConversationSystemPrompt =
+                    me.rerere.rikkahub.data.ai.tools.HeadlessConversations.isHeadless(conversationId),
                 memories = if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {

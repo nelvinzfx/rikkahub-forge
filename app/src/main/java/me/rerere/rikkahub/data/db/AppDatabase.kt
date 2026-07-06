@@ -58,7 +58,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         AgentRun::class,
         WorkspaceEntity::class,
     ],
-    version = 26,
+    version = 27,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -83,6 +83,11 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // v26: the 2.3.1 merge brings upstream's workspaces table (WorkspaceEntity). Existing
         // fork users never had it, so Room auto-creates the table on this step.
         AutoMigration(from = 25, to = 26),
+        // v27: Orchestrator Mode Phase A — adds `chat_model_id` column to
+        // conversationentity (per-conversation model override). The column
+        // carries defaultValue="" so a plain auto-migration suffices, same
+        // pattern as the v25 custom_system_prompt addition.
+        AutoMigration(from = 26, to = 27),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)

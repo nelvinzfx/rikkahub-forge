@@ -305,6 +305,11 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        // Phase 30 (Orchestrator Mode Phase A) — when true, conversationSystemPrompt
+        // is respected even if the assistant hasn't enabled allowConversationSystemPrompt.
+        // Used by sub-agent / cron / workflow headless runs where the engine sets the
+        // system prompt programmatically and the user-facing toggle is irrelevant.
+        forceConversationSystemPrompt: Boolean = false,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -441,6 +446,7 @@ class GenerationHandler(
                         conversationModeInjectionIds = conversationModeInjectionIds,
                         conversationLorebookIds = conversationLorebookIds,
                         workspaceCwd = workspaceCwd,
+                        forceConversationSystemPrompt = forceConversationSystemPrompt,
                     )
                 } catch (t: Throwable) {
                     // CancellationException is honoured verbatim — stopGeneration has its
@@ -953,12 +959,16 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        forceConversationSystemPrompt: Boolean = false,
     ) {
         val internalMessages = buildList {
             // Conversation-level system prompt override (upstream): when the assistant
             // allows it and the conversation supplies one, it replaces the assistant prompt.
+            // Phase 30: headless runs (sub-agent / cron / workflow) force-override regardless
+            // of the assistant's allowConversationSystemPrompt toggle — the engine sets the
+            // prompt programmatically and the user-facing gate is irrelevant for those paths.
             val effectiveSystemPrompt =
-                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                if ((assistant.allowConversationSystemPrompt || forceConversationSystemPrompt) && !conversationSystemPrompt.isNullOrBlank()) {
                     conversationSystemPrompt
                 } else {
                     assistant.systemPrompt

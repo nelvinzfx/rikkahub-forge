@@ -24,6 +24,11 @@ data class ConversationEntity(
     val isPinned: Boolean,
     @ColumnInfo("custom_system_prompt", defaultValue = "")
     val customSystemPrompt: String = "",
+    // Phase 30 (Orchestrator Mode Phase A) — per-conversation model override.
+    // Empty string = inherit from assistant / global default. Auto-migrates
+    // from v26 because the column carries a defaultValue.
+    @ColumnInfo("chat_model_id", defaultValue = "")
+    val chatModelId: String = "",
     @ColumnInfo("mode_injection_ids", defaultValue = "[]")
     val modeInjectionIds: String = "[]",
     @ColumnInfo("lorebook_ids", defaultValue = "[]")

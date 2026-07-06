@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +20,8 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -37,6 +40,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlin.uuid.Uuid
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
@@ -45,9 +49,12 @@ import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.local.PermissionHelper
 import me.rerere.rikkahub.data.ai.tools.local.TermuxIntegration
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.ui.components.ai.ModelSelector
+import me.rerere.ai.provider.ModelType
 import me.rerere.rikkahub.data.telegram.TelegramBotPreferences
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.writeClipboardText
@@ -63,6 +70,7 @@ fun AssistantLocalToolPage(id: String) {
         }
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -84,6 +92,7 @@ fun AssistantLocalToolPage(id: String) {
         AssistantLocalToolContent(
             modifier = Modifier.padding(innerPadding),
             assistant = assistant,
+            providers = settings.providers,
             onUpdate = { vm.update(it) },
             // Transform-based path used by the per-tool toggles. Each tap runs inside
             // SettingsStore.update's mutex against the genuinely-current Assistant, so
@@ -99,6 +108,7 @@ fun AssistantLocalToolPage(id: String) {
 private fun AssistantLocalToolContent(
     modifier: Modifier = Modifier,
     assistant: Assistant,
+    providers: List<me.rerere.ai.provider.ProviderSetting>,
     onUpdate: (Assistant) -> Unit,
     onUpdateAssistant: ((Assistant) -> Assistant) -> Unit,
 ) {
@@ -887,6 +897,51 @@ private fun AssistantLocalToolContent(
                     )
                 }
             )
+            // Phase 30 (Orchestrator Mode Phase A) — sub-agent model + prompt config.
+            // Only shown when Sub-agents toggle is on. These wire the previously-dead
+            // Assistant.subAgentModelId / subAgentSystemPrompt fields.
+            if (assistant.localTools.contains(LocalToolOption.SubAgents)) {
+                item {
+                    FormItem(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        label = { Text("Default worker model") },
+                        description = { Text("Inherits from assistant if not set") },
+                        content = {
+                            ModelSelector(
+                                modelId = assistant.subAgentModelId,
+                                providers = providers,
+                                type = ModelType.CHAT,
+                                allowClear = true,
+                                onSelect = { model ->
+                                    onUpdateAssistant {
+                                        it.copy(
+                                            subAgentModelId = model.id.takeIf { _ -> model.modelId.isNotEmpty() }
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    )
+                }
+                item {
+                    FormItem(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        label = { Text("Default worker system prompt") },
+                        description = { Text("Empty = focused sub-agent prompt") },
+                        content = {
+                            OutlinedTextField(
+                                value = assistant.subAgentSystemPrompt,
+                                onValueChange = { value ->
+                                    onUpdateAssistant { it.copy(subAgentSystemPrompt = value) }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2,
+                                maxLines = 6,
+                            )
+                        }
+                    )
+                }
+            }
             item(
                 headlineContent = {
                     Text(stringResource(R.string.assistant_page_local_tools_cost_guards_title))
