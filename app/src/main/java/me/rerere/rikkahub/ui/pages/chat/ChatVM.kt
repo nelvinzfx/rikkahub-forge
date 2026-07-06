@@ -54,6 +54,7 @@ class ChatVM(
     val updateChecker: UpdateChecker,
     private val filesManager: FilesManager,
     private val favoriteRepository: FavoriteRepository,
+    private val subAgentRegistry: me.rerere.rikkahub.subagent.SubAgentRegistry,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
     val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
@@ -75,6 +76,14 @@ class ChatVM(
     val conversationJobs = chatService
         .getConversationJobs()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    // Phase E — sub-agent runs for THIS conversation (parentChatId matches). The chip row
+    // in ChatList collects this to show live worker status with cancel buttons.
+    val subAgentRuns: StateFlow<List<me.rerere.rikkahub.subagent.SubAgentRun>> =
+        subAgentRegistry.runs.map { all ->
+            all.values.filter { it.parentChatId == _conversationId.toString() }
+                .sortedByDescending { it.startedAtMs }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     init {
         // 添加对话引用

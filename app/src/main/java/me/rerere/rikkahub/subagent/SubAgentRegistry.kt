@@ -171,4 +171,25 @@ class SubAgentRegistry {
         val toEvictId = terminalSorted.firstOrNull()?.id
         return if (toEvictId != null) current - toEvictId else current
     }
+
+    companion object {
+        @Volatile
+        private var globalInstance: SubAgentRegistry? = null
+
+        internal fun onInstanceCreated(registry: SubAgentRegistry) {
+            globalInstance = registry
+        }
+
+        /**
+         * Cancel a sub-agent run via the global singleton instance. Used by the UI chip row
+         * which doesn't have direct access to the registry through DI in the composable tree.
+         */
+        fun cancelViaGlobalInstance(runId: String): Boolean {
+            return globalInstance?.requestCancel(runId) ?: false
+        }
+    }
+
+    init {
+        onInstanceCreated(this)
+    }
 }
