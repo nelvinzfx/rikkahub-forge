@@ -220,7 +220,7 @@ class SubAgentEngine(
         ledgerIds[runId] = ledgerId
 
         val executionJob = appScope.launch(Dispatchers.IO) {
-            executeRun(runId, parentAssistantId, parentChatId, cleaned)
+            executeRun(runId, parentAssistantId, parentChatId, cleaned, childDepth, childOrchestratorId)
         }
         registry.setJob(runId, executionJob)
 
@@ -254,6 +254,8 @@ class SubAgentEngine(
         parentAssistantId: String,
         parentChatId: String?,
         request: SubAgentRequest,
+        childDepth: Int,
+        childOrchestratorId: String?,
     ) {
         registry.update(runId) { it.copy(status = SubAgentStatus.RUNNING) }
         ledgerIds[runId]?.let { agentRunRepo.setStatus(it, AgentRunStatus.running) }
