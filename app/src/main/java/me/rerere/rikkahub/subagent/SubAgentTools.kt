@@ -69,6 +69,10 @@ fun subagentDispatchTool(
         the running sub-agent. For long-running work, set run_in_background=true and
         poll with subagent_get; otherwise foreground (default) blocks until terminal.
 
+        model_id: pass the UUID of a model from the AVAILABLE WORKER MODELS list in your
+        system prompt to use a specific model for the worker. Omit to inherit the current
+        model. The id must be a valid UUID from that list.
+
         Concurrency caps: each assistant has its own (default 3, configurable 1-8) and
         there's a global cap of 16 across all assistants. Over-cap dispatches fail with
         a clear error — back off and retry, or wait for a slot.

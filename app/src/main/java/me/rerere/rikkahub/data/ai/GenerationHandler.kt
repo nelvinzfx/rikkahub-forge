@@ -38,6 +38,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
@@ -1015,11 +1016,21 @@ class GenerationHandler(
                 } else {
                     assistant.systemPrompt
                 }
-            // Phase C — inject orchestrator preamble when orchestrator mode is ON and this
-            // is NOT a worker conversation (enforceSubAgentPromptRules = false means it's the
-            // orchestrator's own conversation). Workers never get the preamble.
+            // Phase C/D — inject orchestrator preamble when orchestrator mode is ON and this
+            // is NOT a worker conversation. Workers never get the preamble. The model list is
+            // built from the CURRENT provider only (the provider of the orchestrator's chat
+            // model) so the LLM sees exactly which models it can dispatch workers to — no
+            // models from other providers the user may have configured.
             val finalSystemPrompt = if (assistant.orchestratorMode && !enforceSubAgentPromptRules) {
-                ORCHESTRATOR_PREAMBLE + effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
+                val chatModels = provider.models.filter { it.type == ModelType.CHAT }
+                val modelSection = if (chatModels.isNotEmpty()) {
+                    val list = chatModels.joinToString("\n") { m ->
+                        val label = m.displayName.ifBlank { m.modelId.ifBlank { "(unnamed)" } }
+                        "- $label — id: ${m.id}"
+                    }
+                    "\n\nAVAILABLE WORKER MODELS (provider: ${provider.name}):\n$list\n\nPass one of the above ids in model_id when calling subagent_dispatch. Omit model_id to inherit the current model."
+                } else ""
+                ORCHESTRATOR_PREAMBLE + modelSection + (effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: "")
             } else {
                 effectiveSystemPrompt
             }
