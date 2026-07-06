@@ -42,6 +42,9 @@ data class SubAgentRun(
     // Phase 30 (Orchestrator Mode Phase C) — subtree identity + depth.
     val depth: Int = 0,
     val orchestratorRunId: String? = null, // null = top-level worker; non-null = descendant
+    // Phase D — subtree cost-guard signals.
+    val subtreeTokenWarning: Boolean = false, // set when subtree hits 80% of cap
+    val subtreeTokenCancelled: Boolean = false, // set when subtree hits 100% of cap
 )
 
 @Serializable

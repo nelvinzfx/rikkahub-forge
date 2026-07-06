@@ -121,6 +121,45 @@ class SubAgentRegistry {
         return count
     }
 
+    /**
+     * Phase D — return all runs in the subtree rooted at [rootRunId]: the root itself
+     * plus every descendant (runs whose orchestratorRunId matches).
+     */
+    fun getSubtree(rootRunId: String): List<SubAgentRun> =
+        _runs.value.values.filter { it.id == rootRunId || it.orchestratorRunId == rootRunId }
+
+    /**
+     * Phase D — sum tokens across an entire subtree (root + descendants).
+     * Returns (totalIn, totalOut).
+     */
+    fun subtreeTokenSum(rootRunId: String): Pair<Int, Int> {
+        val runs = getSubtree(rootRunId)
+        val totalIn = runs.sumOf { it.tokensIn }
+        val totalOut = runs.sumOf { it.tokensOut }
+        return totalIn to totalOut
+    }
+
+    // --- Phase D: per-assistant rate limiting (sliding 60s window) ---
+    private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
+
+    /**
+     * Check + record a dispatch under the assistant's rate-limit window.
+     * Returns true if the dispatch is allowed, false if the rate limit is exceeded.
+     * [limit] = max dispatches per 60s. 0 = unlimited (always true).
+     */
+    fun checkAndRecordRateLimit(assistantId: String, limit: Int): Boolean {
+        if (limit <= 0) return true
+        val now = System.currentTimeMillis()
+        val cutoff = now - 60_000L
+        val list = dispatchTimestamps.computeIfAbsent(assistantId) { mutableListOf() }
+        synchronized(list) {
+            list.removeAll { it < cutoff }
+            if (list.size >= limit) return false
+            list.add(now)
+            return true
+        }
+    }
+
     private fun pruneIfNeeded(current: Map<String, SubAgentRun>): Map<String, SubAgentRun> {
         if (current.size < SubAgentDefaults.REGISTRY_LRU_CAP) return current
         // Evict the oldest TERMINAL run; never evict a running one. If every run is

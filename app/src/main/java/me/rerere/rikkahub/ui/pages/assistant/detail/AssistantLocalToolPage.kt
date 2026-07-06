@@ -1136,6 +1136,57 @@ private fun AssistantLocalToolContent(
                             )
                         }
                     )
+                    item(
+                        headlineContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_subtree_cap))
+                        },
+                        supportingContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_subtree_cap_desc))
+                        },
+                        trailingContent = {
+                            Text(
+                                text = (assistant.subAgentSubtreeTokenCap ?: 0).toString(),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            // Cycle: 0 → 10000 → 50000 → 100000 → 0 (null)
+                            val current = assistant.subAgentSubtreeTokenCap ?: 0
+                            val next = when (current) {
+                                0 -> 10000
+                                10000 -> 50000
+                                50000 -> 100000
+                                else -> 0
+                            }
+                            onUpdateAssistant {
+                                it.copy(subAgentSubtreeTokenCap = next.takeIf { v -> v > 0 })
+                            }
+                        }
+                    )
+                    item(
+                        headlineContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_rate_limit))
+                        },
+                        supportingContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_rate_limit_desc))
+                        },
+                        trailingContent = {
+                            Text(
+                                text = assistant.subAgentDispatchRateLimit.toString(),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            // Cycle: 0 → 5 → 10 → 20 → 0
+                            val next = when (assistant.subAgentDispatchRateLimit) {
+                                0 -> 5
+                                5 -> 10
+                                10 -> 20
+                                else -> 0
+                            }
+                            onUpdateAssistant { it.copy(subAgentDispatchRateLimit = next) }
+                        }
+                    )
                 }
             }
         }

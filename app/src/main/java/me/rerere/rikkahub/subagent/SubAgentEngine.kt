@@ -115,6 +115,14 @@ class SubAgentEngine(
                 "sub-agent depth $childDepth exceeds maxDepth $maxDepth for this assistant"
             )
         }
+        // Phase D — rate-limit check (sliding 60s window per assistant).
+        val rateLimit = parentAssistant?.subAgentDispatchRateLimit ?: 0
+        if (rateLimit > 0 && !registry.checkAndRecordRateLimit(parentAssistantId, rateLimit)) {
+            return@withContext DispatchResult.Reject(
+                "rate_limited",
+                "dispatch rate limit of $rateLimit/minute for this assistant is exceeded"
+            )
+        }
         // Still reject dispatch from non-sub-agent headless contexts (cron, workflow,
         // external automation) — those aren't orchestrator contexts and shouldn't spawn.
         if (parentChatId != null) {
@@ -365,6 +373,30 @@ class SubAgentEngine(
                     fallbackModelUsed = fallbackUsed,
                     fallbackReason = fallbackReason,
                 )
+            }
+            // Phase D — subtree token cap enforcement. Only check for the root worker
+            // (orchestratorRunId == null); descendants are covered by their root's check.
+            // We also check for descendants whose root is still active so the cap fires
+            // regardless of which worker finishes first. The root id is either this run
+            // (if it IS the root) or childOrchestratorId.
+            val rootId = childOrchestratorId ?: runId
+            val subtreeCap = parentAssistant?.subAgentSubtreeTokenCap
+            if (subtreeCap != null && subtreeCap > 0) {
+                val (subIn, subOut) = registry.subtreeTokenSum(rootId)
+                val subTotal = subIn + subOut
+                if (subTotal >= subtreeCap) {
+                    // Cancel all remaining workers in the subtree.
+                    val cancelled = registry.cancelSubtree(rootId)
+                    if (cancelled > 0) {
+                        Log.w(TAG, "subtree token cap hit: $subTotal >= $subtreeCap, cancelled $cancelled remaining runs")
+                    }
+                    // Mark the root run with the cancelled flag.
+                    registry.update(rootId) { it.copy(subtreeTokenCancelled = true) }
+                } else if (subTotal >= subtreeCap * 0.8) {
+                    // 80% warning — surface on the root run.
+                    registry.update(rootId) { it.copy(subtreeTokenWarning = true) }
+                    Log.w(TAG, "subtree token warning: $subTotal >= ${subtreeCap * 0.8} (80% of $subtreeCap)")
+                }
             }
             ledgerIds.remove(runId)?.let {
                 agentRunRepo.markTerminal(it, AgentRunStatus.succeeded)

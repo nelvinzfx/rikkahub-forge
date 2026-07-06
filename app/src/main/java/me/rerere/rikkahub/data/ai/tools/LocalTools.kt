@@ -904,6 +904,7 @@ class LocalTools(
             tools.add(me.rerere.rikkahub.subagent.subagentDispatchBatchTool(subAgentEngine, invocationContext))
             tools.add(me.rerere.rikkahub.subagent.subagentWaitAllTool(subAgentRegistry))
             tools.add(me.rerere.rikkahub.subagent.subagentCancelSubtreeTool(subAgentRegistry))
+            tools.add(me.rerere.rikkahub.subagent.subagentSubtreeStatusTool(subAgentRegistry))
         }
         if (options.contains(LocalToolOption.CostGuards)) {
             tools.add(me.rerere.rikkahub.costguards.checkTokenUsageTool(settingsStore, conversationRepo))

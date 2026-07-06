@@ -41,6 +41,8 @@ private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject =
     if (run.fallbackReason != null) put("fallback_reason", run.fallbackReason)
     put("depth", run.depth)
     if (run.orchestratorRunId != null) put("orchestrator_run_id", run.orchestratorRunId)
+    if (run.subtreeTokenWarning) put("subtree_token_warning", true)
+    if (run.subtreeTokenCancelled) put("subtree_token_cancelled", true)
 }
 
 /**
@@ -433,6 +435,73 @@ fun subagentCancelSubtreeTool(registry: SubAgentRegistry): Tool = Tool(
         listOf(UIMessagePart.Text(buildJsonObject {
             put("cancelled", cancelled)
             put("orchestrator_run_id", id)
+        }.toString()))
+    },
+)
+
+/**
+ * Phase D — observability tool: show the full subtree tree + aggregate token usage.
+ * Takes the root orchestrator run id and returns a flat list of all runs in the subtree
+ * with their depth, status, tokens, and trip count, plus aggregate totals.
+ */
+fun subagentSubtreeStatusTool(registry: SubAgentRegistry): Tool = Tool(
+    name = "subagent_subtree_status",
+    description = """
+        Show the full status of a sub-agent subtree. Pass the root orchestrator run id.
+        Returns every run in the subtree (root + all descendants) with depth, status,
+        token usage, and trip count, plus aggregate totals for the whole subtree.
+        Use this to inspect an ongoing or completed orchestration.
+    """.trimIndent(),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("orchestrator_run_id", buildJsonObject { put("type", "string") })
+            },
+            required = listOf("orchestrator_run_id"),
+        )
+    },
+    needsApproval = { false },
+    execute = { args ->
+        val id = args.jsonObject["orchestrator_run_id"]?.jsonPrimitive?.contentOrNull
+            ?: return@Tool errEnv("invalid_id", "orchestrator_run_id is required")
+        val runs = registry.getSubtree(id)
+        if (runs.isEmpty()) {
+            return@Tool listOf(UIMessagePart.Text(buildJsonObject {
+                put("error", "no_runs_found")
+                put("detail", "no sub-agent runs found for orchestrator_run_id '$id'")
+            }.toString()))
+        }
+        val (totalIn, totalOut) = registry.subtreeTokenSum(id)
+        val runArr = buildJsonArray {
+            runs.sortedBy { it.depth }.forEach { run ->
+                addJsonObject {
+                    put("run_id", run.id)
+                    put("label", run.label)
+                    put("depth", run.depth)
+                    put("status", run.status.name)
+                    put("tokens_in", run.tokensIn)
+                    put("tokens_out", run.tokensOut)
+                    put("trip_count", run.tripCount)
+                    if (run.modelId != null) put("model_id", run.modelId)
+                    if (run.fallbackModelUsed) put("fallback_model_used", true)
+                    if (run.subtreeTokenWarning) put("subtree_token_warning", true)
+                    if (run.subtreeTokenCancelled) put("subtree_token_cancelled", true)
+                }
+            }
+        }
+        listOf(UIMessagePart.Text(buildJsonObject {
+            put("orchestrator_run_id", id)
+            put("run_count", runs.size)
+            put("aggregate_tokens_in", totalIn)
+            put("aggregate_tokens_out", totalOut)
+            put("aggregate_tokens_total", totalIn + totalOut)
+            put("active_count", runs.count {
+                it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING
+            })
+            put("terminal_count", runs.count {
+                it.status != SubAgentStatus.RUNNING && it.status != SubAgentStatus.PENDING
+            })
+            put("runs", runArr)
         }.toString()))
     },
 )
