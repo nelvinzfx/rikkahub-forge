@@ -1818,4 +1818,10 @@
   <string name="assistant_page_sub_agent_include_soul_desc">Inject the assistant system prompt (persona/soul) into workers by default.</string>
   <string name="assistant_page_sub_agent_include_chats">Workers inherit recent chats</string>
   <string name="assistant_page_sub_agent_include_chats_desc">Inject recent chats reference into workers by default.</string>
+  <string name="assistant_page_orchestrator_mode">Orchestrator Mode</string>
+  <string name="assistant_page_orchestrator_mode_desc">Let this assistant split tasks into parallel workers automatically. When on, the agent decides per-task whether to decompose or answer inline.</string>
+  <string name="assistant_page_orchestrator_max_depth">Max sub-agent depth</string>
+  <string name="assistant_page_orchestrator_max_depth_desc">0 = no sub-agents, 1 = one level (default), 2 = allow grandchildren (use with caution).</string>
+  <string name="assistant_page_orchestrator_auto_approve">Auto-approve batch workers</string>
+  <string name="assistant_page_orchestrator_auto_approve_desc">One approval covers the whole batch dispatch. HARDLINE still applies to individual tool calls inside workers.</string>
 </resources>

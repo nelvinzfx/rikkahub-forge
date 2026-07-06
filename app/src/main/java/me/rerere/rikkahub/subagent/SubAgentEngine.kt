@@ -99,14 +99,31 @@ class SubAgentEngine(
         parentChatId: String?,
         request: SubAgentRequest,
     ): DispatchResult = withContext(Dispatchers.Default) {
-        // Recursion guard: if the caller is in a headless context already (cron job /
-        // workflow / another sub-agent), reject. v1 does not allow nested sub-agents.
+        // Phase C — depth-cap recursion guard. Replaces the old "reject if headless" guard.
+        // A sub-agent CAN now dispatch children, up to the assistant's subAgentMaxDepth.
+        // Depth 0 = top-level (from a normal conversation). Depth 1+ = from a sub-agent.
+        val (childDepth, childOrchestratorId) = SubAgentConversationTracker.childDepth(parentChatId)
+        val parentAssistant = settingsStore.settingsFlow.first().getAssistantById(
+            runCatching { Uuid.parse(parentAssistantId) }.getOrNull() ?: return@withContext DispatchResult.Reject(
+                "invalid_assistant_id", "parent assistant id '$parentAssistantId' is not a valid UUID"
+            )
+        )
+        val maxDepth = parentAssistant?.subAgentMaxDepth ?: 1
+        if (childDepth > maxDepth) {
+            return@withContext DispatchResult.Reject(
+                "depth_cap_reached",
+                "sub-agent depth $childDepth exceeds maxDepth $maxDepth for this assistant"
+            )
+        }
+        // Still reject dispatch from non-sub-agent headless contexts (cron, workflow,
+        // external automation) — those aren't orchestrator contexts and shouldn't spawn.
         if (parentChatId != null) {
             val parentUuid = runCatching { Uuid.parse(parentChatId) }.getOrNull()
-            if (parentUuid != null && HeadlessConversations.isHeadless(parentUuid)) {
+            if (parentUuid != null && HeadlessConversations.isHeadless(parentUuid)
+                && SubAgentConversationTracker.lookup(parentChatId) == null) {
                 return@withContext DispatchResult.Reject(
                     "no_recursion",
-                    "sub-agent dispatch is not allowed from inside another headless run"
+                    "sub-agent dispatch is not allowed from inside a headless run (cron / workflow / external automation)"
                 )
             }
         }
@@ -180,6 +197,8 @@ class SubAgentEngine(
             maxTrips = cleaned.maxTrips,
             status = SubAgentStatus.PENDING,
             startedAtMs = now,
+            depth = childDepth,
+            orchestratorRunId = childOrchestratorId,
         )
         registry.addPending(initialRun)
 
@@ -295,6 +314,7 @@ class SubAgentEngine(
         conversationRepo.insertConversation(conv)
         chatService.initializeConversation(conv.id)
         HeadlessConversations.mark(conv.id)
+        SubAgentConversationTracker.register(conv.id.toString(), runId, childDepth, childOrchestratorId)
         try {
             // Prepend a wrap-up instruction. Some models naturally write a summary paragraph
             // after their tool-call sequence; others stop after the last tool result and emit
@@ -356,6 +376,7 @@ class SubAgentEngine(
             notifyParentIfBackground(parentChatId, registry.get(runId))
         } finally {
             HeadlessConversations.unmark(conv.id)
+            SubAgentConversationTracker.unregister(conv.id.toString())
             registry.clearJob(runId)
         }
     }

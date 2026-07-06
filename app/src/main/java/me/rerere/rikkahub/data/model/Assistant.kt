@@ -57,6 +57,10 @@ data class Assistant(
     val subAgentDefaultIncludeMemory: Boolean = true,
     val subAgentDefaultIncludeSoul: Boolean = true,
     val subAgentDefaultIncludeRecentChats: Boolean = true,
+    // Phase 30 (Orchestrator Mode Phase C) — orchestrator mode + depth cap.
+    val orchestratorMode: Boolean = false,
+    val subAgentMaxDepth: Int = 1, // 0=no sub-agents at all, 1=one level (default), 2=grandchildren
+    val orchestratorAllowAutoApprove: Boolean = false, // one approval covers batch
     // Phase 15 — Per-task token budget. Both null = no budget enforcement. The LLM
     // checks via `check_token_usage`; auto-stop integration into GenerationHandler is
     // Phase 15.5 follow-up.

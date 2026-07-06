@@ -100,6 +100,27 @@ class SubAgentRegistry {
         activeJobs.remove(id)
     }
 
+    /**
+     * Phase C — cancel every active run in the subtree rooted at [rootRunId]. Walks all
+     * runs where orchestratorRunId == rootRunId (direct children and propagated descendants).
+     * Also cancels the root run itself if it is still active. Returns the count cancelled.
+     */
+    fun cancelSubtree(rootRunId: String): Int {
+        var count = 0
+        val toCancel = _runs.value.values
+            .filter {
+                (it.orchestratorRunId == rootRunId || it.id == rootRunId) &&
+                    (it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING)
+            }
+            .map { it.id }
+        for (runId in toCancel) {
+            if (requestCancel(runId)) {
+                count++
+            }
+        }
+        return count
+    }
+
     private fun pruneIfNeeded(current: Map<String, SubAgentRun>): Map<String, SubAgentRun> {
         if (current.size < SubAgentDefaults.REGISTRY_LRU_CAP) return current
         // Evict the oldest TERMINAL run; never evict a running one. If every run is

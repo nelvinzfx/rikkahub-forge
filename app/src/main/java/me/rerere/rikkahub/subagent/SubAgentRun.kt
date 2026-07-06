@@ -39,6 +39,9 @@ data class SubAgentRun(
     // a silent substitution. modelId above still holds the originally-requested id.
     val fallbackModelUsed: Boolean = false,
     val fallbackReason: String? = null,
+    // Phase 30 (Orchestrator Mode Phase C) — subtree identity + depth.
+    val depth: Int = 0,
+    val orchestratorRunId: String? = null, // null = top-level worker; non-null = descendant
 )
 
 @Serializable

@@ -1081,6 +1081,62 @@ private fun AssistantLocalToolContent(
                         )
                     }
                 )
+                item(
+                    headlineContent = {
+                        Text(stringResource(R.string.assistant_page_orchestrator_mode))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.assistant_page_orchestrator_mode_desc))
+                    },
+                    trailingContent = {
+                        PermissionedSwitch(
+                            checked = assistant.orchestratorMode,
+                            onCheckedChange = { v ->
+                                onUpdateAssistant { it.copy(orchestratorMode = v) }
+                            }
+                        )
+                    }
+                )
+                if (assistant.orchestratorMode) {
+                    item(
+                        headlineContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_max_depth))
+                        },
+                        supportingContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_max_depth_desc))
+                        },
+                        trailingContent = {
+                            Text(
+                                text = assistant.subAgentMaxDepth.toString(),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            val next = when (assistant.subAgentMaxDepth) {
+                                0 -> 1
+                                1 -> 2
+                                else -> 0
+                            }
+                            onUpdateAssistant { it.copy(subAgentMaxDepth = next) }
+                        }
+                    )
+                    item(
+                        headlineContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_auto_approve))
+                        },
+                        supportingContent = {
+                            Text(stringResource(R.string.assistant_page_orchestrator_auto_approve_desc))
+                        },
+                        trailingContent = {
+                            PermissionedSwitch(
+                                checked = assistant.orchestratorAllowAutoApprove,
+                                onCheckedChange = { v ->
+                                    onUpdateAssistant { it.copy(orchestratorAllowAutoApprove = v) }
+                                }
+                            )
+                        }
+                    )
+                }
             }
         }
 

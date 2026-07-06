@@ -270,6 +270,25 @@ internal object LoopGuard {
     }
 }
 
+/**
+ * Phase 30 (Orchestrator Mode Phase C) — preamble injected into the system prompt when
+ * the assistant has orchestratorMode = true and the conversation is the orchestrator's
+ * own (not a worker). Short, dense, prescriptive. See docs/orchestrator-mode.md §5.2.
+ */
+internal const val ORCHESTRATOR_PREAMBLE = """
+You are in Orchestrator Mode. You can decompose tasks into parallel worker sub-agents, or do them yourself.
+
+DECIDE FIRST: If a task is one lookup, one edit, or something you can answer in a few tool calls — do it inline. Workers cost tokens and coordination; don't spawn them for work you can finish faster alone. Split when there are genuinely independent threads (parallel research, multi-file changes, multi-target probing).
+
+WRITE GOOD WORKER TASKS: Workers don't see this conversation. Each task must be self-contained — include any context the worker needs to act without asking you back. One clear deliverable per worker. Bounded scope: "search X, return Y" not "explore the codebase".
+
+RIGHT GRANULARITY: Too fine = overhead burns more tokens than it saves. Too coarse = no parallelism, might as well do it yourself. Aim for 2-6 workers, each doing a chunk that would take you 3-10 tool calls alone.
+
+HANDLE FAILURE: If a worker times out or fails, use what you got. Retry only if the result is essential and the failure looks transient. Don't block the whole turn on one dead worker.
+
+SYNTHESISE: Your final reply is not a paste of worker outputs. Read their summaries, extract what matters, write one coherent answer to the user. The user sees you, not your workers.
+"""
+
 class GenerationHandler(
     private val context: Context,
     private val providerManager: ProviderManager,
@@ -980,24 +999,30 @@ class GenerationHandler(
                 if (enforceSubAgentPromptRules) {
                     when {
                         !conversationSystemPrompt.isNullOrBlank() && suppressAssistantPrompt -> {
-                            // include_soul=false: only worker prompt
                             conversationSystemPrompt
                         }
                         !conversationSystemPrompt.isNullOrBlank() -> {
-                            // include_soul=true: soul + worker prompt appended
                             listOfNotNull(
                                 assistant.systemPrompt.takeIf { it.isNotBlank() },
                                 conversationSystemPrompt,
                             ).joinToString("\n\n")
                         }
-                        suppressAssistantPrompt -> ""  // no worker prompt + soul suppressed
-                        else -> assistant.systemPrompt  // no worker prompt + soul kept
+                        suppressAssistantPrompt -> ""
+                        else -> assistant.systemPrompt
                     }
                 } else if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
                     conversationSystemPrompt
                 } else {
                     assistant.systemPrompt
                 }
+            // Phase C — inject orchestrator preamble when orchestrator mode is ON and this
+            // is NOT a worker conversation (enforceSubAgentPromptRules = false means it's the
+            // orchestrator's own conversation). Workers never get the preamble.
+            val finalSystemPrompt = if (assistant.orchestratorMode && !enforceSubAgentPromptRules) {
+                ORCHESTRATOR_PREAMBLE + effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: ""
+            } else {
+                effectiveSystemPrompt
+            }
             val memoryPrompt = if (assistant.enableMemory && !suppressMemory) {
                 buildMemoryPrompt(memories = memories)
             } else ""
@@ -1009,7 +1034,7 @@ class GenerationHandler(
             // addendum) so prompt caching survives memory injection: the stable part is the
             // cached prefix, the volatile part sits after it. See SystemPromptBuilder.
             val (stableSystem, volatileSystem) = systemPromptBuilder.buildSections(
-                assistantPrompt = effectiveSystemPrompt,
+                assistantPrompt = finalSystemPrompt,
                 memoryPrompt = memoryPrompt,
                 recentChatsPrompt = recentChatsPrompt,
                 toolPrompts = toolPrompts,
