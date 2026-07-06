@@ -15,6 +15,9 @@ import me.rerere.rikkahub.data.agentrun.AgentRunRepository
 import me.rerere.rikkahub.data.agentrun.AgentRunStatus
 import me.rerere.rikkahub.data.ai.tools.HeadlessConversations
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.datastore.getAssistantById
+import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
@@ -128,6 +131,40 @@ class SubAgentEngine(
             )
         }
 
+        // Phase 30 (Orchestrator Mode Phase A) - strict validation of an explicitly-
+        // requested model_id (decision #4). The LLM per-call arg must resolve to a real
+        // model on an ENABLED provider; a bad/disabled id is rejected with a clear error
+        // so the agent can pick a different model instead of silently inheriting. The
+        // assistant-level subAgentModelId default is intentionally NOT strict-validated
+        // here - if that one is stale/disabled the engine falls back at run time instead
+        // of rejecting the whole dispatch.
+        val settings = settingsStore.settingsFlow.first()
+        request.modelId?.let { mid ->
+            val parsed = runCatching { Uuid.parse(mid) }.getOrNull()
+                ?: return@withContext DispatchResult.Reject(
+                    "invalid_model_id",
+                    "model_id '$mid' is not a valid UUID"
+                )
+            val model = settings.findModelById(parsed)
+                ?: return@withContext DispatchResult.Reject(
+                    "invalid_model_id",
+                    "no model with id '$mid' is configured"
+                )
+            val provider = model.findProvider(settings.providers)
+            if (provider == null) {
+                return@withContext DispatchResult.Reject(
+                    "invalid_model_id",
+                    "model '$mid' has no configured provider"
+                )
+            }
+            if (!provider.enabled) {
+                return@withContext DispatchResult.Reject(
+                    "model_provider_disabled",
+                    "provider '${provider.name}' (for model '$mid') is disabled - pick a different model or re-enable it"
+                )
+            }
+        }
+
         val runId = Uuid.random().toString()
         val now = System.currentTimeMillis()
         val initialRun = SubAgentRun(
@@ -207,11 +244,46 @@ class SubAgentEngine(
                 markTerminal(runId, SubAgentStatus.FAILED, "bad parent assistant id")
                 return
             }
+        // Phase 30 (Orchestrator Mode Phase A) - resolve the worker's model + system prompt.
+        // Resolution order (first non-null wins):
+        //   model:    request.modelId (LLM per-call) -> assistant.subAgentModelId -> null (inherit)
+        //   prompt:   request.systemPrompt (LLM per-call) -> assistant.subAgentSystemPrompt -> null
+        // Null model = inherit: conversation.chatModelId stays null and ChatService falls
+        // back to assistant.chatModelId / global default. request.modelId was already strict-
+        // validated in dispatch(); here we only do the run-time fallback for the assistant
+        // default (subAgentModelId), which was NOT strict-validated - if its provider got
+        // disabled between dispatch and now, drop to inherit and record the fallback.
+        val settings = settingsStore.settingsFlow.first()
+        val parentAssistant = settings.getAssistantById(parentAsstUuid)
+        var chosenModelId: Uuid? = request.modelId
+            ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            ?: parentAssistant?.subAgentModelId
+        var fallbackUsed = false
+        var fallbackReason: String? = null
+        if (chosenModelId != null) {
+            val chosen = settings.findModelById(chosenModelId)
+            val provider = chosen?.findProvider(settings.providers)
+            if (chosen == null || provider == null || !provider.enabled) {
+                fallbackUsed = true
+                fallbackReason = buildString {
+                    append("requested sub-agent model unavailable")
+                    if (provider != null && !provider.enabled) append(" (provider '${provider.name}' disabled)")
+                    append(" - falling back to assistant/global default")
+                }
+                chosenModelId = null
+            }
+        }
+        val workerSystemPrompt = (request.systemPrompt ?: parentAssistant?.subAgentSystemPrompt)
+            ?.takeIf { it.isNotBlank() }
         val conv = Conversation.ofId(
             id = Uuid.random(),
             assistantId = parentAsstUuid,
             newConversation = true,
-        ).copy(title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}")
+        ).copy(
+            title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}",
+            chatModelId = chosenModelId,
+            customSystemPrompt = workerSystemPrompt,
+        )
         conversationRepo.insertConversation(conv)
         chatService.initializeConversation(conv.id)
         HeadlessConversations.mark(conv.id)
@@ -247,11 +319,21 @@ class SubAgentEngine(
             // text parts from the last assistant message. This mirrors how the
             // CronJobWorker treats LLM-mode jobs.
             val finalText = harvestFinalText(conv.id)
+            // Phase 30 (Orchestrator Mode Phase A) - token telemetry. Sum prompt/
+            // completion tokens across the worker conversation's selected message branch so
+            // Phase D's subtree cap has real numbers. tripCount = assistant messages = LLM
+            // round-trips. Best-effort: a missing/empty conversation just yields zeros.
+            val (tokensIn, tokensOut, trips) = harvestUsage(conv.id)
             registry.update(runId) {
                 it.copy(
                     status = SubAgentStatus.SUCCEEDED,
                     result = finalText,
                     finishedAtMs = System.currentTimeMillis(),
+                    tokensIn = tokensIn,
+                    tokensOut = tokensOut,
+                    tripCount = trips,
+                    fallbackModelUsed = fallbackUsed,
+                    fallbackReason = fallbackReason,
                 )
             }
             ledgerIds.remove(runId)?.let {
@@ -371,5 +453,38 @@ class SubAgentEngine(
                 .joinToString("\n") { it.text }
                 .trim()
         }.getOrDefault("")
+    }
+
+    /**
+     * Phase 30 (Orchestrator Mode Phase A) — best-effort token + trip telemetry.
+     *
+     * Walks the selected branch of the worker conversation, sums [me.rerere.ai.core.TokenUsage]
+     * across ALL messages (both user and assistant — providers report cumulative usage on the
+     * last assistant chunk, so summing only assistant messages double-counts; summing all is
+     * safe because user messages have usage == null), and counts assistant messages as trips.
+     *
+     * Returns (promptTokens, completionTokens, assistantMessageCount). Best-effort: a missing
+     * conversation or one with no usage data yields (0, 0, N) — the trip count is still useful.
+     */
+    private suspend fun harvestUsage(conversationId: Uuid): Triple<Long, Long, Int> {
+        return runCatching {
+            val conv = conversationRepo.getConversationById(conversationId) ?: return@runCatching Triple(0L, 0L, 0)
+            val selectedMessages = conv.messageNodes.mapNotNull { node ->
+                node.messages.getOrNull(node.selectIndex)
+            }
+            var promptTokens = 0L
+            var completionTokens = 0L
+            var trips = 0
+            for (msg in selectedMessages) {
+                msg.usage?.let { usage ->
+                    promptTokens += usage.promptTokens.toLong()
+                    completionTokens += usage.completionTokens.toLong()
+                }
+                if (msg.role.name.equals("assistant", ignoreCase = true)) {
+                    trips++
+                }
+            }
+            Triple(promptTokens, completionTokens, trips)
+        }.getOrDefault(Triple(0L, 0L, 0))
     }
 }

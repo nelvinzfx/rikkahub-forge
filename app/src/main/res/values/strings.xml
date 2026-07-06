@@ -1804,4 +1804,12 @@
   <string name="codex_response_failed">The Codex response failed.</string>
   <string name="codex_monthly_limit">Monthly limit</string>
   <string name="codex_oauth_ports_unavailable">Codex sign-in cannot start because the local callback ports are in use. Close the app using them and try again.</string>
+
+  <!-- Phase 30 (Orchestrator Mode Phase A) - Sub-agent settings UI -->
+  <string name="assistant_page_sub_agent_settings_title">Sub-agent settings</string>
+  <string name="assistant_page_sub_agent_model">Default worker model</string>
+  <string name="assistant_page_sub_agent_model_desc">Model used by worker sub-agents. Inherit = use this assistant chat model.</string>
+  <string name="assistant_page_sub_agent_model_inherit">Inherit from assistant</string>
+  <string name="assistant_page_sub_agent_prompt">Default worker system prompt</string>
+  <string name="assistant_page_sub_agent_prompt_desc">Custom instructions for workers. Empty = built-in focused sub-agent prompt.</string>
 </resources>

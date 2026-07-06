@@ -7,13 +7,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -46,8 +50,10 @@ import me.rerere.rikkahub.data.ai.tools.local.PermissionHelper
 import me.rerere.rikkahub.data.ai.tools.local.TermuxIntegration
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.telegram.TelegramBotPreferences
+import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.ai.provider.ModelType
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.writeClipboardText
@@ -63,6 +69,7 @@ fun AssistantLocalToolPage(id: String) {
         }
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val providers by vm.providers.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -84,6 +91,7 @@ fun AssistantLocalToolPage(id: String) {
         AssistantLocalToolContent(
             modifier = Modifier.padding(innerPadding),
             assistant = assistant,
+            providers = providers,
             onUpdate = { vm.update(it) },
             // Transform-based path used by the per-tool toggles. Each tap runs inside
             // SettingsStore.update's mutex against the genuinely-current Assistant, so
@@ -99,6 +107,7 @@ fun AssistantLocalToolPage(id: String) {
 private fun AssistantLocalToolContent(
     modifier: Modifier = Modifier,
     assistant: Assistant,
+    providers: List<me.rerere.ai.provider.ProviderSetting> = emptyList(),
     onUpdate: (Assistant) -> Unit,
     onUpdateAssistant: ((Assistant) -> Assistant) -> Unit,
 ) {
@@ -971,6 +980,62 @@ private fun AssistantLocalToolContent(
             )
         }
 
+        // Phase 30 (Orchestrator Mode Phase A) - Sub-agent settings panel.
+        // Visible only when the SubAgents local tool toggle is ON. Lets the user pick a
+        // default model + system prompt for workers, so they don't have to be specified
+        // per-dispatch by the LLM. Both default to null/empty = inherit from parent.
+        if (assistant.localTools.contains(LocalToolOption.SubAgents)) {
+            Text(
+                text = stringResource(R.string.assistant_page_sub_agent_settings_title),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(start = 16.dp, top = 8.dp)
+            )
+            CardGroup {
+                item(
+                    headlineContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_model))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_model_desc))
+                    },
+                    trailingContent = {
+                        ModelSelector(
+                            modelId = assistant.subAgentModelId,
+                            providers = providers,
+                            type = ModelType.CHAT,
+                            allowClear = true,
+                            onSelect = { model ->
+                                // Model() with empty id = "clear" button. Distinguish by
+                                // checking if modelId is blank, which only the sentinel has.
+                                val newId = model.modelId.takeIf { it.isNotBlank() }?.let { model.id }
+                                onUpdateAssistant { current ->
+                                    current.copy(subAgentModelId = newId)
+                                }
+                            },
+                        )
+                    }
+                )
+                item(
+                    headlineContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_prompt))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_prompt_desc))
+                    },
+                    trailingContent = {
+                        SubAgentPromptField(
+                            text = assistant.subAgentSystemPrompt,
+                            onTextChange = { newText ->
+                                onUpdateAssistant { current ->
+                                    current.copy(subAgentSystemPrompt = newText)
+                                }
+                            },
+                        )
+                    }
+                )
+            }
+        }
+
         Text(
             text = stringResource(R.string.assistant_page_local_tools_section_browser),
             style = MaterialTheme.typography.titleSmall,
@@ -1607,6 +1672,59 @@ private fun TermuxStatusRowSubtitle(enabled: Boolean) {
                    else label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Phase 30 (Orchestrator Mode Phase A) — compact text editor for the sub-agent default
+ * system prompt. Opens a dialog on tap to keep the list item height bounded.
+ */
+@Composable
+private fun SubAgentPromptField(
+    text: String,
+    onTextChange: (String) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    var draft by remember(text) { mutableStateOf(text) }
+
+    TextButton(onClick = {
+        draft = text
+        showDialog = true
+    }) {
+        Text(
+            text = if (text.isBlank()) stringResource(R.string.assistant_page_sub_agent_prompt) else "Edit",
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(stringResource(R.string.assistant_page_sub_agent_prompt)) },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 300.dp),
+                    placeholder = {
+                        Text(stringResource(R.string.assistant_page_sub_agent_prompt_desc))
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onTextChange(draft)
+                    showDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            },
         )
     }
 }

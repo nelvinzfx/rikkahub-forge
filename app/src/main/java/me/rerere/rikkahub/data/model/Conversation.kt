@@ -25,6 +25,12 @@ data class Conversation(
     @Serializable(with = InstantSerializer::class)
     val updateAt: Instant = Instant.now(),
     val customSystemPrompt: String? = null,
+    // Phase 30 (Orchestrator Mode Phase A) — per-conversation chat model override.
+    // Null = inherit from the conversation's assistant (existing behaviour). Set by the
+    // SubAgentEngine when a worker is dispatched with an explicit model_id, so the worker
+    // runs on that model instead of the parent assistant's chatModelId. Resolution order
+    // in ChatService.handleMessageComplete: conversation.chatModelId → assistant.chatModelId → settings.chatModelId.
+    val chatModelId: Uuid? = null,
     val modeInjectionIds: Set<Uuid> = emptySet(),
     val lorebookIds: Set<Uuid> = emptySet(),
     // Absolute path inside the workspace rootfs

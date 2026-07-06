@@ -37,6 +37,8 @@ private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject =
     put("tokens_in", run.tokensIn)
     put("tokens_out", run.tokensOut)
     put("trip_count", run.tripCount)
+    if (run.fallbackModelUsed) put("fallback_model_used", true)
+    if (run.fallbackReason != null) put("fallback_reason", run.fallbackReason)
 }
 
 /**

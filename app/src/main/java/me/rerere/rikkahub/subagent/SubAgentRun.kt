@@ -32,6 +32,13 @@ data class SubAgentRun(
     val tokensIn: Long = 0,
     val tokensOut: Long = 0,
     val tripCount: Int = 0,
+    // Phase 30 (Orchestrator Mode Phase A) - records when the explicitly-requested
+    // model could not be used at run time (e.g. provider flipped to disabled between
+    // dispatch and generation) and the engine fell back to the assistant/global default.
+    // Surfaced in the run record so the user (and Phase D cost logic) can see it was not
+    // a silent substitution. modelId above still holds the originally-requested id.
+    val fallbackModelUsed: Boolean = false,
+    val fallbackReason: String? = null,
 )
 
 @Serializable
