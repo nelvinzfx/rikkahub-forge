@@ -100,6 +100,66 @@ class SubAgentRegistry {
         activeJobs.remove(id)
     }
 
+    /**
+     * Phase C — cancel every active run in the subtree rooted at [rootRunId]. Walks all
+     * runs where orchestratorRunId == rootRunId (direct children and propagated descendants).
+     * Also cancels the root run itself if it is still active. Returns the count cancelled.
+     */
+    fun cancelSubtree(rootRunId: String): Int {
+        var count = 0
+        val toCancel = _runs.value.values
+            .filter {
+                (it.orchestratorRunId == rootRunId || it.id == rootRunId) &&
+                    (it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING)
+            }
+            .map { it.id }
+        for (runId in toCancel) {
+            if (requestCancel(runId)) {
+                count++
+            }
+        }
+        return count
+    }
+
+    /**
+     * Phase D — return all runs in the subtree rooted at [rootRunId]: the root itself
+     * plus every descendant (runs whose orchestratorRunId matches).
+     */
+    fun getSubtree(rootRunId: String): List<SubAgentRun> =
+        _runs.value.values.filter { it.id == rootRunId || it.orchestratorRunId == rootRunId }
+
+    /**
+     * Phase D — sum tokens across an entire subtree (root + descendants).
+     * Returns (totalIn, totalOut).
+     */
+    fun subtreeTokenSum(rootRunId: String): Pair<Long, Long> {
+        val runs = getSubtree(rootRunId)
+        val totalIn = runs.sumOf { it.tokensIn }
+        val totalOut = runs.sumOf { it.tokensOut }
+        return totalIn to totalOut
+    }
+
+    // --- Phase D: per-assistant rate limiting (sliding 60s window) ---
+    private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
+
+    /**
+     * Check + record a dispatch under the assistant's rate-limit window.
+     * Returns true if the dispatch is allowed, false if the rate limit is exceeded.
+     * [limit] = max dispatches per 60s. 0 = unlimited (always true).
+     */
+    fun checkAndRecordRateLimit(assistantId: String, limit: Int): Boolean {
+        if (limit <= 0) return true
+        val now = System.currentTimeMillis()
+        val cutoff = now - 60_000L
+        val list = dispatchTimestamps.computeIfAbsent(assistantId) { mutableListOf() }
+        synchronized(list) {
+            list.removeAll { it < cutoff }
+            if (list.size >= limit) return false
+            list.add(now)
+            return true
+        }
+    }
+
     private fun pruneIfNeeded(current: Map<String, SubAgentRun>): Map<String, SubAgentRun> {
         if (current.size < SubAgentDefaults.REGISTRY_LRU_CAP) return current
         // Evict the oldest TERMINAL run; never evict a running one. If every run is
@@ -110,5 +170,26 @@ class SubAgentRegistry {
             .sortedBy { it.finishedAtMs ?: it.startedAtMs }
         val toEvictId = terminalSorted.firstOrNull()?.id
         return if (toEvictId != null) current - toEvictId else current
+    }
+
+    companion object {
+        @Volatile
+        private var globalInstance: SubAgentRegistry? = null
+
+        internal fun onInstanceCreated(registry: SubAgentRegistry) {
+            globalInstance = registry
+        }
+
+        /**
+         * Cancel a sub-agent run via the global singleton instance. Used by the UI chip row
+         * which doesn't have direct access to the registry through DI in the composable tree.
+         */
+        fun cancelViaGlobalInstance(runId: String): Boolean {
+            return globalInstance?.requestCancel(runId) ?: false
+        }
+    }
+
+    init {
+        onInstanceCreated(this)
     }
 }

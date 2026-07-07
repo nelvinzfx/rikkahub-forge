@@ -1804,4 +1804,28 @@
   <string name="codex_response_failed">The Codex response failed.</string>
   <string name="codex_monthly_limit">Monthly limit</string>
   <string name="codex_oauth_ports_unavailable">Codex sign-in cannot start because the local callback ports are in use. Close the app using them and try again.</string>
+
+  <!-- Phase 30 (Orchestrator Mode Phase A) - Sub-agent settings UI -->
+  <string name="assistant_page_sub_agent_settings_title">Sub-agent settings</string>
+  <string name="assistant_page_sub_agent_model">Default worker model</string>
+  <string name="assistant_page_sub_agent_model_desc">Model used by worker sub-agents. Inherit = use this assistant chat model.</string>
+  <string name="assistant_page_sub_agent_model_inherit">Inherit from assistant</string>
+  <string name="assistant_page_sub_agent_prompt">Default worker system prompt</string>
+  <string name="assistant_page_sub_agent_prompt_desc">Custom instructions for workers. Empty = built-in focused sub-agent prompt.</string>
+  <string name="assistant_page_sub_agent_include_memory">Workers inherit memory</string>
+  <string name="assistant_page_sub_agent_include_memory_desc">Inject the assistant memory into worker sub-agents by default.</string>
+  <string name="assistant_page_sub_agent_include_soul">Workers inherit soul</string>
+  <string name="assistant_page_sub_agent_include_soul_desc">Inject the assistant system prompt (persona/soul) into workers by default.</string>
+  <string name="assistant_page_sub_agent_include_chats">Workers inherit recent chats</string>
+  <string name="assistant_page_sub_agent_include_chats_desc">Inject recent chats reference into workers by default.</string>
+  <string name="assistant_page_orchestrator_mode">Orchestrator Mode</string>
+  <string name="assistant_page_orchestrator_mode_desc">Let this assistant split tasks into parallel workers automatically. When on, the agent decides per-task whether to decompose or answer inline.</string>
+  <string name="assistant_page_orchestrator_max_depth">Max sub-agent depth</string>
+  <string name="assistant_page_orchestrator_max_depth_desc">0 = no sub-agents, 1 = one level (default), 2 = allow grandchildren (use with caution).</string>
+  <string name="assistant_page_orchestrator_auto_approve">Auto-approve batch workers</string>
+  <string name="assistant_page_orchestrator_auto_approve_desc">One approval covers the whole batch dispatch. HARDLINE still applies to individual tool calls inside workers.</string>
+  <string name="assistant_page_orchestrator_subtree_cap">Subtree token cap</string>
+  <string name="assistant_page_orchestrator_subtree_cap_desc">Max total tokens (in+out) across the entire subtree. 0 = unlimited. At 80% a warning fires; at 100% remaining workers are cancelled.</string>
+  <string name="assistant_page_orchestrator_rate_limit">Dispatch rate limit/min</string>
+  <string name="assistant_page_orchestrator_rate_limit_desc">Max sub-agent dispatches per 60s sliding window. 0 = unlimited.</string>
 </resources>

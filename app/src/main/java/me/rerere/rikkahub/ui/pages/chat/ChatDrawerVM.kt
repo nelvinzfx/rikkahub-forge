@@ -28,10 +28,10 @@ class ChatDrawerVM(
 
     val conversations: Flow<PagingData<ConversationListItem>> =
         settingsStore.settingsFlow
-            .map { it.assistantId }
+            .map { it.assistantId to it.displaySetting.hideSubAgentChats }
             .distinctUntilChanged()
-            .flatMapLatest { assistantId ->
-                conversationRepo.getConversationsOfAssistantPaging(assistantId)
+            .flatMapLatest { (assistantId, hideSubAgents) ->
+                conversationRepo.getConversationsOfAssistantPaging(assistantId, hideSubAgents)
             }
             .map { pagingData ->
                 pagingData

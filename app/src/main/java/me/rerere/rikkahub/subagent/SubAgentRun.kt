@@ -32,6 +32,19 @@ data class SubAgentRun(
     val tokensIn: Long = 0,
     val tokensOut: Long = 0,
     val tripCount: Int = 0,
+    // Phase 30 (Orchestrator Mode Phase A) - records when the explicitly-requested
+    // model could not be used at run time (e.g. provider flipped to disabled between
+    // dispatch and generation) and the engine fell back to the assistant/global default.
+    // Surfaced in the run record so the user (and Phase D cost logic) can see it was not
+    // a silent substitution. modelId above still holds the originally-requested id.
+    val fallbackModelUsed: Boolean = false,
+    val fallbackReason: String? = null,
+    // Phase 30 (Orchestrator Mode Phase C) — subtree identity + depth.
+    val depth: Int = 0,
+    val orchestratorRunId: String? = null, // null = top-level worker; non-null = descendant
+    // Phase D — subtree cost-guard signals.
+    val subtreeTokenWarning: Boolean = false, // set when subtree hits 80% of cap
+    val subtreeTokenCancelled: Boolean = false, // set when subtree hits 100% of cap
 )
 
 @Serializable
@@ -45,9 +58,14 @@ enum class SubAgentStatus {
 }
 
 object SubAgentDefaults {
-    const val DEFAULT_TIMEOUT_SECONDS = 300
+    // Phase E tuning: 300s was too short for research workers that do multiple web
+    // searches (each ~30-60s with API latency). 600s (10 min) gives enough headroom
+    // for 4-6 searches + synthesis without premature timeout.
+    const val DEFAULT_TIMEOUT_SECONDS = 600
     const val MAX_TIMEOUT_SECONDS = 1800
-    const val DEFAULT_MAX_TRIPS = 12
+    // Phase E tuning: 12 trips was too tight for multi-step research. Each web search
+    // + result read = 2 trips, so 12 = only 6 search cycles. 20 allows 10 cycles.
+    const val DEFAULT_MAX_TRIPS = 20
     const val MAX_MAX_TRIPS = 30
     const val MAX_LABEL_LENGTH = 60
     const val GLOBAL_CONCURRENCY_CAP = 16
@@ -81,6 +99,11 @@ data class SubAgentRequest(
     val timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
     val maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
     val label: String? = null,
+    // Phase 30 (Orchestrator Mode Phase B) — per-dispatch inclusion overrides. Null = use
+    // the parent assistant's default (subAgentDefaultInclude*). Boolean = override.
+    val includeMemory: Boolean? = null,
+    val includeSoul: Boolean? = null,
+    val includeRecentChats: Boolean? = null,
 )
 
 object SubAgentRequestValidator {

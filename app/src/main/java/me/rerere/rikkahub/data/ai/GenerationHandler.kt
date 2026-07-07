@@ -38,6 +38,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
@@ -270,6 +271,25 @@ internal object LoopGuard {
     }
 }
 
+/**
+ * Phase 30 (Orchestrator Mode Phase C) — preamble injected into the system prompt when
+ * the assistant has orchestratorMode = true and the conversation is the orchestrator's
+ * own (not a worker). Short, dense, prescriptive. See docs/orchestrator-mode.md §5.2.
+ */
+internal const val ORCHESTRATOR_PREAMBLE = """
+You are in Orchestrator Mode. You can decompose tasks into parallel worker sub-agents, or do them yourself.
+
+DECIDE FIRST: If a task is one lookup, one edit, or something you can answer in a few tool calls — do it inline. Workers cost tokens and coordination; don't spawn them for work you can finish faster alone. Split when there are genuinely independent threads (parallel research, multi-file changes, multi-target probing).
+
+WRITE GOOD WORKER TASKS: Workers don't see this conversation. Each task must be self-contained — include any context the worker needs to act without asking you back. One clear deliverable per worker. Bounded scope: "search X, return Y" not "explore the codebase".
+
+RIGHT GRANULARITY: Too fine = overhead burns more tokens than it saves. Too coarse = no parallelism, might as well do it yourself. Aim for 2-6 workers, each doing a chunk that would take you 3-10 tool calls alone.
+
+HANDLE FAILURE: If a worker times out or fails, use what you got. Retry only if the result is essential and the failure looks transient. Don't block the whole turn on one dead worker.
+
+SYNTHESISE: Your final reply is not a paste of worker outputs. Read their summaries, extract what matters, write one coherent answer to the user. The user sees you, not your workers.
+"""
+
 class GenerationHandler(
     private val context: Context,
     private val providerManager: ProviderManager,
@@ -305,6 +325,11 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        // Phase 30 (Orchestrator Mode Phase B) — sub-agent prompt/memory gating.
+        suppressMemory: Boolean = false,
+        suppressAssistantPrompt: Boolean = false,
+        suppressRecentChats: Boolean = false,
+        enforceSubAgentPromptRules: Boolean = false,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -441,6 +466,10 @@ class GenerationHandler(
                         conversationModeInjectionIds = conversationModeInjectionIds,
                         conversationLorebookIds = conversationLorebookIds,
                         workspaceCwd = workspaceCwd,
+                        suppressMemory = suppressMemory,
+                        suppressAssistantPrompt = suppressAssistantPrompt,
+                        suppressRecentChats = suppressRecentChats,
+                        enforceSubAgentPromptRules = enforceSubAgentPromptRules,
                     )
                 } catch (t: Throwable) {
                     // CancellationException is honoured verbatim — stopGeneration has its
@@ -953,20 +982,53 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
+        suppressMemory: Boolean = false,
+        suppressAssistantPrompt: Boolean = false,
+        suppressRecentChats: Boolean = false,
+        enforceSubAgentPromptRules: Boolean = false,
     ) {
         val internalMessages = buildList {
             // Conversation-level system prompt override (upstream): when the assistant
             // allows it and the conversation supplies one, it replaces the assistant prompt.
+            //
+            // Phase B (Orchestrator Mode): sub-agent conversations (enforceSubAgentPromptRules)
+            // bypass the allowConversationSystemPrompt gate so the worker-specific prompt is
+            // always used. When suppressAssistantPrompt is true (include_soul=false), only
+            // the worker prompt is kept. When false (include_soul=true), soul + worker prompt
+            // are concatenated so the worker gets BOTH.
             val effectiveSystemPrompt =
-                if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
+                if (enforceSubAgentPromptRules) {
+                    when {
+                        !conversationSystemPrompt.isNullOrBlank() && suppressAssistantPrompt -> {
+                            conversationSystemPrompt
+                        }
+                        !conversationSystemPrompt.isNullOrBlank() -> {
+                            listOfNotNull(
+                                assistant.systemPrompt.takeIf { it.isNotBlank() },
+                                conversationSystemPrompt,
+                            ).joinToString("\n\n")
+                        }
+                        suppressAssistantPrompt -> ""
+                        else -> assistant.systemPrompt
+                    }
+                } else if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
                     conversationSystemPrompt
                 } else {
                     assistant.systemPrompt
                 }
-            val memoryPrompt = if (assistant.enableMemory) {
+            // Phase C/D — inject orchestrator preamble when orchestrator mode is ON and this
+            // is NOT a worker conversation. Workers never get the preamble. The model list is
+            // NOT injected here — the LLM calls subagent_list_models to discover models on
+            // demand, keeping the system prompt lean.
+            val finalSystemPrompt = if (assistant.orchestratorMode && !enforceSubAgentPromptRules) {
+                ORCHESTRATOR_PREAMBLE + (effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: "")
+            } else {
+                effectiveSystemPrompt
+            }
+            val memoryPrompt = if (assistant.enableMemory && !suppressMemory) {
                 buildMemoryPrompt(memories = memories)
             } else ""
-            val recentChatsPrompt = if (assistant.enableRecentChatsReference) {
+            val recentChatsPrompt = if (assistant.enableRecentChatsReference && !suppressRecentChats) {
                 buildRecentChatsPrompt(assistant, conversationRepo)
             } else ""
             val toolPrompts = tools.map { tool -> tool.systemPrompt(model, messages) }
@@ -974,7 +1036,7 @@ class GenerationHandler(
             // addendum) so prompt caching survives memory injection: the stable part is the
             // cached prefix, the volatile part sits after it. See SystemPromptBuilder.
             val (stableSystem, volatileSystem) = systemPromptBuilder.buildSections(
-                assistantPrompt = effectiveSystemPrompt,
+                assistantPrompt = finalSystemPrompt,
                 memoryPrompt = memoryPrompt,
                 recentChatsPrompt = recentChatsPrompt,
                 toolPrompts = toolPrompts,

@@ -24,10 +24,21 @@ data class ConversationEntity(
     val isPinned: Boolean,
     @ColumnInfo("custom_system_prompt", defaultValue = "")
     val customSystemPrompt: String = "",
+    @ColumnInfo("chat_model_id", defaultValue = "")
+    val chatModelId: String = "",
     @ColumnInfo("mode_injection_ids", defaultValue = "[]")
     val modeInjectionIds: String = "[]",
     @ColumnInfo("lorebook_ids", defaultValue = "[]")
     val lorebookIds: String = "[]",
     @ColumnInfo("workspace_cwd", defaultValue = "")
     val workspaceCwd: String = "",
+    // Phase 30 (Orchestrator Mode Phase B) — sub-agent prompt/memory gating.
+    @ColumnInfo("suppress_memory", defaultValue = "0")
+    val suppressMemory: Boolean = false,
+    @ColumnInfo("suppress_assistant_prompt", defaultValue = "0")
+    val suppressAssistantPrompt: Boolean = false,
+    @ColumnInfo("suppress_recent_chats", defaultValue = "0")
+    val suppressRecentChats: Boolean = false,
+    @ColumnInfo("enforce_subagent_rules", defaultValue = "0")
+    val enforceSubAgentPromptRules: Boolean = false,
 )

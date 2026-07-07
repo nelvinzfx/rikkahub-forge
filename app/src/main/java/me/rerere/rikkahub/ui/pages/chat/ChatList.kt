@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -50,6 +51,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.surfaceColorAtElevation
@@ -116,6 +118,7 @@ fun ChatList(
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
+    subAgentRuns: List<me.rerere.rikkahub.subagent.SubAgentRun> = emptyList(),
     previewMode: Boolean,
     settings: Settings,
     hazeState: HazeState,
@@ -159,6 +162,7 @@ fun ChatList(
                 state = state,
                 loading = loading,
                 processingStatus = processingStatus,
+                subAgentRuns = subAgentRuns,
                 settings = settings,
                 hazeState = hazeState,
                 errors = errors,
@@ -189,6 +193,7 @@ private fun ChatListNormal(
     state: LazyListState,
     loading: Boolean,
     processingStatus: String? = null,
+    subAgentRuns: List<me.rerere.rikkahub.subagent.SubAgentRun> = emptyList(),
     settings: Settings,
     hazeState: HazeState,
     errors: List<ChatError>,
@@ -374,6 +379,16 @@ private fun ChatListNormal(
                     ConversationSystemPromptButton(
                         customSystemPrompt = conversation.customSystemPrompt,
                         onSystemPromptChange = onConversationSystemPromptChange,
+                    )
+                }
+            }
+
+            if (subAgentRuns.isNotEmpty()) {
+                item(key = "SubAgentChipRow") {
+                    SubAgentChipRow(
+                        runs = subAgentRuns,
+                        modelById = modelById,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
             }
@@ -846,6 +861,166 @@ private fun BoxScope.MessageJumper(
                     modifier = Modifier
                         .padding(4.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Phase E — chip row showing live sub-agent worker status. Each chip shows:
+ * - status icon (spinner=running, check=succeeded, x=failed/cancelled/timed_out)
+ * - label (truncated)
+ * - depth prefix (↳ for depth>0 descendants)
+ * - cancel button (X) for running/pending runs
+ * Tapping a terminal chip expands to show tokens + result preview.
+ */
+@Composable
+private fun SubAgentChipRow(
+    runs: List<me.rerere.rikkahub.subagent.SubAgentRun>,
+    modelById: Map<kotlin.uuid.Uuid, me.rerere.ai.provider.Model>,
+    modifier: Modifier = Modifier,
+) {
+    var expandedRunId by remember { mutableStateOf<String?>(null) }
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        runs.forEach { run ->
+            val isTerminal = run.status != me.rerere.rikkahub.subagent.SubAgentStatus.RUNNING &&
+                run.status != me.rerere.rikkahub.subagent.SubAgentStatus.PENDING
+            val isExpanded = expandedRunId == run.id
+            val depthPrefix = if (run.depth > 0) "↳".repeat(run.depth) + " " else ""
+            val label = run.label.take(24)
+            // Resolve model display name for this worker.
+            val modelName = run.modelId
+                ?.let { runCatching { kotlin.uuid.Uuid.parse(it) }.getOrNull() }
+                ?.let { modelById[it] }
+                ?.let { it.displayName.ifBlank { it.modelId } }
+                ?: "inherit"
+
+            // Status icon + color
+            val statusIcon: @Composable (() -> Unit) = when (run.status) {
+                me.rerere.rikkahub.subagent.SubAgentStatus.PENDING,
+                me.rerere.rikkahub.subagent.SubAgentStatus.RUNNING -> {
+                    {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                }
+                me.rerere.rikkahub.subagent.SubAgentStatus.SUCCEEDED -> {
+                    { Icon(HugeIcons.Tick01, null, modifier = Modifier.size(14.dp)) }
+                }
+                else -> {
+                    { Icon(HugeIcons.Cancel01, null, modifier = Modifier.size(14.dp)) }
+                }
+            }
+            val chipColor = when (run.status) {
+                me.rerere.rikkahub.subagent.SubAgentStatus.SUCCEEDED ->
+                    MaterialTheme.colorScheme.secondaryContainer
+                me.rerere.rikkahub.subagent.SubAgentStatus.FAILED,
+                me.rerere.rikkahub.subagent.SubAgentStatus.TIMED_OUT,
+                me.rerere.rikkahub.subagent.SubAgentStatus.CANCELLED ->
+                    MaterialTheme.colorScheme.errorContainer
+                else -> MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp)
+            }
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = chipColor,
+                modifier = Modifier.clickable {
+                    expandedRunId = if (isExpanded) null else run.id
+                },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    statusIcon()
+                    Text(
+                        text = depthPrefix + label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = modelName.take(12),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (run.subtreeTokenWarning) {
+                        Text(
+                            text = "⚠",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                    if (!isTerminal) {
+                        Icon(
+                            imageVector = HugeIcons.Cancel01,
+                            contentDescription = "Cancel sub-agent",
+                            modifier = Modifier
+                                .size(14.dp)
+                                .clickable {
+                                    // Cancel via registry — the run's parent registry handles it.
+                                    // We use a simple approach: the cancel is handled by the
+                                    // SubAgentRegistry which is a singleton. We access it via
+                                    // the run's id through a static call.
+                                    me.rerere.rikkahub.subagent.SubAgentRegistry.cancelViaGlobalInstance(run.id)
+                                },
+                        )
+                    }
+                }
+            }
+
+            // Expanded detail card for terminal runs
+            if (isExpanded && isTerminal) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "Status: ${run.status.name}  |  Model: $modelName  |  Tokens: ${run.tokensIn} in / ${run.tokensOut} out  |  Trips: ${run.tripCount}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (run.fallbackModelUsed) {
+                            Text(
+                                text = "⚠ Fallback model used: ${run.fallbackReason ?: "unknown"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (run.subtreeTokenCancelled) {
+                            Text(
+                                text = "⚠ Subtree token cap exceeded — remaining workers cancelled",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (!run.result.isNullOrBlank()) {
+                            Text(
+                                text = run.result!!.take(200) + if (run.result!!.length > 200) "…" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        if (!run.error.isNullOrBlank()) {
+                            Text(
+                                text = "Error: ${run.error!!.take(150)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

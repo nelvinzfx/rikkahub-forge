@@ -764,8 +764,15 @@ class ChatService(
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId)
             ?: settings.getCurrentAssistant()
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId)
-            ?: throw IllegalStateException(
+        // Phase 30 (Orchestrator Mode Phase A) - per-conversation model override.
+        // A worker sub-agent conversation has chatModelId set by SubAgentEngine when the
+        // dispatch carried an explicit model_id (or the assistant's subAgentModelId default).
+        // findModelById(uuid, fallback) resolves uuid first and only falls through to fallback
+        // when uuid is null or doesn't resolve - exactly the conv -> assistant -> global order.
+        val model = settings.findModelById(
+            initialConversation.chatModelId,
+            fallback = assistant.chatModelId ?: settings.chatModelId,
+        ) ?: throw IllegalStateException(
                 "No chat model selected. Pick one in Settings → Default models, or send /model in Telegram."
             )
         // Defence against an upstream-Settings bug where disabling all providers can leave
@@ -871,6 +878,10 @@ class ChatService(
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
                 workspaceCwd = conversation.workspaceCwd,
+                suppressMemory = conversation.suppressMemory,
+                suppressAssistantPrompt = conversation.suppressAssistantPrompt,
+                suppressRecentChats = conversation.suppressRecentChats,
+                enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
                 memories = if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {

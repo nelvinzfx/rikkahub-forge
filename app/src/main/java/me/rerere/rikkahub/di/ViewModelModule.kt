@@ -42,6 +42,7 @@ val viewModelModule = module {
             updateChecker = get(),
             filesManager = get(),
             favoriteRepository = get(),
+            subAgentRegistry = get(),
         )
     }
     viewModelOf(::ChatDrawerVM)

@@ -25,6 +25,22 @@ data class Conversation(
     @Serializable(with = InstantSerializer::class)
     val updateAt: Instant = Instant.now(),
     val customSystemPrompt: String? = null,
+    // Phase 30 (Orchestrator Mode Phase A) — per-conversation chat model override.
+    // Null = inherit from the conversation's assistant (existing behaviour). Set by the
+    // SubAgentEngine when a worker is dispatched with an explicit model_id, so the worker
+    // runs on that model instead of the parent assistant's chatModelId. Resolution order
+    // in ChatService.handleMessageComplete: conversation.chatModelId → assistant.chatModelId → settings.chatModelId.
+    val chatModelId: Uuid? = null,
+    // Phase 30 (Orchestrator Mode Phase B) — per-conversation suppress flags. Set by
+    // SubAgentEngine when dispatching workers, based on the include_memory / include_soul /
+    // include_recent_chats args (or assistant defaults). If false (default) the
+    // corresponding system-prompt section is built normally. enforceSubAgentPromptRules
+    // marks a conversation as belonging to a sub-agent so the worker-specific prompt
+    // (customSystemPrompt) bypasses the assistant-level allowConversationSystemPrompt gate.
+    val suppressMemory: Boolean = false,
+    val suppressAssistantPrompt: Boolean = false,
+    val suppressRecentChats: Boolean = false,
+    val enforceSubAgentPromptRules: Boolean = false,
     val modeInjectionIds: Set<Uuid> = emptySet(),
     val lorebookIds: Set<Uuid> = emptySet(),
     // Absolute path inside the workspace rootfs

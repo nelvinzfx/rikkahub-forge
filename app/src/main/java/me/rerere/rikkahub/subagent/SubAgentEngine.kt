@@ -15,6 +15,9 @@ import me.rerere.rikkahub.data.agentrun.AgentRunRepository
 import me.rerere.rikkahub.data.agentrun.AgentRunStatus
 import me.rerere.rikkahub.data.ai.tools.HeadlessConversations
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.datastore.getAssistantById
+import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
@@ -96,14 +99,39 @@ class SubAgentEngine(
         parentChatId: String?,
         request: SubAgentRequest,
     ): DispatchResult = withContext(Dispatchers.Default) {
-        // Recursion guard: if the caller is in a headless context already (cron job /
-        // workflow / another sub-agent), reject. v1 does not allow nested sub-agents.
+        // Phase C — depth-cap recursion guard. Replaces the old "reject if headless" guard.
+        // A sub-agent CAN now dispatch children, up to the assistant's subAgentMaxDepth.
+        // Depth 0 = top-level (from a normal conversation). Depth 1+ = from a sub-agent.
+        val (childDepth, childOrchestratorId) = SubAgentConversationTracker.childDepth(parentChatId)
+        val parentAssistant = settingsStore.settingsFlow.first().getAssistantById(
+            runCatching { Uuid.parse(parentAssistantId) }.getOrNull() ?: return@withContext DispatchResult.Reject(
+                "invalid_assistant_id", "parent assistant id '$parentAssistantId' is not a valid UUID"
+            )
+        )
+        val maxDepth = parentAssistant?.subAgentMaxDepth ?: 1
+        if (childDepth > maxDepth) {
+            return@withContext DispatchResult.Reject(
+                "depth_cap_reached",
+                "sub-agent depth $childDepth exceeds maxDepth $maxDepth for this assistant"
+            )
+        }
+        // Phase D — rate-limit check (sliding 60s window per assistant).
+        val rateLimit = parentAssistant?.subAgentDispatchRateLimit ?: 0
+        if (rateLimit > 0 && !registry.checkAndRecordRateLimit(parentAssistantId, rateLimit)) {
+            return@withContext DispatchResult.Reject(
+                "rate_limited",
+                "dispatch rate limit of $rateLimit/minute for this assistant is exceeded"
+            )
+        }
+        // Still reject dispatch from non-sub-agent headless contexts (cron, workflow,
+        // external automation) — those aren't orchestrator contexts and shouldn't spawn.
         if (parentChatId != null) {
             val parentUuid = runCatching { Uuid.parse(parentChatId) }.getOrNull()
-            if (parentUuid != null && HeadlessConversations.isHeadless(parentUuid)) {
+            if (parentUuid != null && HeadlessConversations.isHeadless(parentUuid)
+                && SubAgentConversationTracker.lookup(parentChatId) == null) {
                 return@withContext DispatchResult.Reject(
                     "no_recursion",
-                    "sub-agent dispatch is not allowed from inside another headless run"
+                    "sub-agent dispatch is not allowed from inside a headless run (cron / workflow / external automation)"
                 )
             }
         }
@@ -128,6 +156,40 @@ class SubAgentEngine(
             )
         }
 
+        // Phase 30 (Orchestrator Mode Phase A) - strict validation of an explicitly-
+        // requested model_id (decision #4). The LLM per-call arg must resolve to a real
+        // model on an ENABLED provider; a bad/disabled id is rejected with a clear error
+        // so the agent can pick a different model instead of silently inheriting. The
+        // assistant-level subAgentModelId default is intentionally NOT strict-validated
+        // here - if that one is stale/disabled the engine falls back at run time instead
+        // of rejecting the whole dispatch.
+        val settings = settingsStore.settingsFlow.first()
+        request.modelId?.let { mid ->
+            val parsed = runCatching { Uuid.parse(mid) }.getOrNull()
+                ?: return@withContext DispatchResult.Reject(
+                    "invalid_model_id",
+                    "model_id '$mid' is not a valid UUID"
+                )
+            val model = settings.findModelById(parsed)
+                ?: return@withContext DispatchResult.Reject(
+                    "invalid_model_id",
+                    "no model with id '$mid' is configured"
+                )
+            val provider = model.findProvider(settings.providers)
+            if (provider == null) {
+                return@withContext DispatchResult.Reject(
+                    "invalid_model_id",
+                    "model '$mid' has no configured provider"
+                )
+            }
+            if (!provider.enabled) {
+                return@withContext DispatchResult.Reject(
+                    "model_provider_disabled",
+                    "provider '${provider.name}' (for model '$mid') is disabled - pick a different model or re-enable it"
+                )
+            }
+        }
+
         val runId = Uuid.random().toString()
         val now = System.currentTimeMillis()
         val initialRun = SubAgentRun(
@@ -143,6 +205,8 @@ class SubAgentEngine(
             maxTrips = cleaned.maxTrips,
             status = SubAgentStatus.PENDING,
             startedAtMs = now,
+            depth = childDepth,
+            orchestratorRunId = childOrchestratorId,
         )
         registry.addPending(initialRun)
 
@@ -164,7 +228,7 @@ class SubAgentEngine(
         ledgerIds[runId] = ledgerId
 
         val executionJob = appScope.launch(Dispatchers.IO) {
-            executeRun(runId, parentAssistantId, parentChatId, cleaned)
+            executeRun(runId, parentAssistantId, parentChatId, cleaned, childDepth, childOrchestratorId)
         }
         registry.setJob(runId, executionJob)
 
@@ -198,6 +262,8 @@ class SubAgentEngine(
         parentAssistantId: String,
         parentChatId: String?,
         request: SubAgentRequest,
+        childDepth: Int,
+        childOrchestratorId: String?,
     ) {
         registry.update(runId) { it.copy(status = SubAgentStatus.RUNNING) }
         ledgerIds[runId]?.let { agentRunRepo.setStatus(it, AgentRunStatus.running) }
@@ -207,14 +273,58 @@ class SubAgentEngine(
                 markTerminal(runId, SubAgentStatus.FAILED, "bad parent assistant id")
                 return
             }
+        // Phase 30 (Orchestrator Mode Phase A) - resolve the worker's model + system prompt.
+        // Resolution order (first non-null wins):
+        //   model:    request.modelId (LLM per-call) -> assistant.subAgentModelId -> null (inherit)
+        //   prompt:   request.systemPrompt (LLM per-call) -> assistant.subAgentSystemPrompt -> null
+        // Null model = inherit: conversation.chatModelId stays null and ChatService falls
+        // back to assistant.chatModelId / global default. request.modelId was already strict-
+        // validated in dispatch(); here we only do the run-time fallback for the assistant
+        // default (subAgentModelId), which was NOT strict-validated - if its provider got
+        // disabled between dispatch and now, drop to inherit and record the fallback.
+        val settings = settingsStore.settingsFlow.first()
+        val parentAssistant = settings.getAssistantById(parentAsstUuid)
+        var chosenModelId: Uuid? = request.modelId
+            ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            ?: parentAssistant?.subAgentModelId
+        var fallbackUsed = false
+        var fallbackReason: String? = null
+        if (chosenModelId != null) {
+            val chosen = settings.findModelById(chosenModelId)
+            val provider = chosen?.findProvider(settings.providers)
+            if (chosen == null || provider == null || !provider.enabled) {
+                fallbackUsed = true
+                fallbackReason = buildString {
+                    append("requested sub-agent model unavailable")
+                    if (provider != null && !provider.enabled) append(" (provider '${provider.name}' disabled)")
+                    append(" - falling back to assistant/global default")
+                }
+                chosenModelId = null
+            }
+        }
+        val workerSystemPrompt = (request.systemPrompt ?: parentAssistant?.subAgentSystemPrompt)
+            ?.takeIf { it.isNotBlank() }
+        // Phase B — resolve include_* args against assistant defaults. suppress = !(include).
+        val suppressMemory = !(request.includeMemory ?: parentAssistant?.subAgentDefaultIncludeMemory ?: true)
+        val suppressSoul = !(request.includeSoul ?: parentAssistant?.subAgentDefaultIncludeSoul ?: true)
+        val suppressChats = !(request.includeRecentChats ?: parentAssistant?.subAgentDefaultIncludeRecentChats ?: true)
         val conv = Conversation.ofId(
             id = Uuid.random(),
             assistantId = parentAsstUuid,
             newConversation = true,
-        ).copy(title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}")
+        ).copy(
+            title = "[Sub-agent] ${request.label?.take(40) ?: request.task.take(40)}",
+            chatModelId = chosenModelId,
+            customSystemPrompt = workerSystemPrompt,
+            suppressMemory = suppressMemory,
+            suppressAssistantPrompt = suppressSoul,
+            suppressRecentChats = suppressChats,
+            enforceSubAgentPromptRules = true,
+        )
         conversationRepo.insertConversation(conv)
         chatService.initializeConversation(conv.id)
         HeadlessConversations.mark(conv.id)
+        SubAgentConversationTracker.register(conv.id.toString(), runId, childDepth, childOrchestratorId)
         try {
             // Prepend a wrap-up instruction. Some models naturally write a summary paragraph
             // after their tool-call sequence; others stop after the last tool result and emit
@@ -247,12 +357,46 @@ class SubAgentEngine(
             // text parts from the last assistant message. This mirrors how the
             // CronJobWorker treats LLM-mode jobs.
             val finalText = harvestFinalText(conv.id)
+            // Phase 30 (Orchestrator Mode Phase A) - token telemetry. Sum prompt/
+            // completion tokens across the worker conversation's selected message branch so
+            // Phase D's subtree cap has real numbers. tripCount = assistant messages = LLM
+            // round-trips. Best-effort: a missing/empty conversation just yields zeros.
+            val (tokensIn, tokensOut, trips) = harvestUsage(conv.id)
             registry.update(runId) {
                 it.copy(
                     status = SubAgentStatus.SUCCEEDED,
                     result = finalText,
                     finishedAtMs = System.currentTimeMillis(),
+                    tokensIn = tokensIn,
+                    tokensOut = tokensOut,
+                    tripCount = trips,
+                    fallbackModelUsed = fallbackUsed,
+                    fallbackReason = fallbackReason,
                 )
+            }
+            // Phase D — subtree token cap enforcement. Only check for the root worker
+            // (orchestratorRunId == null); descendants are covered by their root's check.
+            // We also check for descendants whose root is still active so the cap fires
+            // regardless of which worker finishes first. The root id is either this run
+            // (if it IS the root) or childOrchestratorId.
+            val rootId = childOrchestratorId ?: runId
+            val subtreeCap = parentAssistant?.subAgentSubtreeTokenCap
+            if (subtreeCap != null && subtreeCap > 0) {
+                val (subIn, subOut) = registry.subtreeTokenSum(rootId)
+                val subTotal = subIn + subOut
+                if (subTotal >= subtreeCap) {
+                    // Cancel all remaining workers in the subtree.
+                    val cancelled = registry.cancelSubtree(rootId)
+                    if (cancelled > 0) {
+                        Log.w(TAG, "subtree token cap hit: $subTotal >= $subtreeCap, cancelled $cancelled remaining runs")
+                    }
+                    // Mark the root run with the cancelled flag.
+                    registry.update(rootId) { it.copy(subtreeTokenCancelled = true) }
+                } else if (subTotal >= subtreeCap * 0.8) {
+                    // 80% warning — surface on the root run.
+                    registry.update(rootId) { it.copy(subtreeTokenWarning = true) }
+                    Log.w(TAG, "subtree token warning: $subTotal >= ${subtreeCap * 0.8} (80% of $subtreeCap)")
+                }
             }
             ledgerIds.remove(runId)?.let {
                 agentRunRepo.markTerminal(it, AgentRunStatus.succeeded)
@@ -266,6 +410,7 @@ class SubAgentEngine(
             notifyParentIfBackground(parentChatId, registry.get(runId))
         } finally {
             HeadlessConversations.unmark(conv.id)
+            SubAgentConversationTracker.unregister(conv.id.toString())
             registry.clearJob(runId)
         }
     }
@@ -371,5 +516,38 @@ class SubAgentEngine(
                 .joinToString("\n") { it.text }
                 .trim()
         }.getOrDefault("")
+    }
+
+    /**
+     * Phase 30 (Orchestrator Mode Phase A) — best-effort token + trip telemetry.
+     *
+     * Walks the selected branch of the worker conversation, sums [me.rerere.ai.core.TokenUsage]
+     * across ALL messages (both user and assistant — providers report cumulative usage on the
+     * last assistant chunk, so summing only assistant messages double-counts; summing all is
+     * safe because user messages have usage == null), and counts assistant messages as trips.
+     *
+     * Returns (promptTokens, completionTokens, assistantMessageCount). Best-effort: a missing
+     * conversation or one with no usage data yields (0, 0, N) — the trip count is still useful.
+     */
+    private suspend fun harvestUsage(conversationId: Uuid): Triple<Long, Long, Int> {
+        return runCatching {
+            val conv = conversationRepo.getConversationById(conversationId) ?: return@runCatching Triple(0L, 0L, 0)
+            val selectedMessages = conv.messageNodes.mapNotNull { node ->
+                node.messages.getOrNull(node.selectIndex)
+            }
+            var promptTokens = 0L
+            var completionTokens = 0L
+            var trips = 0
+            for (msg in selectedMessages) {
+                msg.usage?.let { usage ->
+                    promptTokens += usage.promptTokens.toLong()
+                    completionTokens += usage.completionTokens.toLong()
+                }
+                if (msg.role.name.equals("assistant", ignoreCase = true)) {
+                    trips++
+                }
+            }
+            Triple(promptTokens, completionTokens, trips)
+        }.getOrDefault(Triple(0L, 0L, 0))
     }
 }

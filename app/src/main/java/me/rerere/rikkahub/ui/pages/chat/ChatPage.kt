@@ -284,6 +284,7 @@ private fun ChatPageContent(
     onClearAllErrors: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val subAgentRuns by vm.subAgentRuns.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
     val context = LocalContext.current
     val workspaceRepository: WorkspaceRepository = koinInject()
@@ -415,6 +416,7 @@ private fun ChatPageContent(
                 state = chatListState,
                 loading = loadingJob != null,
                 processingStatus = processingStatus,
+                subAgentRuns = subAgentRuns,
                 previewMode = previewMode,
                 settings = setting,
                 hazeState = hazeState,
