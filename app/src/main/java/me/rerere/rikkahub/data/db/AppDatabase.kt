@@ -58,7 +58,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         AgentRun::class,
         WorkspaceEntity::class,
     ],
-    version = 27,
+    version = 28,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -87,6 +87,9 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // 4 new boolean columns on ConversationEntity, all defaulted to 0 (false). Plain
         // auto-migration since each column carries a defaultValue in @ColumnInfo.
         AutoMigration(from = 26, to = 27),
+        // v28: Phase A fix — chatModelId column on ConversationEntity (was missing from
+        // initial Phase A, causing model override to be silently dropped on DB round-trip).
+        AutoMigration(from = 27, to = 28),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)

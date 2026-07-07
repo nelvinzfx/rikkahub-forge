@@ -69,9 +69,8 @@ fun subagentDispatchTool(
         the running sub-agent. For long-running work, set run_in_background=true and
         poll with subagent_get; otherwise foreground (default) blocks until terminal.
 
-        model_id: pass the UUID of a model from the AVAILABLE WORKER MODELS list in your
-        system prompt to use a specific model for the worker. Omit to inherit the current
-        model. The id must be a valid UUID from that list.
+        model_id: call subagent_list_models first to find available models across all
+        providers, then pass the UUID here. Omit to inherit the current model.
 
         timeout_seconds: default 600 (10 min). Set higher (up to 1800) for research tasks
         that need multiple web searches. max_trips: default 20. Set higher (up to 30) for
@@ -510,6 +509,65 @@ fun subagentSubtreeStatusTool(registry: SubAgentRegistry): Tool = Tool(
                 it.status != SubAgentStatus.RUNNING && it.status != SubAgentStatus.PENDING
             })
             put("runs", runArr)
+        }.toString()))
+    },
+)
+
+/**
+ * Phase D/E — model discovery tool. Lets the LLM search for models across ALL
+ * configured providers by name, returning the UUID it needs for subagent_dispatch.
+ * Avoids bloating the system prompt with a full model list every turn.
+ */
+fun subagentListModelsTool(
+    settingsStore: me.rerere.rikkahub.data.datastore.SettingsStore,
+): Tool = Tool(
+    name = "subagent_list_models",
+    description = """
+        Search for available chat models across ALL configured providers. Returns
+        matching models with their UUID, display name, modelId (API name), and
+        provider name. Use this to find the model_id UUID needed for subagent_dispatch
+        or subagent_dispatch_batch. Search is case-insensitive and matches both
+        display name and modelId. Omit the query to list ALL chat models on ALL
+        providers. Only enabled providers are included.
+    """.trimIndent(),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("query", buildJsonObject { put("type", "string") })
+            },
+            required = listOf(),
+        )
+    },
+    needsApproval = { false },
+    execute = { args ->
+        val params = args.jsonObject
+        val query = params["query"]?.jsonPrimitive?.contentOrNull?.lowercase()?.trim() ?: ""
+        val settings = settingsStore.settingsFlow.value
+        val results = buildJsonArray {
+            settings.providers.filter { it.enabled }.forEach { provider ->
+                provider.models.filter { it.type == me.rerere.ai.provider.ModelType.CHAT }
+                    .forEach { model ->
+                        val displayName = model.displayName.lowercase()
+                        val apiName = model.modelId.lowercase()
+                        if (query.isBlank() || displayName.contains(query) || apiName.contains(query)) {
+                            addJsonObject {
+                                put("id", model.id.toString())
+                                put("display_name", model.displayName.ifBlank { model.modelId })
+                                put("model_id", model.modelId)
+                                put("provider", provider.name)
+                                if (model.contextLength != null) put("context_length", model.contextLength)
+                            }
+                        }
+                    }
+            }
+        }
+        listOf(UIMessagePart.Text(buildJsonObject {
+            put("query", query)
+            put("count", results.size)
+            put("models", results)
+            if (results.isNotEmpty()) {
+                put("hint", "Pass one of the above 'id' values as model_id in subagent_dispatch.")
+            }
         }.toString()))
     },
 )

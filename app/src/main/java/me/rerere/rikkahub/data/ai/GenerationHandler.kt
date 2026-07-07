@@ -1018,19 +1018,10 @@ class GenerationHandler(
                 }
             // Phase C/D — inject orchestrator preamble when orchestrator mode is ON and this
             // is NOT a worker conversation. Workers never get the preamble. The model list is
-            // built from the CURRENT provider only (the provider of the orchestrator's chat
-            // model) so the LLM sees exactly which models it can dispatch workers to — no
-            // models from other providers the user may have configured.
+            // NOT injected here — the LLM calls subagent_list_models to discover models on
+            // demand, keeping the system prompt lean.
             val finalSystemPrompt = if (assistant.orchestratorMode && !enforceSubAgentPromptRules) {
-                val chatModels = provider.models.filter { it.type == ModelType.CHAT }
-                val modelSection = if (chatModels.isNotEmpty()) {
-                    val list = chatModels.joinToString("\n") { m ->
-                        val label = m.displayName.ifBlank { m.modelId.ifBlank { "(unnamed)" } }
-                        "- $label — id: ${m.id}"
-                    }
-                    "\n\nAVAILABLE WORKER MODELS (provider: ${provider.name}):\n$list\n\nPass one of the above ids in model_id when calling subagent_dispatch. Omit model_id to inherit the current model."
-                } else ""
-                ORCHESTRATOR_PREAMBLE + modelSection + (effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: "")
+                ORCHESTRATOR_PREAMBLE + (effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: "")
             } else {
                 effectiveSystemPrompt
             }
