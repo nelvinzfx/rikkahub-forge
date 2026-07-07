@@ -34,6 +34,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_20_21
 import me.rerere.rikkahub.data.db.migrations.Migration_21_22
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
+import me.rerere.rikkahub.data.db.migrations.Migration_26_27
 import me.rerere.rikkahub.data.db.migrations.Migration_27_28
 import me.rerere.rikkahub.data.db.migrations.Migration_8_9
 import me.rerere.rikkahub.utils.JsonInstant
@@ -84,13 +85,9 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // v26: the 2.3.1 merge brings upstream's workspaces table (WorkspaceEntity). Existing
         // fork users never had it, so Room auto-creates the table on this step.
         AutoMigration(from = 25, to = 26),
-        // v27: Phase 30 (Orchestrator Mode Phase B) — sub-agent prompt/memory gating.
-        // 4 new boolean columns on ConversationEntity, all defaulted to 0 (false). Plain
-        // auto-migration since each column carries a defaultValue in @ColumnInfo.
-        AutoMigration(from = 26, to = 27),
-        // v28: Phase A fix — chatModelId column on ConversationEntity. Manual migration
-        // (not AutoMigration) because schema 27.json was never generated (no local build
-        // at v27). See Migration_27_28 for details.
+        // v27 + v28: manual migrations (see DataSourceModule). AutoMigration needs schema
+        // 27.json which was never generated (no local build at v27), so both v26→v27 and
+        // v27→v28 are manual. See Migration_26_27 and Migration_27_28.
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
