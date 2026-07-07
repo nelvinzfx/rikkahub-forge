@@ -73,6 +73,10 @@ fun subagentDispatchTool(
         system prompt to use a specific model for the worker. Omit to inherit the current
         model. The id must be a valid UUID from that list.
 
+        timeout_seconds: default 600 (10 min). Set higher (up to 1800) for research tasks
+        that need multiple web searches. max_trips: default 20. Set higher (up to 30) for
+        multi-step work.
+
         Concurrency caps: each assistant has its own (default 3, configurable 1-8) and
         there's a global cap of 16 across all assistants. Over-cap dispatches fail with
         a clear error — back off and retry, or wait for a slot.

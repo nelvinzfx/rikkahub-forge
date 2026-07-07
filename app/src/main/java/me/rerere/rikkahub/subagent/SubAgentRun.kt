@@ -58,9 +58,14 @@ enum class SubAgentStatus {
 }
 
 object SubAgentDefaults {
-    const val DEFAULT_TIMEOUT_SECONDS = 300
+    // Phase E tuning: 300s was too short for research workers that do multiple web
+    // searches (each ~30-60s with API latency). 600s (10 min) gives enough headroom
+    // for 4-6 searches + synthesis without premature timeout.
+    const val DEFAULT_TIMEOUT_SECONDS = 600
     const val MAX_TIMEOUT_SECONDS = 1800
-    const val DEFAULT_MAX_TRIPS = 12
+    // Phase E tuning: 12 trips was too tight for multi-step research. Each web search
+    // + result read = 2 trips, so 12 = only 6 search cycles. 20 allows 10 cycles.
+    const val DEFAULT_MAX_TRIPS = 20
     const val MAX_MAX_TRIPS = 30
     const val MAX_LABEL_LENGTH = 60
     const val GLOBAL_CONCURRENCY_CAP = 16
