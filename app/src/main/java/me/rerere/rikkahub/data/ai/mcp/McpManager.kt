@@ -15,6 +15,7 @@ import io.modelcontextprotocol.kotlin.sdk.client.StreamableHttpClientTransport
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
 import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
+import me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
@@ -48,6 +49,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.io.encoding.Base64
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
 
@@ -181,7 +183,7 @@ class McpManager(
                     arguments = args,
                 ),
             ),
-            options = RequestOptions(timeout = 120.seconds),
+            options = RequestOptions(timeout = ToolRuntimeLimits.turnBudgetMs.milliseconds),
         )
         return result.content.map {
             when(it) {
