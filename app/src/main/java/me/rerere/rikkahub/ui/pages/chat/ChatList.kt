@@ -387,6 +387,7 @@ private fun ChatListNormal(
                 item(key = "SubAgentChipRow") {
                     SubAgentChipRow(
                         runs = subAgentRuns,
+                        modelById = modelById,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
@@ -876,6 +877,7 @@ private fun BoxScope.MessageJumper(
 @Composable
 private fun SubAgentChipRow(
     runs: List<me.rerere.rikkahub.subagent.SubAgentRun>,
+    modelById: Map<kotlin.uuid.Uuid, me.rerere.ai.provider.Model>,
     modifier: Modifier = Modifier,
 ) {
     var expandedRunId by remember { mutableStateOf<String?>(null) }
@@ -890,6 +892,12 @@ private fun SubAgentChipRow(
             val isExpanded = expandedRunId == run.id
             val depthPrefix = if (run.depth > 0) "↳".repeat(run.depth) + " " else ""
             val label = run.label.take(24)
+            // Resolve model display name for this worker.
+            val modelName = run.modelId
+                ?.let { runCatching { kotlin.uuid.Uuid.parse(it) }.getOrNull() }
+                ?.let { modelById[it] }
+                ?.let { it.displayName.ifBlank { it.modelId } }
+                ?: "inherit"
 
             // Status icon + color
             val statusIcon: @Composable (() -> Unit) = when (run.status) {
@@ -937,6 +945,11 @@ private fun SubAgentChipRow(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
+                    Text(
+                        text = modelName.take(12),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     if (run.subtreeTokenWarning) {
                         Text(
                             text = "⚠",
@@ -974,7 +987,7 @@ private fun SubAgentChipRow(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = "Status: ${run.status.name}  |  Tokens: ${run.tokensIn} in / ${run.tokensOut} out  |  Trips: ${run.tripCount}",
+                            text = "Status: ${run.status.name}  |  Model: $modelName  |  Tokens: ${run.tokensIn} in / ${run.tokensOut} out  |  Trips: ${run.tripCount}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
