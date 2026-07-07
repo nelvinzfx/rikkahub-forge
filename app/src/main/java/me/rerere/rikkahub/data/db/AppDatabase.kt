@@ -34,6 +34,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_20_21
 import me.rerere.rikkahub.data.db.migrations.Migration_21_22
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
+import me.rerere.rikkahub.data.db.migrations.Migration_27_28
 import me.rerere.rikkahub.data.db.migrations.Migration_8_9
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.workflow.db.WorkflowDao
@@ -87,9 +88,9 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // 4 new boolean columns on ConversationEntity, all defaulted to 0 (false). Plain
         // auto-migration since each column carries a defaultValue in @ColumnInfo.
         AutoMigration(from = 26, to = 27),
-        // v28: Phase A fix — chatModelId column on ConversationEntity (was missing from
-        // initial Phase A, causing model override to be silently dropped on DB round-trip).
-        AutoMigration(from = 27, to = 28),
+        // v28: Phase A fix — chatModelId column on ConversationEntity. Manual migration
+        // (not AutoMigration) because schema 27.json was never generated (no local build
+        // at v27). See Migration_27_28 for details.
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
