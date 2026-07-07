@@ -756,6 +756,10 @@ data class DisplaySetting(
     val chatCustomFontName: String = "",
     val enableVolumeKeyScroll: Boolean = false,
     val volumeKeyScrollRatio: Float = 1.0f,
+    // Phase E — hide sub-agent conversations from the main chat list. Default true so
+    // orchestrator workers don't flood the drawer. Sub-agents are still findable via
+    // search and directly navigable by ID — hidden, not inaccessible.
+    val hideSubAgentChats: Boolean = true,
 )
 
 @Serializable

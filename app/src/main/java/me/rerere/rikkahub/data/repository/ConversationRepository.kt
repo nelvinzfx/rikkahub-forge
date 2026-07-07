@@ -49,9 +49,12 @@ class ConversationRepository(
         }
     }
 
-    fun getConversationsOfAssistant(assistantId: Uuid): Flow<List<Conversation>> {
-        return conversationDAO
-            .getConversationsOfAssistant(assistantId.toString())
+    fun getConversationsOfAssistant(assistantId: Uuid, hideSubAgents: Boolean = false): Flow<List<Conversation>> {
+        val query = if (hideSubAgents)
+            conversationDAO.getConversationsOfAssistantExcludeSubAgents(assistantId.toString())
+        else
+            conversationDAO.getConversationsOfAssistant(assistantId.toString())
+        return query
             .map { flow ->
                 flow.map { entity ->
                     // 列表视图不需要完整的 nodes，使用空列表
@@ -60,13 +63,18 @@ class ConversationRepository(
             }
     }
 
-    fun getConversationsOfAssistantPaging(assistantId: Uuid): Flow<PagingData<Conversation>> = Pager(
+    fun getConversationsOfAssistantPaging(assistantId: Uuid, hideSubAgents: Boolean = false): Flow<PagingData<Conversation>> = Pager(
         config = PagingConfig(
             pageSize = PAGE_SIZE,
             initialLoadSize = INITIAL_LOAD_SIZE,
             enablePlaceholders = false
         ),
-        pagingSourceFactory = { conversationDAO.getConversationsOfAssistantPaging(assistantId.toString()) }
+        pagingSourceFactory = {
+            if (hideSubAgents)
+                conversationDAO.getConversationsOfAssistantPagingExcludeSubAgents(assistantId.toString())
+            else
+                conversationDAO.getConversationsOfAssistantPaging(assistantId.toString())
+        }
     ).flow.map { pagingData ->
         pagingData.map { entity ->
             conversationSummaryToConversation(entity)

@@ -257,7 +257,7 @@ fun ChatDrawerContent(
                         val id = if (context.readBooleanPreference("create_new_conversation_on_start", true)) {
                             Uuid.random()
                         } else {
-                            repo.getConversationsOfAssistant(it.assistantId)
+                            repo.getConversationsOfAssistant(it.assistantId, settings.displaySetting.hideSubAgentChats)
                                 .first()
                                 .firstOrNull()
                                 ?.id ?: Uuid.random()

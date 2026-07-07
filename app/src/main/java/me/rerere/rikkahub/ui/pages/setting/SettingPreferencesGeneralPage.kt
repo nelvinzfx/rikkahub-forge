@@ -253,6 +253,20 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
                             }
                         )
                     }
+                    item(
+                        headlineContent = { Text("Hide sub-agent chats") },
+                        supportingContent = {
+                            Text("Hide sub-agent worker conversations from the chat list. They are still accessible via search.")
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.hideSubAgentChats,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(hideSubAgentChats = it))
+                                }
+                            )
+                        },
+                    )
                 }
             }
 
