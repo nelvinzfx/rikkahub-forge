@@ -189,7 +189,10 @@ class ChatService(
      * state with empty content (silent data loss). Idempotent and cheap when the session
      * is already populated.
      */
-    suspend fun ensureHydrated(conversationId: Uuid) {
+    suspend fun ensureHydrated(
+        conversationId: Uuid,
+        allowWhileGenerating: Boolean = false,
+    ) {
         val session = getOrCreateSession(conversationId)
         // Never clobber a session that has a live generation in flight. With two
         // conversations generating in parallel, switching between them can re-enter this
@@ -198,7 +201,7 @@ class ChatService(
         // turn back to that stale snapshot — the visible "reverted to first message /
         // stuck" symptom. The live state is the source of truth while a job runs; only
         // hydrate a genuinely cold, idle session.
-        if (session.isGenerating) return
+        if (session.isGenerating && !allowWhileGenerating) return
         if (session.state.value.messageNodes.isEmpty()) {
             val fromDb = conversationRepo.getConversationById(conversationId) ?: return
             if (fromDb.messageNodes.isNotEmpty()) {
@@ -399,6 +402,14 @@ class ChatService(
         val job = appScope.launch {
             try {
                 runCatching { previousJob?.join() }
+                // sendMessage is also called by background entry points such as sub-agent
+                // completion callbacks. The UI may have released and evicted this session
+                // while the persisted conversation still contains the full transcript.
+                // Hydrate before reading or mutating state, otherwise the callback gets
+                // appended to a blank Conversation and overwrites the stored transcript.
+                // This coroutine is already registered as the session's generation job,
+                // so explicitly allow hydration here. No message mutation has happened yet.
+                ensureHydrated(conversationId, allowWhileGenerating = true)
                 finishInterruptedPendingTools(conversationId)
 
                 val currentConversation = session.state.value
