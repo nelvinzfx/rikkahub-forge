@@ -2,11 +2,6 @@ name: Release Build
 
 on:
   workflow_dispatch:
-    inputs:
-      abi:
-        description: 'Target ABI (arm64-v8a only, or all)'
-        required: false
-        default: 'arm64-v8a'
 
 jobs:
   build:
@@ -51,14 +46,15 @@ jobs:
           # 写入Google Services配置
           echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
 
-      - name: Gradle Build
+      - name: Gradle Build (arm64-v8a only, no universal)
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease -PabiFilters=${{ github.event.inputs.abi }}
+          ./gradlew assembleRelease -PabiFilters=arm64-v8a -PuniversalApk=false
 
-      - name: Upload artifacts
+      - name: Upload arm64 APK
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: rikkahub-forge
-          path: app/build/outputs/apk/release/*.apk
+          name: rikkahub-forge-arm64-v8a
+          path: app/build/outputs/apk/release/*arm64-v8a*.apk
+          if-no-files-found: error
