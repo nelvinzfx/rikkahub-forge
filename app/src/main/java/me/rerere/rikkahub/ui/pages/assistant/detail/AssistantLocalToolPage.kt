@@ -1225,6 +1225,20 @@ private fun AssistantLocalToolContent(
                     )
                 }
             )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_conversation_recall_title))
+                },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_conversation_recall_desc))
+                },
+                trailingContent = {
+                    PermissionedSwitch(
+                        checked = assistant.localTools.contains(LocalToolOption.ConversationRecall),
+                        onCheckedChange = { toggleLocalTool(LocalToolOption.ConversationRecall, it) },
+                    )
+                }
+            )
         }
 
         // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.

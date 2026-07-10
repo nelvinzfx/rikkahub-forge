@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -41,6 +42,7 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -57,6 +59,7 @@ import coil3.request.crossfade
 import coil3.svg.SvgDecoder
 import com.dokar.sonner.Toaster
 import com.dokar.sonner.rememberToasterState
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.rerere.highlight.Highlighter
 import me.rerere.highlight.LocalHighlighter
@@ -66,6 +69,7 @@ import me.rerere.rikkahub.data.db.DatabaseMigrationTracker
 import me.rerere.rikkahub.data.db.MigrationState
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.ui.activity.SafeModeActivity
 import me.rerere.rikkahub.ui.components.ui.TTSController
 import me.rerere.rikkahub.ui.context.LocalNavController
@@ -150,6 +154,7 @@ class RouteActivity : ComponentActivity() {
     private val highlighter by inject<Highlighter>()
     private val okHttpClient by inject<OkHttpClient>()
     private val settingsStore by inject<SettingsStore>()
+    private val conversationRepository by inject<ConversationRepository>()
     private var navStack: MutableList<NavKey>? = null
 
     // Volume key listener registry — last registered handler wins
@@ -249,6 +254,24 @@ class RouteActivity : ComponentActivity() {
         intent.getStringExtra("conversationId")?.let { text ->
             navStack?.add(Screen.Chat(text))
         }
+        lifecycleScope.launch { handleConversationDeepLink(intent) }
+    }
+
+    private suspend fun handleConversationDeepLink(sourceIntent: Intent) {
+        val uri = sourceIntent.data ?: return
+        if (sourceIntent.action != Intent.ACTION_VIEW || uri.scheme != "rikka" || uri.host != "chat") return
+        val conversationId = uri.pathSegments.singleOrNull().orEmpty()
+        // Consume once so recomposition or another lifecycle callback cannot reopen it.
+        sourceIntent.data = null
+        val uuid = runCatching { Uuid.parse(conversationId) }.getOrNull()
+        if (uuid == null || !conversationRepository.existsConversationById(uuid)) {
+            Toast.makeText(this, "Conversation not found", Toast.LENGTH_SHORT).show()
+            return
+        }
+        navStack?.let { stack ->
+            stack.clear()
+            stack.add(Screen.Chat(conversationId))
+        }
     }
 
     @OptIn(ExperimentalComposeUiApi::class)
@@ -288,6 +311,7 @@ class RouteActivity : ComponentActivity() {
                 if (backStack.lastOrNull() != destination) backStack.add(destination)
                 intent.removeExtra(EXTRA_OPEN_CODEX_SETTINGS)
             }
+            handleConversationDeepLink(intent)
         }
 
         ShareHandler(backStack)

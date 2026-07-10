@@ -186,6 +186,7 @@ sealed class LocalToolOption {
     @Serializable @SerialName("system_intents")      data object SystemIntents      : LocalToolOption()
     @Serializable @SerialName("browser")             data object Browser            : LocalToolOption()
     @Serializable @SerialName("web_fetch")           data object WebFetch           : LocalToolOption()
+    @Serializable @SerialName("conversation_recall") data object ConversationRecall : LocalToolOption()
 
     // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.
     @Serializable @SerialName("sms_send")             data object SmsSend             : LocalToolOption()
@@ -968,6 +969,10 @@ class LocalTools(
         if (options.contains(LocalToolOption.WebFetch)) {
             // Lightweight HTTP GET/POST (item 1.2) — backed by the shared OkHttp singleton.
             tools.add(webFetchTool(okHttpClient))
+        }
+        if (options.contains(LocalToolOption.ConversationRecall)) {
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.searchConversationsTool(conversationRepo))
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.openConversationTool(context, conversationRepo))
         }
         // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.
         if (options.contains(LocalToolOption.SmsSend)) {

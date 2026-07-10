@@ -17,6 +17,7 @@ import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
+import me.rerere.rikkahub.data.db.dao.searchConversationRecall
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.files.FilesManager
@@ -25,6 +26,14 @@ import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
 import java.time.Instant
 import kotlin.uuid.Uuid
+
+data class ConversationRecallResult(
+    val conversationId: String,
+    val title: String,
+    val matchedSnippet: String,
+    val matchType: String,
+    val timestamp: Long,
+)
 
 class ConversationRepository(
     private val conversationDAO: ConversationDAO,
@@ -154,6 +163,22 @@ class ConversationRepository(
                 flow.map { entity ->
                     conversationEntityToConversation(entity, emptyList())
                 }
+            }
+    }
+
+    suspend fun searchConversationRecall(query: String, limit: Int = 10): List<ConversationRecallResult> {
+        val pattern = "%${escapeLike(query)}%"
+        return messageNodeDAO.searchConversationRecall(pattern)
+            .distinctBy { it.conversationId }
+            .take(limit.coerceAtLeast(1))
+            .map { candidate ->
+                ConversationRecallResult(
+                    conversationId = candidate.conversationId,
+                    title = candidate.title,
+                    matchedSnippet = snippetAround(candidate.matchedText, query),
+                    matchType = candidate.matchType,
+                    timestamp = candidate.timestamp,
+                )
             }
     }
 
@@ -372,6 +397,23 @@ class ConversationRepository(
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             messageNodes = emptyList(),
         )
+    }
+
+    private fun escapeLike(value: String): String = value
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+
+    private fun snippetAround(text: String, query: String, maxLength: Int = 100): String {
+        if (text.length <= maxLength) return text
+        val match = text.indexOf(query, ignoreCase = true).coerceAtLeast(0)
+        val start = (match - maxLength / 2).coerceIn(0, text.length - maxLength)
+        val end = (start + maxLength).coerceAtMost(text.length)
+        return buildString {
+            if (start > 0) append("…")
+            append(text.substring(start, end))
+            if (end < text.length) append("…")
+        }
     }
 
     private suspend fun loadMessageNodes(conversationId: String): List<MessageNode> {

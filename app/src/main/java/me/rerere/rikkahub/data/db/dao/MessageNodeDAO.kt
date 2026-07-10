@@ -46,6 +46,9 @@ interface MessageNodeDAO {
 
     @RawQuery
     suspend fun getMessageCountPerDayRaw(query: SupportSQLiteQuery): List<MessageDayCount>
+
+    @RawQuery
+    suspend fun searchConversationRecallRaw(query: SupportSQLiteQuery): List<ConversationRecallCandidate>
 }
 
 data class MessageTokenStats(
@@ -56,6 +59,46 @@ data class MessageTokenStats(
 )
 
 data class MessageDayCount(val day: String, val count: Int)
+
+data class ConversationRecallCandidate(
+    val conversationId: String,
+    val title: String,
+    val matchedText: String,
+    val matchType: String,
+    val timestamp: Long,
+    val matchRank: Int,
+)
+
+suspend fun MessageNodeDAO.searchConversationRecall(pattern: String): List<ConversationRecallCandidate> =
+    searchConversationRecallRaw(
+        SimpleSQLiteQuery(
+            """
+            SELECT conversationId, title, matchedText, matchType, timestamp, matchRank FROM (
+                SELECT c.id AS conversationId, c.title AS title, c.title AS matchedText,
+                       'title' AS matchType, c.update_at AS timestamp, 0 AS matchRank
+                FROM conversationentity c
+                WHERE c.title LIKE ? ESCAPE '\' COLLATE NOCASE
+                UNION ALL
+                SELECT c.id AS conversationId, c.title AS title,
+                       CAST(json_extract(part.value, '$.text') AS TEXT) AS matchedText,
+                       'content' AS matchType,
+                       COALESCE(
+                           CAST(strftime('%s', json_extract(message.value, '$.createdAt')) AS INTEGER) * 1000,
+                           c.update_at
+                       ) AS timestamp,
+                       1 AS matchRank
+                FROM conversationentity c
+                JOIN message_node node ON node.conversation_id = c.id
+                JOIN json_each(node.messages) message
+                JOIN json_each(json_extract(message.value, '$.parts')) part
+                WHERE json_extract(part.value, '$.text') IS NOT NULL
+                  AND CAST(json_extract(part.value, '$.text') AS TEXT) LIKE ? ESCAPE '\' COLLATE NOCASE
+            )
+            ORDER BY matchRank ASC, timestamp DESC
+            """.trimIndent(),
+            arrayOf(pattern, pattern),
+        )
+    )
 
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private val TOKEN_STATS_SQL = SimpleSQLiteQuery(
