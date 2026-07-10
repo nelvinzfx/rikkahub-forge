@@ -334,7 +334,7 @@ private fun ChatPageContent(
             bottomBar = {
                 ChatInput(
                     state = inputState,
-                    loading = loadingJob != null,
+                    loading = loadingJob?.isActive == true,
                     settings = setting,
                     hazeState = hazeState,
                     completionProviders = completionProviders,
@@ -414,7 +414,7 @@ private fun ChatPageContent(
                 innerPadding = innerPadding,
                 conversation = conversation,
                 state = chatListState,
-                loading = loadingJob != null,
+                loading = loadingJob?.isActive == true,
                 processingStatus = processingStatus,
                 subAgentRuns = subAgentRuns,
                 previewMode = previewMode,
@@ -437,7 +437,7 @@ private fun ChatPageContent(
                     }
                 },
                 onDelete = {
-                    if (loadingJob != null) {
+                    if (loadingJob?.isActive == true) {
                         vm.showDeleteBlockedWhileGeneratingError()
                     } else {
                         vm.deleteMessage(it)

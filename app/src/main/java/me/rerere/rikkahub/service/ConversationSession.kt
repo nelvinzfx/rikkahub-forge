@@ -91,6 +91,18 @@ class ConversationSession(
 
     fun getJob(): Job? = _generationJob.value
 
+    /**
+     * Atomically detach and cancel the current generation job. Detaching first makes the
+     * UI idle immediately even when a tool ignores cooperative cancellation and the Job
+     * remains in Cancelling for an arbitrary amount of time. The completion callback uses
+     * identity CAS, so a late completion cannot clear a newer job.
+     */
+    fun cancelCurrentJob(): Job? {
+        val job = _generationJob.getAndUpdate { null }
+        job?.cancel()
+        return job
+    }
+
     private fun scheduleIdleCheck() {
         idleCheckJob?.cancel()
         idleCheckJob = scope.launch {

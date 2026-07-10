@@ -36,6 +36,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
@@ -103,6 +104,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
+private const val STOP_JOIN_GRACE_MS = 1_500L
 
 internal fun backgroundTextGenerationParams(
     model: Model,
@@ -1803,11 +1805,20 @@ class ChatService(
     // 停止当前会话生成任务（不清理会话缓存）
     suspend fun stopGeneration(conversationId: Uuid) {
         val convMutex = mutexFor(conversationId)
-        // cancelAndJoin BEFORE the mutex so the cancelled coroutine can drain its own
-        // writes (which may try to acquire the same mutex via their save path).
-        sessions[conversationId]?.getJob()?.let { runCatching { it.cancelAndJoin() } }
+        // Detach before the mutex so the UI leaves its loading state immediately.
+        // Some tool bodies use
+        // blocking or third-party I/O that does not cooperate with coroutine cancellation; an
+        // unbounded cancelAndJoin here left the Stop coroutine parked forever and kept the chat
+        // stuck until process restart. Give normal cleanup a short grace period, then continue.
+        val cancelledJob = sessions[conversationId]?.cancelCurrentJob()
+        if (cancelledJob != null) {
+            withTimeoutOrNull(STOP_JOIN_GRACE_MS) { cancelledJob.join() }
+        }
 
         convMutex.withLock {
+            // A new turn may have started after we detached the cancelled job. Never rewrite
+            // that newer turn's pending tools as cancelled on behalf of the older Stop request.
+            if (sessions[conversationId]?.isGenerating == true) return@withLock
             // Hydrate from disk so we mark Pending tools cancelled even when the user
             // hits /stop after a process restart (sessions map is empty post-restart;
             // the old code returned early on the !sessions[id]?.getJob() check, leaving

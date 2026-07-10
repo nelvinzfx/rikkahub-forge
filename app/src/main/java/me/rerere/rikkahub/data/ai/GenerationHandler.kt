@@ -840,6 +840,11 @@ class GenerationHandler(
                                 output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
                             )
                         }.onFailure {
+                            // Cancellation is control flow, not a tool failure. Swallowing it here
+                            // converted Stop into a tool_failed result and let the cancelled pipeline
+                            // advance toward another model step. Propagate it so the generation Job
+                            // reaches completion and its lifecycle cleanup runs.
+                            if (it is CancellationException) throw it
                             // Stack trace stays in logcat for debugging; the JSON envelope
                             // sent BACK to the LLM gets just the exception's message and a
                             // short class hint. Stuffing the full multi-frame R8-obfuscated
