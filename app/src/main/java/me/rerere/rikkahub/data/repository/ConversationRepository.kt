@@ -271,6 +271,10 @@ class ConversationRepository(
         }
         messageFtsManager.deleteConversation(conversation.id.toString())
         database.withTransaction {
+            // Drafts intentionally have no foreign key: a new chat can own a draft before
+            // its ConversationEntity exists. Once a persisted conversation is deleted,
+            // clean up its independent draft explicitly in the same transaction.
+            database.conversationDraftDao().delete(conversation.id.toString())
             // message_node 会通过 CASCADE 自动删除
             conversationDAO.delete(
                 conversationToConversationEntity(conversation)

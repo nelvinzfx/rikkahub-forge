@@ -64,7 +64,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         AgentRun::class,
         WorkspaceEntity::class,
     ],
-    version = 31,
+    version = 32,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -89,7 +89,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // v26: the 2.3.1 merge brings upstream's workspaces table (WorkspaceEntity). Existing
         // fork users never had it, so Room auto-creates the table on this step.
         AutoMigration(from = 25, to = 26),
-        // v27-v31 use manual migrations registered in DataSourceModule.
+        // v27-v32 use manual migrations registered in DataSourceModule.
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
