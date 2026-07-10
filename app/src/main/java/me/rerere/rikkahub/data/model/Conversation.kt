@@ -13,6 +13,9 @@ import java.time.Instant
 import kotlin.uuid.Uuid
 
 @Serializable
+enum class OrchestratorMode { AUTO, FORCE, OFF }
+
+@Serializable
 data class Conversation(
     val id: Uuid = Uuid.random(),
     val assistantId: Uuid,
@@ -41,6 +44,7 @@ data class Conversation(
     val suppressAssistantPrompt: Boolean = false,
     val suppressRecentChats: Boolean = false,
     val enforceSubAgentPromptRules: Boolean = false,
+    val orchestratorMode: OrchestratorMode = OrchestratorMode.AUTO,
     val modeInjectionIds: Set<Uuid> = emptySet(),
     val lorebookIds: Set<Uuid> = emptySet(),
     // Absolute path inside the workspace rootfs

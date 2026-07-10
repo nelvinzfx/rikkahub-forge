@@ -60,6 +60,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.OrchestratorMode
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
@@ -290,6 +291,20 @@ HANDLE FAILURE: If a worker times out or fails, use what you got. Retry only if 
 SYNTHESISE: Your final reply is not a paste of worker outputs. Read their summaries, extract what matters, write one coherent answer to the user. The user sees you, not your workers.
 """
 
+internal const val FORCE_ORCHESTRATOR_ADDENDUM = """
+
+FORCE THIS TURN: Delegate at least one meaningful, self-contained part of this request to a worker before producing the final answer. Do not satisfy this requirement with a trivial or ceremonial worker.
+"""
+
+internal fun buildOrchestratorPreamble(
+    mode: OrchestratorMode,
+    enforceSubAgentPromptRules: Boolean,
+): String = when {
+    enforceSubAgentPromptRules || mode == OrchestratorMode.OFF -> ""
+    mode == OrchestratorMode.FORCE -> ORCHESTRATOR_PREAMBLE + FORCE_ORCHESTRATOR_ADDENDUM
+    else -> ORCHESTRATOR_PREAMBLE
+}
+
 class GenerationHandler(
     private val context: Context,
     private val providerManager: ProviderManager,
@@ -331,6 +346,7 @@ class GenerationHandler(
         suppressAssistantPrompt: Boolean = false,
         suppressRecentChats: Boolean = false,
         enforceSubAgentPromptRules: Boolean = false,
+        orchestratorMode: OrchestratorMode = OrchestratorMode.OFF,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -465,6 +481,7 @@ class GenerationHandler(
                         suppressAssistantPrompt = suppressAssistantPrompt,
                         suppressRecentChats = suppressRecentChats,
                         enforceSubAgentPromptRules = enforceSubAgentPromptRules,
+                        orchestratorMode = orchestratorMode,
                     )
                 } catch (t: Throwable) {
                     // CancellationException is honoured verbatim — stopGeneration has its
@@ -986,6 +1003,7 @@ class GenerationHandler(
         suppressAssistantPrompt: Boolean = false,
         suppressRecentChats: Boolean = false,
         enforceSubAgentPromptRules: Boolean = false,
+        orchestratorMode: OrchestratorMode = OrchestratorMode.OFF,
     ) {
         val internalMessages = buildList {
             // Conversation-level system prompt override (upstream): when the assistant
@@ -1020,11 +1038,14 @@ class GenerationHandler(
             // is NOT a worker conversation. Workers never get the preamble. The model list is
             // NOT injected here — the LLM calls subagent_list_models to discover models on
             // demand, keeping the system prompt lean.
-            val finalSystemPrompt = if (assistant.orchestratorMode && !enforceSubAgentPromptRules) {
-                ORCHESTRATOR_PREAMBLE + (effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let { "\n\n$it" } ?: "")
-            } else {
-                effectiveSystemPrompt
-            }
+            val orchestratorPreamble = buildOrchestratorPreamble(
+                mode = orchestratorMode,
+                enforceSubAgentPromptRules = enforceSubAgentPromptRules,
+            )
+            val finalSystemPrompt = orchestratorPreamble +
+                effectiveSystemPrompt.takeIf { it.isNotBlank() }?.let {
+                    if (orchestratorPreamble.isBlank()) it else "\n\n$it"
+                }.orEmpty()
             val memoryPrompt = if (assistant.enableMemory && !suppressMemory) {
                 buildMemoryPrompt(memories = memories)
             } else ""

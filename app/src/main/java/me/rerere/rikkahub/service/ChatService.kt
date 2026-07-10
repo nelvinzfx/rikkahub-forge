@@ -446,7 +446,12 @@ class ChatService(
 
     // ---- 发送消息 ----
 
-    fun sendMessage(conversationId: Uuid, content: List<UIMessagePart>, answer: Boolean = true) {
+    fun sendMessage(
+        conversationId: Uuid,
+        content: List<UIMessagePart>,
+        answer: Boolean = true,
+        orchestratorOverride: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
+    ) {
         if (content.isEmptyInputMessage()) return
 
         val session = getOrCreateSession(conversationId)
@@ -474,6 +479,11 @@ class ChatService(
                 val assistant = settings.getAssistantById(currentConversation.assistantId)
                     ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
+                val turnOrchestratorMode = when {
+                    currentConversation.enforceSubAgentPromptRules -> me.rerere.rikkahub.data.model.OrchestratorMode.OFF
+                    orchestratorOverride != null -> orchestratorOverride
+                    else -> currentConversation.orchestratorMode
+                }
 
                 // 添加消息到列表
                 val withUser = currentConversation.copy(
@@ -490,12 +500,18 @@ class ChatService(
                 // Conservative: any match failure (tool throws, no result) falls back to the
                 // normal LLM path. Headless conversations and non-text messages are skipped.
                 val routedHandled = if (answer)
-                    tryFastPathRoute(conversationId, processedContent, withUser, assistant)
+                    tryFastPathRoute(
+                        conversationId,
+                        processedContent,
+                        withUser,
+                        assistant,
+                        turnOrchestratorMode,
+                    )
                 else false
 
                 // 开始补全 — only if router didn't handle the turn
                 if (answer && !routedHandled) {
-                    handleMessageComplete(conversationId)
+                    handleMessageComplete(conversationId, orchestratorMode = turnOrchestratorMode)
                 }
 
                 _generationDoneFlow.emit(conversationId)
@@ -517,10 +533,12 @@ class ChatService(
         userParts: List<UIMessagePart>,
         afterUserSave: me.rerere.rikkahub.data.model.Conversation,
         assistant: Assistant,
+        orchestratorMode: me.rerere.rikkahub.data.model.OrchestratorMode,
     ): Boolean {
         // Headless paths (cron / sub-agent / external-automation / workflow) must always go
         // through the LLM — the fast-path is a per-user-turn optimisation, not a system-flow.
         if (me.rerere.rikkahub.data.ai.tools.HeadlessConversations.isHeadless(conversationId)) return false
+        if (orchestratorMode == me.rerere.rikkahub.data.model.OrchestratorMode.FORCE) return false
 
         // assistant is resolved from the conversation's own assistantId by the caller — do NOT
         // re-read the global getCurrentAssistant() here or a mid-turn assistant switch makes the
@@ -821,7 +839,8 @@ class ChatService(
 
     private suspend fun handleMessageComplete(
         conversationId: Uuid,
-        messageRange: ClosedRange<Int>? = null
+        messageRange: ClosedRange<Int>? = null,
+        orchestratorMode: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
     ) {
         val settings = settingsStore.settingsFlow.first()
         // Resolve the assistant from this conversation's own assistantId — the global
@@ -885,6 +904,11 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
+            val effectiveOrchestratorMode = when {
+                conversation.enforceSubAgentPromptRules -> me.rerere.rikkahub.data.model.OrchestratorMode.OFF
+                orchestratorMode != null -> orchestratorMode
+                else -> conversation.orchestratorMode
+            }
 
             // start generating
             val session = getOrCreateSession(conversationId)
@@ -950,6 +974,7 @@ class ChatService(
                 suppressAssistantPrompt = conversation.suppressAssistantPrompt,
                 suppressRecentChats = conversation.suppressRecentChats,
                 enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
+                orchestratorMode = effectiveOrchestratorMode,
                 memories = memoryRepository.getCoreMemories(
                   assistantId = if (assistant.useGlobalMemory) {
                       MemoryRepository.GLOBAL_MEMORY_ID
@@ -982,7 +1007,13 @@ class ChatService(
                         // gets told it cannot see the image instead of confabulating one.
                         modelCanSeeImages = Modality.IMAGE in model.inputModalities,
                     )
-                    addAll(localTools.getTools(assistant.localTools, invocationCtx))
+                    val localToolOptions = assistant.localTools
+                        .filterNot { it == me.rerere.rikkahub.data.ai.tools.LocalToolOption.SubAgents }
+                        .toMutableList()
+                    if (effectiveOrchestratorMode != me.rerere.rikkahub.data.model.OrchestratorMode.OFF) {
+                        localToolOptions += me.rerere.rikkahub.data.ai.tools.LocalToolOption.SubAgents
+                    }
+                    addAll(localTools.getTools(localToolOptions, invocationCtx))
                     addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
                     if (assistant.enabledSkills.isNotEmpty()) {
                         addAll(

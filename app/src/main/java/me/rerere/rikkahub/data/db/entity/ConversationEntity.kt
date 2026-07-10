@@ -41,4 +41,6 @@ data class ConversationEntity(
     val suppressRecentChats: Boolean = false,
     @ColumnInfo("enforce_subagent_rules", defaultValue = "0")
     val enforceSubAgentPromptRules: Boolean = false,
+    @ColumnInfo("orchestrator_mode", defaultValue = "AUTO")
+    val orchestratorMode: String = "AUTO",
 )

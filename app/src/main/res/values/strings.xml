@@ -1821,6 +1821,14 @@
   <string name="assistant_page_sub_agent_include_chats">Workers inherit recent chats</string>
   <string name="assistant_page_sub_agent_include_chats_desc">Inject recent chats reference into workers by default.</string>
   <string name="assistant_page_orchestrator_mode">Orchestrator Mode</string>
+  <string name="assistant_page_orchestrator_limits">Orchestrator limits</string>
+  <string name="assistant_page_orchestrator_limits_desc">Activation is selected per conversation in the message composer. Configure worker depth, approvals, and cost limits here.</string>
+  <string name="orchestrator_mode_auto">Auto</string>
+  <string name="orchestrator_mode_auto_desc">Agent decides when parallel workers are useful</string>
+  <string name="orchestrator_mode_force">Force this turn</string>
+  <string name="orchestrator_mode_force_desc">Require meaningful delegation for the next message</string>
+  <string name="orchestrator_mode_off">Off</string>
+  <string name="orchestrator_mode_off_desc">Remove all sub-agent tools from this conversation</string>
   <string name="assistant_page_orchestrator_mode_desc">Let this assistant split tasks into parallel workers automatically. When on, the agent decides per-task whether to decompose or answer inline.</string>
   <string name="assistant_page_orchestrator_max_depth">Max sub-agent depth</string>
   <string name="assistant_page_orchestrator_max_depth_desc">0 = no sub-agents, 1 = one level (default), 2 = allow grandchildren (use with caution).</string>

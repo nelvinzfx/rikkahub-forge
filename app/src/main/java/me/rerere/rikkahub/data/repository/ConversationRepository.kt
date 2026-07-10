@@ -343,6 +343,7 @@ class ConversationRepository(
             suppressAssistantPrompt = conversation.suppressAssistantPrompt,
             suppressRecentChats = conversation.suppressRecentChats,
             enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
+            orchestratorMode = conversation.orchestratorMode.name,
         )
     }
 
@@ -368,6 +369,8 @@ class ConversationRepository(
             suppressAssistantPrompt = conversationEntity.suppressAssistantPrompt,
             suppressRecentChats = conversationEntity.suppressRecentChats,
             enforceSubAgentPromptRules = conversationEntity.enforceSubAgentPromptRules,
+            orchestratorMode = runCatching { me.rerere.rikkahub.data.model.OrchestratorMode.valueOf(conversationEntity.orchestratorMode) }
+                .getOrDefault(me.rerere.rikkahub.data.model.OrchestratorMode.AUTO),
         )
     }
 

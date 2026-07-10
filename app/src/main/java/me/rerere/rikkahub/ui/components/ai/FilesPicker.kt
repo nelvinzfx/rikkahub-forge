@@ -75,6 +75,7 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.OrchestratorMode
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.ui.components.ui.ExtensionSelector
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionCamera
@@ -96,6 +97,8 @@ internal fun FilesPicker(
     onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateConversation: (Conversation) -> Unit,
+    orchestratorMode: OrchestratorMode,
+    onUpdateOrchestratorMode: (OrchestratorMode) -> Unit,
     showInjectionSheet: Boolean,
     onShowInjectionSheetChange: (Boolean) -> Unit,
     showCompressDialog: Boolean,
@@ -139,6 +142,28 @@ internal fun FilesPicker(
         HorizontalDivider(
             modifier = Modifier.fillMaxWidth()
         )
+
+        Text(
+            text = "Orchestrator",
+            style = MaterialTheme.typography.titleSmall,
+        )
+        listOf(
+            OrchestratorMode.AUTO to (stringResource(R.string.orchestrator_mode_auto) to stringResource(R.string.orchestrator_mode_auto_desc)),
+            OrchestratorMode.FORCE to (stringResource(R.string.orchestrator_mode_force) to stringResource(R.string.orchestrator_mode_force_desc)),
+            OrchestratorMode.OFF to (stringResource(R.string.orchestrator_mode_off) to stringResource(R.string.orchestrator_mode_off_desc)),
+        ).forEach { (mode, text) ->
+            ListItem(
+                headlineContent = { Text(text.first) },
+                supportingContent = { Text(text.second) },
+                trailingContent = {
+                    if (mode == orchestratorMode) Text("✓", color = MaterialTheme.colorScheme.primary)
+                },
+                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.large)
+                    .clickable { onUpdateOrchestratorMode(mode) },
+            )
+        }
 
         if (workspaces.isNotEmpty()) {
             WorkspacePickerListItem(

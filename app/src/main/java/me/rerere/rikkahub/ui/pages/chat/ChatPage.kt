@@ -76,6 +76,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.OrchestratorMode
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.ai.ChatInput
@@ -305,6 +306,20 @@ private fun ChatPageContent(
     val hazeState = rememberHazeState()
     val assistant = setting.getCurrentAssistant()
     var showFilesSheet by remember { mutableStateOf(false) }
+    var forceOrchestratorNextTurn by rememberSaveable(conversation.id) { mutableStateOf(false) }
+    val displayedOrchestratorMode = if (forceOrchestratorNextTurn) {
+        OrchestratorMode.FORCE
+    } else conversation.orchestratorMode
+
+    fun selectOrchestratorMode(mode: OrchestratorMode) {
+        if (mode == OrchestratorMode.FORCE) {
+            forceOrchestratorNextTurn = true
+        } else {
+            forceOrchestratorNextTurn = false
+            vm.updateConversation(conversation.copy(orchestratorMode = mode))
+            vm.saveConversationAsync()
+        }
+    }
 
     val completionProviders = remember(assistant.workspaceId, conversation.workspaceCwd, workspaceRepository) {
         assistant.workspaceId?.let { workspaceId ->
@@ -372,7 +387,11 @@ private fun ChatPageContent(
                                 messageId = inputState.editingMessage!!,
                             )
                         } else {
-                            vm.handleMessageSend(inputState.getContents())
+                            vm.handleMessageSend(
+                                inputState.getContents(),
+                                orchestratorOverride = if (forceOrchestratorNextTurn) OrchestratorMode.FORCE else null,
+                            )
+                            forceOrchestratorNextTurn = false
                             scope.launch {
                                 chatListState.requestScrollToItem(conversation.currentMessages.size + 5)
                             }
@@ -416,6 +435,8 @@ private fun ChatPageContent(
                             )
                         )
                     },
+                    orchestratorMode = displayedOrchestratorMode,
+                    onUpdateOrchestratorMode = ::selectOrchestratorMode,
                     onMoreClick = {
                         showFilesSheet = true
                     },
@@ -513,6 +534,8 @@ private fun ChatPageContent(
                 conversation = conversation,
                 assistant = assistant,
                 vm = vm,
+                orchestratorMode = displayedOrchestratorMode,
+                onUpdateOrchestratorMode = ::selectOrchestratorMode,
                 onDismiss = { showFilesSheet = false },
             )
         }
@@ -526,6 +549,8 @@ private fun ChatFilesPickerSheet(
     conversation: Conversation,
     assistant: Assistant,
     vm: ChatVM,
+    orchestratorMode: OrchestratorMode,
+    onUpdateOrchestratorMode: (OrchestratorMode) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -704,6 +729,8 @@ private fun ChatFilesPickerSheet(
                 vm.updateConversation(it)
                 vm.saveConversationAsync()
             },
+            orchestratorMode = orchestratorMode,
+            onUpdateOrchestratorMode = onUpdateOrchestratorMode,
             showInjectionSheet = showInjectionSheet,
             onShowInjectionSheetChange = { showInjectionSheet = it },
             showCompressDialog = showCompressDialog,

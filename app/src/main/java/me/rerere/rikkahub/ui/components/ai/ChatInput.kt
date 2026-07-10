@@ -96,6 +96,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getQuickMessagesOfAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.OrchestratorMode
 import me.rerere.rikkahub.data.model.QuickMessage
 import me.rerere.rikkahub.ui.components.ai.completion.ChatCompletionContext
 import me.rerere.rikkahub.ui.components.ai.completion.ChatCompletionItem
@@ -126,6 +127,8 @@ fun ChatInput(
     onUpdateChatModel: (Model) -> Unit,
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateSearchService: (Int) -> Unit,
+    orchestratorMode: OrchestratorMode,
+    onUpdateOrchestratorMode: (OrchestratorMode) -> Unit,
     onMoreClick: () -> Unit,
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
@@ -273,6 +276,11 @@ fun ChatInput(
                                 model = chatModel,
                             )
 
+                            OrchestratorModeButton(
+                                mode = orchestratorMode,
+                                onSelect = onUpdateOrchestratorMode,
+                            )
+
                             // Reasoning
                             val model = settings.getCurrentChatModel()
                             if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
@@ -378,6 +386,59 @@ fun ChatInput(
                 }
             }
 
+        }
+    }
+}
+
+@Composable
+private fun OrchestratorModeButton(
+    mode: OrchestratorMode,
+    onSelect: (OrchestratorMode) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Surface(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(14.dp),
+            color = when (mode) {
+                OrchestratorMode.FORCE -> MaterialTheme.colorScheme.primaryContainer
+                OrchestratorMode.OFF -> MaterialTheme.colorScheme.surfaceContainerHigh
+                OrchestratorMode.AUTO -> Color.Transparent
+            },
+        ) {
+            Text(
+                text = when (mode) {
+                    OrchestratorMode.AUTO -> "auto"
+                    OrchestratorMode.FORCE -> "force"
+                    OrchestratorMode.OFF -> "off"
+                },
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (mode == OrchestratorMode.FORCE) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            listOf(
+                OrchestratorMode.AUTO to stringResource(R.string.orchestrator_mode_auto),
+                OrchestratorMode.FORCE to stringResource(R.string.orchestrator_mode_force),
+                OrchestratorMode.OFF to stringResource(R.string.orchestrator_mode_off),
+            ).forEach { (itemMode, label) ->
+                Text(
+                    text = if (itemMode == mode) "✓  $label" else "    $label",
+                    modifier = Modifier
+                        .clickable {
+                            onSelect(itemMode)
+                            expanded = false
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }

@@ -1081,23 +1081,13 @@ private fun AssistantLocalToolContent(
                         )
                     }
                 )
+                // Orchestrator activation is now selected per conversation/turn in the
+                // composer. Assistant settings retain only worker limits and cost controls.
                 item(
-                    headlineContent = {
-                        Text(stringResource(R.string.assistant_page_orchestrator_mode))
-                    },
-                    supportingContent = {
-                        Text(stringResource(R.string.assistant_page_orchestrator_mode_desc))
-                    },
-                    trailingContent = {
-                        PermissionedSwitch(
-                            checked = assistant.orchestratorMode,
-                            onCheckedChange = { v ->
-                                onUpdateAssistant { it.copy(orchestratorMode = v) }
-                            }
-                        )
-                    }
+                    headlineContent = { Text(stringResource(R.string.assistant_page_orchestrator_limits)) },
+                    supportingContent = { Text(stringResource(R.string.assistant_page_orchestrator_limits_desc)) },
                 )
-                if (assistant.orchestratorMode) {
+                run {
                     item(
                         headlineContent = {
                             Text(stringResource(R.string.assistant_page_orchestrator_max_depth))
