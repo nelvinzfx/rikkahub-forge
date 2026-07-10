@@ -116,6 +116,36 @@ internal fun backgroundTextGenerationParams(
     customBody = model.customBodies,
 )
 
+/**
+ * Apply [conversation] to [session]'s state only while the session is NOT generating.
+ * Uses a compareAndSet loop so the isGenerating check and the write are observed
+ * atomically w.r.t. concurrent writers — a generation that starts mid-call, or a
+ * concurrent initialise — so the live in-memory state is preserved instead of being
+ * clobbered by a (potentially stale) snapshot. Returns true if applied, false if the
+ * session is or became generating (the live state is left untouched).
+ *
+ * File garbage-collection is intentionally NOT done here: keeping this function free of
+ * ChatService dependencies (it touches only ConversationSession + Conversation) makes the
+ * live-session invariant unit-testable, matching the pattern of backgroundTextGenerationParams.
+ * During (re)initialisation the prior state is either the blank placeholder produced by
+ * getOrCreateSession (no files) or already matches the DB row, so checkFilesDelete would be
+ * a no-op anyway.
+ */
+internal fun applyConversationSnapshotIfIdle(
+    session: ConversationSession,
+    conversation: Conversation,
+): Boolean {
+    if (conversation.id != session.id) return false
+    while (true) {
+        val current = session.state.value
+        if (session.isGenerating) return false
+        if (session.state.compareAndSet(current, conversation)) {
+            return true
+        }
+        // lost the CAS to a concurrent writer — re-read and re-check isGenerating
+    }
+}
+
 data class ChatError(
     val id: Uuid = Uuid.random(),
     val title: String? = null,
@@ -372,13 +402,37 @@ class ChatService(
     // ---- 初始化对话 ----
 
     suspend fun initializeConversation(conversationId: Uuid) {
-        getOrCreateSession(conversationId) // 确保 session 存在
+        val session = getOrCreateSession(conversationId) // 确保 session 存在
+
+        // INVARIANT: a live (mid-generation) session is the single source of truth and
+        // must never be overwritten by a DB snapshot here. Reopening such a conversation
+        // — navigating away and back spins up a new ChatVM whose init calls this — only
+        // needs to reattach observers, which happens automatically because the UI already
+        // collects session.state. Reloading the DB snapshot would replace in-memory
+        // streaming/tool progress the DB doesn't have yet: the UI reverts to a stale turn,
+        // flickers when later chunks land, and progress becomes untrackable. Cold/evicted
+        // sessions (freshly created by getOrCreateSession) and genuinely new chats have
+        // isGenerating == false and initialise below as before. This mirrors the guard
+        // a680c8ef added to ensureHydrated for evicted background callbacks.
+        if (session.isGenerating) return
+
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
-            updateConversation(conversationId, conversation)
-            settingsStore.updateAssistant(conversation.assistantId)
+            // A generation could start during the DB read above. applyConversationSnapshotIfIdle
+            // re-checks isGenerating inside a compareAndSet loop, so a write that lands during
+            // this call is observed and the live state is preserved instead of being clobbered
+            // by the (now stale) snapshot. checkFilesDelete is intentionally not invoked here:
+            // on the cold path the prior state is the blank placeholder (no files to collect),
+            // and on the warm idle path the prior state already matches the DB row, so there is
+            // never anything to garbage-collect during (re)initialisation.
+            if (applyConversationSnapshotIfIdle(session, conversation)) {
+                settingsStore.updateAssistant(conversation.assistantId)
+            }
         } else {
-            // 新建对话, 并添加预设消息
+            // Genuinely new chat: build it with the assistant's preset messages. The decision
+            // to initialise is driven by isGenerating (false here) plus the absence of a DB
+            // row, never by messageNodes emptiness alone — a new chat may legitimately ship
+            // empty preset messages and still needs initialising here.
             val currentSettings = settingsStore.settingsFlowRaw.first()
             val assistant = currentSettings.getCurrentAssistant()
             val newConversation = Conversation.ofId(
@@ -386,7 +440,7 @@ class ChatService(
                 assistantId = assistant.id,
                 newConversation = true
             ).updateCurrentMessages(assistant.presetMessages)
-            updateConversation(conversationId, newConversation)
+            applyConversationSnapshotIfIdle(session, newConversation)
         }
     }
 
