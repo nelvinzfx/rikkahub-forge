@@ -322,6 +322,9 @@ class SubAgentEngine(
             enforceSubAgentPromptRules = true,
         )
         conversationRepo.insertConversation(conv)
+        // Publish the hidden worker chat id as soon as it exists. The parent chip observes
+        // the registry and can open this exact conversation without exposing it in history.
+        registry.update(runId) { it.copy(conversationId = conv.id.toString()) }
         chatService.initializeConversation(conv.id)
         HeadlessConversations.mark(conv.id)
         SubAgentConversationTracker.register(conv.id.toString(), runId, childDepth, childOrchestratorId)

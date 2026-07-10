@@ -64,6 +64,7 @@ import me.rerere.hugeicons.stroke.LeftToRightListBullet
 import me.rerere.hugeicons.stroke.Menu03
 import me.rerere.hugeicons.stroke.MessageAdd01
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
@@ -417,6 +418,11 @@ private fun ChatPageContent(
                 loading = loadingJob?.isActive == true,
                 processingStatus = processingStatus,
                 subAgentRuns = subAgentRuns,
+                onOpenSubAgentConversation = { workerConversationId ->
+                    navController.navigate(
+                        Screen.Chat(id = workerConversationId.toString()),
+                    )
+                },
                 previewMode = previewMode,
                 settings = setting,
                 hazeState = hazeState,

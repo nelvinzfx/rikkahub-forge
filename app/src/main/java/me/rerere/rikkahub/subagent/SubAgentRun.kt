@@ -17,6 +17,9 @@ data class SubAgentRun(
     val id: String,
     val parentChatId: String?,         // the parent assistant chat that dispatched this — used for /stop cascade
     val parentAssistantId: String,
+    // Hidden worker conversation backing this run. Populated as soon as executeRun creates
+    // the conversation so the parent status pill can navigate to it directly.
+    val conversationId: String? = null,
     val label: String,
     val task: String,
     val modelId: String?,              // null = inherited from parent

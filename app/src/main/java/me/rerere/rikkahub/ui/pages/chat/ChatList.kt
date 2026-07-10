@@ -119,6 +119,7 @@ fun ChatList(
     loading: Boolean,
     processingStatus: String? = null,
     subAgentRuns: List<me.rerere.rikkahub.subagent.SubAgentRun> = emptyList(),
+    onOpenSubAgentConversation: (Uuid) -> Unit = {},
     previewMode: Boolean,
     settings: Settings,
     hazeState: HazeState,
@@ -163,6 +164,7 @@ fun ChatList(
                 loading = loading,
                 processingStatus = processingStatus,
                 subAgentRuns = subAgentRuns,
+                onOpenSubAgentConversation = onOpenSubAgentConversation,
                 settings = settings,
                 hazeState = hazeState,
                 errors = errors,
@@ -194,6 +196,7 @@ private fun ChatListNormal(
     loading: Boolean,
     processingStatus: String? = null,
     subAgentRuns: List<me.rerere.rikkahub.subagent.SubAgentRun> = emptyList(),
+    onOpenSubAgentConversation: (Uuid) -> Unit,
     settings: Settings,
     hazeState: HazeState,
     errors: List<ChatError>,
@@ -388,6 +391,7 @@ private fun ChatListNormal(
                     SubAgentChipRow(
                         runs = subAgentRuns,
                         modelById = modelById,
+                        onOpenConversation = onOpenSubAgentConversation,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
@@ -872,12 +876,14 @@ private fun BoxScope.MessageJumper(
  * - label (truncated)
  * - depth prefix (↳ for depth>0 descendants)
  * - cancel button (X) for running/pending runs
- * Tapping a terminal chip expands to show tokens + result preview.
+ * Tapping a chip opens its hidden worker conversation so live progress remains inspectable.
+ * Legacy terminal runs without a conversation id retain the inline result preview.
  */
 @Composable
 private fun SubAgentChipRow(
     runs: List<me.rerere.rikkahub.subagent.SubAgentRun>,
     modelById: Map<kotlin.uuid.Uuid, me.rerere.ai.provider.Model>,
+    onOpenConversation: (Uuid) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expandedRunId by remember { mutableStateOf<String?>(null) }
@@ -931,7 +937,13 @@ private fun SubAgentChipRow(
                 shape = RoundedCornerShape(16.dp),
                 color = chipColor,
                 modifier = Modifier.clickable {
-                    expandedRunId = if (isExpanded) null else run.id
+                    val workerId = run.conversationId
+                        ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+                    if (workerId != null) {
+                        onOpenConversation(workerId)
+                    } else if (isTerminal) {
+                        expandedRunId = if (isExpanded) null else run.id
+                    }
                 },
             ) {
                 Row(
