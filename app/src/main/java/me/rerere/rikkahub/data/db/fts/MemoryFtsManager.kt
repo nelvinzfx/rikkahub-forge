@@ -37,7 +37,7 @@ class MemoryFtsManager(private val database: AppDatabase) {
         if (!memory.archived) {
             db.execSQL(
                 "INSERT INTO memory_fts(title, content, tags, memory_id, assistant_id) VALUES (?, ?, ?, ?, ?)",
-                arrayOf(memory.title, memory.content, memory.tags, memory.id, memory.assistantId),
+                arrayOf<Any?>(memory.title, memory.content, memory.tags, memory.id, memory.assistantId),
             )
         }
     }
@@ -64,7 +64,7 @@ class MemoryFtsManager(private val database: AppDatabase) {
                 ORDER BY score ASC, m.importance DESC, m.updated_at DESC
                 LIMIT ?
                 """.trimIndent(),
-                arrayOf(toFtsQuery(query), assistantId, limit.coerceIn(1, 100)),
+                arrayOf<Any?>(toFtsQuery(query), assistantId, limit.coerceIn(1, 100)),
             )
             cursor.use {
                 while (it.moveToNext()) {
@@ -84,7 +84,7 @@ class MemoryFtsManager(private val database: AppDatabase) {
         memories.filterNot { it.archived }.forEach { memory ->
             db.execSQL(
                 "INSERT INTO memory_fts(title, content, tags, memory_id, assistant_id) VALUES (?, ?, ?, ?, ?)",
-                arrayOf(memory.title, memory.content, memory.tags, memory.id, memory.assistantId),
+                arrayOf<Any?>(memory.title, memory.content, memory.tags, memory.id, memory.assistantId),
             )
         }
     }
