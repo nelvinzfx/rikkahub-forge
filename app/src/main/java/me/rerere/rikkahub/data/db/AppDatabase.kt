@@ -9,6 +9,7 @@ import me.rerere.ai.core.TokenUsage
 import me.rerere.rikkahub.data.agentrun.AgentRun
 import me.rerere.rikkahub.data.agentrun.AgentRunDao
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
+import me.rerere.rikkahub.data.db.dao.ConversationDraftDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.GenMediaDAO
 import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
@@ -20,6 +21,7 @@ import me.rerere.rikkahub.data.db.dao.SshHostDao
 import me.rerere.rikkahub.data.db.dao.TelegramChatDao
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
+import me.rerere.rikkahub.data.db.entity.ConversationDraftEntity
 import me.rerere.rikkahub.data.db.entity.FavoriteEntity
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
@@ -47,6 +49,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
 @Database(
     entities = [
         ConversationEntity::class,
+        ConversationDraftEntity::class,
         MemoryEntity::class,
         GenMediaEntity::class,
         MessageNodeEntity::class,
@@ -61,7 +64,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         AgentRun::class,
         WorkspaceEntity::class,
     ],
-    version = 29,
+    version = 30,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -86,12 +89,14 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // v26: the 2.3.1 merge brings upstream's workspaces table (WorkspaceEntity). Existing
         // fork users never had it, so Room auto-creates the table on this step.
         AutoMigration(from = 25, to = 26),
-        // v27-v29 use manual migrations registered in DataSourceModule.
+        // v27-v30 use manual migrations registered in DataSourceModule.
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDAO
+
+    abstract fun conversationDraftDao(): ConversationDraftDAO
 
     abstract fun memoryDao(): MemoryDAO
 

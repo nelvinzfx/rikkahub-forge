@@ -5,23 +5,29 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyInputMessage
+import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -32,6 +38,7 @@ import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.NodeFavoriteTarget
+import me.rerere.rikkahub.data.repository.ConversationDraftRepository
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FavoriteRepository
 import me.rerere.rikkahub.service.ChatError
@@ -44,12 +51,15 @@ import java.util.Locale
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatVM"
+private const val DRAFT_SAVE_DEBOUNCE_MS = 350L
 
 class ChatVM(
     id: String,
     private val context: Application,
     private val settingsStore: SettingsStore,
     private val conversationRepo: ConversationRepository,
+    private val draftRepository: ConversationDraftRepository,
+    private val appScope: AppScope,
     private val chatService: ChatService,
     val updateChecker: UpdateChecker,
     private val filesManager: FilesManager,
@@ -62,6 +72,7 @@ class ChatVM(
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
     val inputState = ChatInputState()
+    private var pendingDraftWrite: Job? = null
 
     // 异步任务 (从ChatService获取，响应式)
     val conversationJob: StateFlow<Job?> =
@@ -94,11 +105,50 @@ class ChatVM(
             chatService.initializeConversation(_conversationId)
         }
 
+        // Restore before observing changes. A deep-link/share payload that reaches the input
+        // first wins, so an older draft never overwrites explicitly supplied content.
+        viewModelScope.launch {
+            val restored = withContext(Dispatchers.IO) {
+                draftRepository.load(_conversationId.toString())
+            }
+            if (inputState.isEmpty() && !restored.isNullOrEmpty()) {
+                inputState.setContents(restored)
+            }
+            snapshotFlow { inputState.getContents() }
+                .distinctUntilChanged()
+                .collect { parts -> scheduleDraftWrite(parts) }
+        }
+
         // 记住对话ID, 方便下次启动恢复
         context.writeStringPreference("lastConversationId", _conversationId.toString())
     }
 
+    private fun scheduleDraftWrite(parts: List<UIMessagePart>) {
+        pendingDraftWrite?.cancel()
+        pendingDraftWrite = viewModelScope.launch(Dispatchers.IO) {
+            delay(DRAFT_SAVE_DEBOUNCE_MS)
+            draftRepository.replace(_conversationId.toString(), parts)
+        }
+    }
+
+    fun clearInputAndDraft() {
+        pendingDraftWrite?.cancel()
+        inputState.clearInput()
+        appScope.launch(Dispatchers.IO) {
+            draftRepository.delete(_conversationId.toString())
+        }
+    }
+
+    fun flushDraft() {
+        val parts = inputState.getContents()
+        pendingDraftWrite?.cancel()
+        appScope.launch(Dispatchers.IO) {
+            draftRepository.replace(_conversationId.toString(), parts)
+        }
+    }
+
     override fun onCleared() {
+        flushDraft()
         super.onCleared()
         // 移除对话引用
         chatService.removeConversationReference(_conversationId)
