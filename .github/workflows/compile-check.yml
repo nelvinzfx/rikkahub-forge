@@ -2,9 +2,10 @@ name: Compile Check
 
 on:
   push:
-    branches: [master]
+    branches: [master, feat/conversation-recall]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 jobs:
   compile:
