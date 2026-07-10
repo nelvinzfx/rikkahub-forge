@@ -25,6 +25,7 @@ data class Assistant(
     val streamOutput: Boolean = true,
     val enableMemory: Boolean = false,
     val useGlobalMemory: Boolean = false, // 使用全局共享记忆而非助手隔离记忆
+    val memoryCoreTokenBudget: Int = 3000, // maximum always-injected core-memory budget
     val enableRecentChatsReference: Boolean = false,
     val messageTemplate: String = "{{ message }}",
     val presetMessages: List<UIMessage> = emptyList(),
@@ -95,7 +96,17 @@ data class QuickMessage(
 data class AssistantMemory(
     val id: Int,
     val content: String = "",
-)
+    val title: String = "",
+    val mode: String = "core",
+    val tags: List<String> = emptyList(),
+    val importance: Int = 0,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
+    val sourceConversationId: String? = null,
+    val archived: Boolean = false,
+) {
+    val isCore: Boolean get() = mode == "core"
+}
 
 @Serializable
 enum class AssistantAffectScope {

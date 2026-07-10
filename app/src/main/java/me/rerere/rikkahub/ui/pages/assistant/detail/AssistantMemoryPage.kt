@@ -18,8 +18,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -28,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -110,6 +113,18 @@ private fun AssistantMemoryContent(
         }
     }
     var pendingDeleteMemory by remember { mutableStateOf<AssistantMemory?>(null) }
+    var filter by remember { mutableStateOf("all") }
+    var search by remember { mutableStateOf("") }
+    val visibleMemories by remember(memories, filter, search) {
+        derivedStateOf {
+            memories.filter { memory ->
+                val modeMatches = filter == "all" || memory.mode == filter
+                val textMatches = search.isBlank() || memory.title.contains(search, true) ||
+                    memory.content.contains(search, true) || memory.tags.any { it.contains(search, true) }
+                modeMatches && textMatches && !memory.archived
+            }
+        }
+    }
 
     // 记忆对话框
     memoryDialogState.EditStateContent { memory, update ->
@@ -121,17 +136,40 @@ private fun AssistantMemoryContent(
                 Text(stringResource(R.string.assistant_page_manage_memory_title))
             },
             text = {
-                TextField(
-                    value = memory.content,
-                    onValueChange = {
-                        update(memory.copy(content = it))
-                    },
-                    label = {
-                        Text(stringResource(R.string.assistant_page_manage_memory_title))
-                    },
-                    minLines = 2,
-                    maxLines = 8
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextField(
+                        value = memory.title,
+                        onValueChange = { update(memory.copy(title = it)) },
+                        label = { Text(stringResource(R.string.memory_bank_title)) },
+                        singleLine = true,
+                    )
+                    TextField(
+                        value = memory.content,
+                        onValueChange = { update(memory.copy(content = it)) },
+                        label = { Text(stringResource(R.string.assistant_page_manage_memory_title)) },
+                        minLines = 2, maxLines = 8,
+                    )
+                    TextField(
+                        value = memory.tags.joinToString(", "),
+                        onValueChange = { value ->
+                            update(memory.copy(tags = value.split(',').map(String::trim).filter(String::isNotBlank)))
+                        },
+                        label = { Text(stringResource(R.string.memory_bank_tags)) },
+                        singleLine = true,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = memory.mode == "core",
+                            onClick = { update(memory.copy(mode = "core")) },
+                            label = { Text(stringResource(R.string.memory_bank_core)) },
+                        )
+                        FilterChip(
+                            selected = memory.mode == "bank",
+                            onClick = { update(memory.copy(mode = "bank")) },
+                            label = { Text(stringResource(R.string.memory_bank_bank)) },
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
@@ -246,11 +284,35 @@ private fun AssistantMemoryContent(
             )
         }
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp)
-        ) {
+      OutlinedTextField(
+          value = assistant.memoryCoreTokenBudget.toString(),
+          onValueChange = { value ->
+              value.toIntOrNull()?.let { budget ->
+                  onUpdateAssistant(assistant.copy(memoryCoreTokenBudget = budget.coerceIn(0, 20000)))
+              }
+          },
+          label = { Text(stringResource(R.string.memory_bank_core_budget)) },
+          supportingText = { Text(stringResource(R.string.memory_bank_core_budget_desc)) },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+      )
+
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          listOf("all" to R.string.memory_bank_all, "core" to R.string.memory_bank_core, "bank" to R.string.memory_bank_bank).forEach { (mode, label) ->
+              FilterChip(selected = filter == mode, onClick = { filter = mode }, label = { Text(stringResource(label)) })
+          }
+      }
+      OutlinedTextField(
+          value = search, onValueChange = { search = it },
+          label = { Text(stringResource(R.string.memory_bank_search)) },
+          singleLine = true, modifier = Modifier.fillMaxWidth(),
+      )
+
+      Box(
+          modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 8.dp)
+      ) {
             Text(
                 text = stringResource(R.string.assistant_page_manage_memory_title),
                 style = MaterialTheme.typography.titleMedium,
@@ -272,7 +334,7 @@ private fun AssistantMemoryContent(
             }
         }
 
-        memories.fastForEach { memory ->
+        visibleMemories.fastForEach { memory ->
             key(memory.id) {
                 MemoryItem(
                     memory = memory,
@@ -329,7 +391,10 @@ private fun MemoryItem(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "#${memory.id}",
+                    text = buildString {
+                        append("#${memory.id} · ${memory.mode.uppercase()}")
+                        if (memory.title.isNotBlank()) append(" · ${memory.title}")
+                    },
                     style = MaterialTheme.typography.titleMediumEmphasized,
                 )
                 Text(

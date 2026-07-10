@@ -38,6 +38,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_15_16
 import me.rerere.rikkahub.data.db.migrations.Migration_23_24
 import me.rerere.rikkahub.data.db.migrations.Migration_26_27
 import me.rerere.rikkahub.data.db.migrations.Migration_27_28
+import me.rerere.rikkahub.data.db.migrations.Migration_28_29
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.agentrun.AgentRunBootRecovery
 import me.rerere.rikkahub.data.agentrun.AgentRunRepository
@@ -63,7 +64,7 @@ val dataSourceModule = module {
         val context: Context = get()
         Room.databaseBuilder(context, AppDatabase::class.java, "rikka_hub")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(Migration_6_7, Migration_11_12, Migration_13_14, Migration_14_15, Migration_15_16, Migration_23_24, Migration_26_27, Migration_27_28)
+            .addMigrations(Migration_6_7, Migration_11_12, Migration_13_14, Migration_14_15, Migration_15_16, Migration_23_24, Migration_26_27, Migration_27_28, Migration_28_29)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     val dictDir = SimpleDictManager.extractDict(context)
@@ -81,6 +82,7 @@ val dataSourceModule = module {
                         }
                     }
                     db.execSQL(me.rerere.rikkahub.data.db.fts.MESSAGE_FTS_CREATE_SQL.trimIndent())
+                    db.execSQL(me.rerere.rikkahub.data.db.fts.MEMORY_FTS_CREATE_SQL.trimIndent())
                 }
             })
             .openHelperFactory(
@@ -141,9 +143,8 @@ val dataSourceModule = module {
         get<AppDatabase>().workspaceDao()
     }
 
-    single {
-        MessageFtsManager(get())
-    }
+    single { MessageFtsManager(get()) }
+    single { me.rerere.rikkahub.data.db.fts.MemoryFtsManager(get()) }
 
     // Phase 24 — unified AgentRun ledger. DAO + the single shared writer/reader + the
     // boot-recovery sweep. AgentRunRepository has no cross-dependencies (only the DAO), so

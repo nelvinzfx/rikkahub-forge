@@ -321,6 +321,7 @@ class GenerationHandler(
         // chat_id is 12345") without polluting the user message body — without this the
         // preamble is replayed in user history every turn, burning ~80 tokens × N turns.
         systemAddendum: String? = null,
+        conversationId: String? = null,
         conversationSystemPrompt: String? = null,
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
@@ -390,15 +391,9 @@ class GenerationHandler(
                     }
                     buildMemoryTools(
                         json = json,
-                        onCreation = { content ->
-                            memoryRepo.addMemory(memoryAssistantId, content)
-                        },
-                        onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content)
-                        },
-                        onDelete = { id ->
-                            memoryRepo.deleteMemory(id)
-                        }
+                        repository = memoryRepo,
+                        assistantId = memoryAssistantId,
+                        sourceConversationId = conversationId,
                     ).let(this::addAll)
                 }
                 addAll(tools)

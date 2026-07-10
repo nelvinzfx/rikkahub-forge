@@ -833,6 +833,7 @@ class ChatService(
                 // for in-app conversations that didn't register one.
                 systemAddendum = me.rerere.rikkahub.data.ai.tools
                     .ConversationSystemAddendum.get(conversationId),
+                conversationId = conversationId.toString(),
                 isToolAutoApproved = { toolName ->
                     // YOLO mode ("I AM STUPID" toggle in Settings → Tool approvals): every
                     // tool auto-approves. User opted into this explicitly. HARDLINE still
@@ -884,11 +885,14 @@ class ChatService(
                 suppressAssistantPrompt = conversation.suppressAssistantPrompt,
                 suppressRecentChats = conversation.suppressRecentChats,
                 enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
-                memories = if (assistant.useGlobalMemory) {
-                    memoryRepository.getGlobalMemories()
-                } else {
-                    memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
-                },
+                memories = memoryRepository.getCoreMemories(
+                  assistantId = if (assistant.useGlobalMemory) {
+                      MemoryRepository.GLOBAL_MEMORY_ID
+                  } else {
+                      assistant.id.toString()
+                  },
+                  tokenBudget = assistant.memoryCoreTokenBudget,
+              ),
                 inputTransformers = buildList {
                     addAll(inputTransformers)
                     add(templateTransformer)

@@ -214,7 +214,12 @@ class AssistantDetailVM(
             }
             memoryRepository.addMemory(
                 assistantId = memoryAssistantId,
-                content = memory.content
+                content = memory.content,
+                title = memory.title,
+                mode = memory.mode,
+                tags = memory.tags,
+                importance = memory.importance,
+                sourceConversationId = memory.sourceConversationId,
             )
         }
     }
@@ -222,7 +227,7 @@ class AssistantDetailVM(
     fun updateMemory(memory: AssistantMemory) {
         viewModelScope.launch {
             runCatching {
-                memoryRepository.updateContent(id = memory.id, content = memory.content)
+                memoryRepository.updateMemory(memory)
             }.onFailure {
                 // The record may have been deleted (e.g. by the memory tool) between opening
                 // the editor and saving; don't crash the VM scope, the update is moot.

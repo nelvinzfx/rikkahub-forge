@@ -1830,4 +1830,12 @@
   <string name="assistant_page_orchestrator_subtree_cap_desc">Max total tokens (in+out) across the entire subtree. 0 = unlimited. At 80% a warning fires; at 100% remaining workers are cancelled.</string>
   <string name="assistant_page_orchestrator_rate_limit">Dispatch rate limit/min</string>
   <string name="assistant_page_orchestrator_rate_limit_desc">Max sub-agent dispatches per 60s sliding window. 0 = unlimited.</string>
+  <string name="memory_bank_title">Title</string>
+  <string name="memory_bank_tags">Tags (comma separated)</string>
+  <string name="memory_bank_core">Core</string>
+  <string name="memory_bank_bank">Bank</string>
+  <string name="memory_bank_all">All</string>
+  <string name="memory_bank_search">Search memory bank</string>
+  <string name="memory_bank_core_budget">Core memory token budget</string>
+  <string name="memory_bank_core_budget_desc">Only core memories within this budget are added to every prompt. Bank memories stay searchable on demand.</string>
 </resources>

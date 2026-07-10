@@ -12,15 +12,17 @@ import me.rerere.rikkahub.utils.toLocalDate
 internal fun buildMemoryPrompt(memories: List<AssistantMemory>) =
     buildString {
         appendLine()
-        append("**Memories**")
+        append("**Core Memories**")
         appendLine()
-        append("These are memories stored via the memory_tool that you can reference in future conversations.")
+        append("Always-available memories selected for this assistant. Search the memory bank when older details may be relevant.")
         appendLine()
         val json = buildJsonArray {
             memories.forEach { memory ->
                 add(buildJsonObject {
                     put("id", memory.id)
+                    if (memory.title.isNotBlank()) put("title", memory.title)
                     put("content", memory.content)
+                    if (memory.tags.isNotEmpty()) put("tags", memory.tags.joinToString(","))
                 })
             }
         }
