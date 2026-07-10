@@ -23,7 +23,7 @@ fun buildMemoryTools(
 ): List<Tool> = listOf(
     Tool(
         name = "memory_tool",
-        description = "Create, edit, or delete long-term memory. Core memories are always injected within a token budget; bank memories are retrieved on demand. Existing calls with action/content/id remain compatible.",
+        description = "Create, edit, or delete long-term memory. Core memories are always injected within a token budget; bank memories are retrieved on demand. Keep memory content compressed, specific, and self-contained. For create and edit, provide 2–5 concise semantic tags whenever the content supports them. Prefer namespaced tags such as device:lenovo-ideapad-300, topic:boot, app:rikkahub, project:conversation-recall, or status:pending. Derive tags only from explicit content, keep them lowercase, reuse established tags consistently, and avoid generic, speculative, redundant, or sentence-length tags. Existing calls with action/content/id remain compatible.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
@@ -34,6 +34,7 @@ fun buildMemoryTools(
                     put("mode", enumSchema("core", "bank"))
                     put("tags", buildJsonObject {
                         put("type", "array")
+                        put("description", "2–5 concise semantic tags for create/edit when applicable. Prefer lowercase namespaced tags such as device:..., topic:..., app:..., project:..., or status:.... Reuse established tags and never invent unsupported facts.")
                         put("items", buildJsonObject { put("type", "string") })
                     })
                     put("importance", typeSchema("integer", "Optional priority from 0 to 100"))
