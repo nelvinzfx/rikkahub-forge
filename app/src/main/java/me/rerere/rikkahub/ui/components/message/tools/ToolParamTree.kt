@@ -484,19 +484,9 @@ private fun TreeRow(
         drawPath(connector, color = lineColor, style = strokeButt)
 
         if (phase != null) {
-            // The pulse rides whatever path this row actually drew.
+            // Exactly one pulse per branch. The middle row's vertical spine is structural
+            // only; animating it created an extra downward flow in addition to the branch.
             drawFlowPulse(connector, phase)
-            // Middle rows ALSO drew a separate full-height spine line (the connector is
-            // just the straight branch there) — let the pulse ride that spine too so the
-            // current stays continuous across stacked rows. First/last already fold their
-            // vertical into the connector path, so no extra spine pulse for them.
-            if (!isFirst && !isLast) {
-                val spinePath = Path().apply {
-                    moveTo(spineX, 0f)
-                    lineTo(spineX, size.height)
-                }
-                drawFlowPulse(spinePath, phase)
-            }
         }
     }
 
