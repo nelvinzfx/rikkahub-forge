@@ -71,11 +71,11 @@ private const val MAX_TREE_HEIGHT = 300
 
 // --- Electric-flow animation (experimental, active only while a tool is running) ---
 // A bright silver/white pulse travels along each connector path like current in a wire.
-private const val FLOW_CYCLE_MS = 900            // one head sweep top->content; lower = faster
-private const val FLOW_PULSE_FRACTION = 0.28f    // length of the bright pulse as a fraction of path
-private const val FLOW_SEGMENTS = 14             // sub-segments used to fade the pulse tail
-private const val FLOW_GLOW_WIDTH = 4.5f         // wide, low-alpha underlay = glow halo
-private const val FLOW_CORE_WIDTH = 1.8f         // bright core stroke width
+private const val FLOW_CYCLE_MS = 680            // quick sweep without looking frantic
+private const val FLOW_PULSE_FRACTION = 0.14f    // short tail: reads as a fast current dot
+private const val FLOW_SEGMENTS = 6              // fewer draw calls per frame than the old 14
+private const val FLOW_GLOW_WIDTH = 2.8f         // subtle halo, avoids a bold moving blob
+private const val FLOW_CORE_WIDTH = 1.15f        // slim bright core
 private val flowSilver = Color(0xFFB8C2CC)       // silver
 private val flowWhite = Color(0xFFFFFFFF)        // white-hot head
 
@@ -519,7 +519,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFlowPulse(
     val total = measure.length
     if (total <= 0f) return
 
-    val pulseLen = (total * FLOW_PULSE_FRACTION).coerceAtLeast(6f)
+    val pulseLen = (total * FLOW_PULSE_FRACTION).coerceAtLeast(3.5f)
     // Head sweeps from -pulseLen (just off the top) to total, so the pulse enters and
     // exits cleanly each cycle instead of popping into existence mid-path.
     val headDist = phase * (total + pulseLen) - pulseLen
@@ -542,7 +542,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawFlowPulse(
 
         // Glow halo: wide, very transparent, drawn first so the core sits on top.
         drawLine(
-            color = color.copy(alpha = alpha * 0.25f),
+            color = color.copy(alpha = alpha * 0.16f),
             start = p0,
             end = p1,
             strokeWidth = FLOW_GLOW_WIDTH,
