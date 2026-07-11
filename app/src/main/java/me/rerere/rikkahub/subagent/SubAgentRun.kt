@@ -48,6 +48,9 @@ data class SubAgentRun(
     // Phase D — subtree cost-guard signals.
     val subtreeTokenWarning: Boolean = false, // set when subtree hits 80% of cap
     val subtreeTokenCancelled: Boolean = false, // set when subtree hits 100% of cap
+    // Intermediate progress note published by the worker via subagent_report_progress.
+    // Updated live while the worker is RUNNING so the parent can monitor without polling.
+    val progressNote: String? = null,
 )
 
 @Serializable

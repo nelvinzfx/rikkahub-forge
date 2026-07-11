@@ -44,6 +44,7 @@ private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject =
     if (run.subtreeTokenWarning) put("subtree_token_warning", true)
     if (run.subtreeTokenCancelled) put("subtree_token_cancelled", true)
     if (run.conversationId != null) put("conversation_id", run.conversationId)
+    if (run.progressNote != null) put("progress_note", run.progressNote)
 }
 
 /**
@@ -248,11 +249,53 @@ fun subagentDispatchContinueTool(
     },
 )
 
+/**
+ * Phase 33 — let a worker publish a short progress note that the parent can see
+ * via subagent_list / subagent_get without polling the worker conversation.
+ */
+fun subagentReportProgressTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext =
+        me.rerere.rikkahub.data.ai.tools.ToolInvocationContext.EMPTY,
+): Tool = Tool(
+    name = "subagent_report_progress",
+    description = """
+        Publish a short progress note (max 500 chars) visible to the parent agent via
+        subagent_list and subagent_get. Call this between tool steps so the parent can
+        monitor progress without polling your conversation. Example: "Found 14 models,
+        now fetching pricing". This is fire-and-forget — it does not block or wait.
+    """.trimIndent(),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("note", buildJsonObject { put("type", "string") })
+            },
+            required = listOf("note"),
+        )
+    },
+    needsApproval = { false },
+    execute = { args ->
+        val note = args.jsonObject["note"]?.jsonPrimitive?.contentOrNull
+            ?: return@Tool errEnv("invalid_note", "note is required")
+        val convId = callerContext.callerConversationId
+            ?: return@Tool errEnv("no_context", "no calling conversation context")
+        // Find the run whose conversationId matches the caller's conversation.
+        val run = registry.list(activeOnly = false).firstOrNull { it.conversationId == convId }
+            ?: return@Tool errEnv("not_a_worker", "this conversation is not a sub-agent worker")
+        registry.reportProgress(run.id, note)
+        listOf(UIMessagePart.Text(buildJsonObject {
+            put("ok", true)
+            put("run_id", run.id)
+        }.toString()))
+    },
+)
+
 fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
     name = "subagent_list",
     description = """
         List sub-agent runs visible to this assistant. Set active_only=true to omit
-        terminal runs. Read-only.
+        terminal runs. Running runs include a progress_note field if the worker has
+        published one via subagent_report_progress. Read-only.
     """.trimIndent().replace("\n", " "),
     parameters = {
         InputSchema.Obj(
@@ -273,6 +316,7 @@ fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
                 if (it.modelId != null) put("model_id", it.modelId)
                 put("started_at_ms", it.startedAtMs)
                 put("trip_count", it.tripCount)
+                if (it.progressNote != null) put("progress_note", it.progressNote)
             } }
         }
         listOf(UIMessagePart.Text(buildJsonObject {

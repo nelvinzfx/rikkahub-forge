@@ -49,6 +49,19 @@ class SubAgentRegistry {
         activeJobs[id] = job
     }
 
+    /**
+     * Update the progress note on a RUNNING run. No-op if the run is terminal or missing.
+     * The note is surfaced via [SubAgentRun.progressNote] and visible to the parent
+     * through subagent_list / subagent_get without polling the worker conversation.
+     */
+    fun reportProgress(id: String, note: String) {
+        update(id) { run ->
+            if (run.status == SubAgentStatus.RUNNING || run.status == SubAgentStatus.PENDING) {
+                run.copy(progressNote = note.take(500))
+            } else run
+        }
+    }
+
     fun get(id: String): SubAgentRun? = _runs.value[id]
 
     fun list(activeOnly: Boolean): List<SubAgentRun> {
