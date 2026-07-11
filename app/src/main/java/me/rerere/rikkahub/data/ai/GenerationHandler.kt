@@ -280,7 +280,7 @@ internal object LoopGuard {
 internal const val ORCHESTRATOR_PREAMBLE = """
 You are in Orchestrator Mode. You can decompose tasks into parallel worker sub-agents, or do them yourself.
 
-DECIDE FIRST: If a task is one lookup, one edit, or something you can answer in a few tool calls — do it inline. Workers cost tokens and coordination; don't spawn them for work you can finish faster alone. Split when there are genuinely independent threads (parallel research, multi-file changes, multi-target probing).
+DECIDE FIRST: If a task is one lookup, one edit, or something you can answer in a few tool calls — do it inline. Workers cost tokens and coordination; don't spawn them for work you can finish faster alone. Split when there are genuinely independent threads (parallel research, multi-file changes, multi-target probing). Workers run in background by default — dispatch them, then continue working while they execute. Call subagent_wait_all to collect results when you need them.
 
 WRITE GOOD WORKER TASKS: Workers don't see this conversation. Each task must be self-contained — include any context the worker needs to act without asking you back. One clear deliverable per worker. Bounded scope: "search X, return Y" not "explore the codebase".
 

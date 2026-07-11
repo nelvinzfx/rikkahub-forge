@@ -67,8 +67,9 @@ fun subagentDispatchTool(
 
         Pass a clear, self-contained task — the sub-agent doesn't see your conversation,
         so restate any context it needs. Pass a short label so the user can recognise
-        the running sub-agent. For long-running work, set run_in_background=true and
-        poll with subagent_get; otherwise foreground (default) blocks until terminal.
+        the running sub-agent. Workers run in background by default — you continue
+        working while they execute. Set run_in_background=false for foreground (blocks
+        until terminal). Poll with subagent_get or call subagent_wait_all to collect.
 
         model_id: call subagent_list_models first to find available models across all
         providers, then pass the UUID here. Omit to inherit the current model.
@@ -134,7 +135,7 @@ fun subagentDispatchTool(
             systemPrompt = params["system_prompt"]?.jsonPrimitive?.contentOrNull,
             tools = params["tools"]?.let { runCatching { it.jsonArray }.getOrNull() }
                 ?.mapNotNull { it.jsonPrimitive.contentOrNull },
-            runInBackground = params["run_in_background"]?.jsonPrimitive?.booleanOrNull ?: false,
+            runInBackground = params["run_in_background"]?.jsonPrimitive?.booleanOrNull ?: true,
             timeoutSeconds = params["timeout_seconds"]?.jsonPrimitive?.intOrNull
                 ?: SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
             maxTrips = params["max_trips"]?.jsonPrimitive?.intOrNull
@@ -257,7 +258,9 @@ fun subagentDispatchBatchTool(
     name = "subagent_dispatch_batch",
     description = """
         Dispatch multiple worker sub-agents in one call. Use for parallel decomposition —
-        spawned workers run concurrently, then call subagent_wait_all to collect results.
+        spawned workers run concurrently in background by default, then call
+        subagent_wait_all to collect results. Set run_in_background=false per worker
+        to block until that worker finishes.
         Each entry in the workers array accepts the same fields as subagent_dispatch
         (task, label, model_id, system_prompt, tools, run_in_background, timeout_seconds,
         max_trips, include_memory, include_soul, include_recent_chats). task is required.
