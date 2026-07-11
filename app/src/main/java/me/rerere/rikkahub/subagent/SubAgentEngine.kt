@@ -351,6 +351,9 @@ class SubAgentEngine(
                 Unit
             }
             if (completed == null) {
+                val partialResult = harvestFinalText(conv.id)
+                val (tokensIn, tokensOut, trips) = harvestUsage(conv.id)
+                registry.update(runId) { it.copy(result = partialResult, tokensIn = tokensIn, tokensOut = tokensOut, tripCount = trips) }
                 markTerminal(runId, SubAgentStatus.TIMED_OUT, "exceeded ${request.timeoutSeconds}-second cap")
                 notifyParentIfBackground(parentChatId, registry.get(runId))
                 return
@@ -419,10 +422,26 @@ class SubAgentEngine(
     }
 
     private suspend fun markTerminal(runId: String, status: SubAgentStatus, error: String?) {
+        // Harvest any partial work from the worker conversation so the parent can
+        // inspect what was completed before the failure and decide whether to
+        // continue it rather than re-running the same work from scratch.
+        val run = registry.get(runId)
+        val partialResult = run?.conversationId
+            ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            ?.let { harvestFinalText(it) }
+            .orEmpty()
+        val (tokensIn, tokensOut, trips) = run?.conversationId
+            ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
+            ?.let { harvestUsage(it) }
+            ?: Triple(0L, 0L, 0)
         registry.update(runId) {
             it.copy(
                 status = status,
                 error = error,
+                result = partialResult.ifEmpty { null },
+                tokensIn = tokensIn,
+                tokensOut = tokensOut,
+                tripCount = trips,
                 finishedAtMs = System.currentTimeMillis(),
             )
         }

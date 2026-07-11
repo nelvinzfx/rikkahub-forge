@@ -43,6 +43,7 @@ private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject =
     if (run.orchestratorRunId != null) put("orchestrator_run_id", run.orchestratorRunId)
     if (run.subtreeTokenWarning) put("subtree_token_warning", true)
     if (run.subtreeTokenCancelled) put("subtree_token_cancelled", true)
+    if (run.conversationId != null) put("conversation_id", run.conversationId)
 }
 
 /**
@@ -79,6 +80,12 @@ fun subagentDispatchTool(
         Concurrency caps: each assistant has its own (default 3, configurable 1-8) and
         there's a global cap of 16 across all assistants. Over-cap dispatches fail with
         a clear error — back off and retry, or wait for a slot.
+
+        Workers that fail, time out, or are cancelled still harvest whatever text they
+        produced before termination — check their result via subagent_get or
+        subagent_wait_all before re-running the task. You can also dispatch a follow-up
+        worker targeting the original worker's conversation (use the conversation_id
+        from the run record) to continue its work.
 
         Approval-required: every dispatch needs explicit confirmation. Eligible for
         Always Allow if the user trusts the assistant to delegate freely.
@@ -190,7 +197,7 @@ fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
 
 fun subagentGetTool(registry: SubAgentRegistry): Tool = Tool(
     name = "subagent_get",
-    description = "Fetch the full run record for a sub-agent by id. Read-only.".trimIndent(),
+    description = "Fetch the full run record for a sub-agent by id. Read-only. Failed, timed-out, and cancelled runs include a partial result harvested from the worker conversation — inspect this before deciding to re-run the same task; the worker may have completed substantial work before the failure.".trimIndent(),
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
@@ -349,9 +356,9 @@ fun subagentWaitAllTool(registry: SubAgentRegistry): Tool = Tool(
     description = """
         Wait for one or more sub-agent runs to finish. Blocks until all given run ids
         reach a terminal status (SUCCEEDED/FAILED/TIMED_OUT/CANCELLED) or the timeout
-        expires. Returns the final status of each run. Use after subagent_dispatch_batch
-        or multiple subagent_dispatch calls to collect results in one step instead of
-        polling subagent_get repeatedly.
+        expires. Returns the final status of each run, including partial results from
+        failed/timed-out/cancelled workers — inspect these before re-running. Use after
+        subagent_dispatch_batch or multiple subagent_dispatch calls.
     """.trimIndent(),
     parameters = {
         InputSchema.Obj(
