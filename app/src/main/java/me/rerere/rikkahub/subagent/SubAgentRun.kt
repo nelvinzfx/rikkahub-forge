@@ -99,6 +99,12 @@ data class SubAgentRequest(
     val systemPrompt: String? = null,
     val tools: List<String>? = null,
     val runInBackground: Boolean = false,
+    // If non-null, the worker sends its first message into this existing conversation
+    // instead of creating a new one. Used by subagent_dispatch_continue to pick up
+    // where a previous worker left off. HeadlessConversations.mark is NOT set on a
+    // continue target — the call site (SubAgentEngine.executeContinueRun) handles
+    // lifecycle and registration separately.
+    val workerConversationId: String? = null,
     val timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
     val maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
     val label: String? = null,

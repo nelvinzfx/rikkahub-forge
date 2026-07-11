@@ -163,6 +163,91 @@ fun subagentDispatchTool(
     },
 )
 
+/**
+ * Phase 33 — dispatch a worker into an existing (failed/timed-out/cancelled) worker
+ * conversation so it can pick up where the previous run left off. The worker sees the
+ * full history of the prior attempt, including partial results, tool outputs, and errors.
+ */
+fun subagentDispatchContinueTool(
+    engine: SubAgentEngine,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext =
+        me.rerere.rikkahub.data.ai.tools.ToolInvocationContext.EMPTY,
+): Tool = Tool(
+    name = "subagent_dispatch_continue",
+    description = """
+        Dispatch a follow-up worker into an existing (failed/timed-out/cancelled) worker
+        conversation to continue its work. The new worker sees the full history of the
+        prior attempt. Use this instead of subagent_dispatch when a worker made partial
+        progress before failing — the new worker builds on the existing context rather
+        than restarting from scratch. Pass the conversation_id from the original run
+        record as worker_conversation_id. Accepts the same task/label/model/tools fields
+        as subagent_dispatch.
+    """.trimIndent(),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("worker_conversation_id", buildJsonObject { put("type", "string") })
+                put("task", buildJsonObject { put("type", "string") })
+                put("label", buildJsonObject { put("type", "string") })
+                put("model_id", buildJsonObject { put("type", "string") })
+                put("system_prompt", buildJsonObject { put("type", "string") })
+                put("tools", buildJsonObject {
+                    put("type", "array")
+                    put("items", buildJsonObject { put("type", "string") })
+                })
+                put("run_in_background", buildJsonObject { put("type", "boolean") })
+                put("timeout_seconds", buildJsonObject { put("type", "integer") })
+                put("max_trips", buildJsonObject { put("type", "integer") })
+                put("include_memory", buildJsonObject { put("type", "boolean") })
+                put("include_soul", buildJsonObject { put("type", "boolean") })
+                put("include_recent_chats", buildJsonObject { put("type", "boolean") })
+            },
+            required = listOf("worker_conversation_id", "task"),
+        )
+    },
+    needsApproval = { true },
+    execute = { args ->
+        if (callerContext.isHeadless &&
+            callerContext.callerConversationId?.let { SubAgentConversationTracker.lookup(it) } == null
+        ) {
+            return@Tool errEnv(
+                "no_recursion",
+                "sub-agent continue dispatch is not allowed from inside a headless run."
+            )
+        }
+        val params = args.jsonObject
+        val workerConversationId = params["worker_conversation_id"]?.jsonPrimitive?.contentOrNull
+            ?: return@Tool errEnv("invalid_id", "worker_conversation_id is required")
+        val task = params["task"]?.jsonPrimitive?.contentOrNull
+            ?: return@Tool errEnv("invalid_task", "task is required")
+        val result = engine.dispatchContinue(
+            parentAssistantId = callerContext.callerAssistantId.orEmpty(),
+            parentChatId = callerContext.callerConversationId,
+            workerConversationId = workerConversationId,
+            task = task,
+            label = params["label"]?.jsonPrimitive?.contentOrNull,
+            modelId = params["model_id"]?.jsonPrimitive?.contentOrNull,
+            systemPrompt = params["system_prompt"]?.jsonPrimitive?.contentOrNull,
+            tools = params["tools"]?.let { runCatching { it.jsonArray }.getOrNull() }
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull },
+            runInBackground = params["run_in_background"]?.jsonPrimitive?.booleanOrNull ?: true,
+            timeoutSeconds = params["timeout_seconds"]?.jsonPrimitive?.intOrNull
+                ?: SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
+            maxTrips = params["max_trips"]?.jsonPrimitive?.intOrNull
+                ?: SubAgentDefaults.DEFAULT_MAX_TRIPS,
+            includeMemory = params["include_memory"]?.jsonPrimitive?.booleanOrNull,
+            includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
+            includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
+        )
+        when (result) {
+            is SubAgentEngine.DispatchResult.Reject ->
+                return@Tool errEnv(result.error, result.detail)
+            is SubAgentEngine.DispatchResult.Ok ->
+                listOf(UIMessagePart.Text(encodeRun(result.run).toString()))
+        }
+    },
+)
+
 fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
     name = "subagent_list",
     description = """

@@ -899,6 +899,7 @@ class LocalTools(
             // ChatService / cron / workflow / external-automation know who's calling at the
             // moment they construct the tool list.
             tools.add(me.rerere.rikkahub.subagent.subagentDispatchTool(subAgentEngine, invocationContext))
+            tools.add(me.rerere.rikkahub.subagent.subagentDispatchContinueTool(subAgentEngine, invocationContext))
             tools.add(me.rerere.rikkahub.subagent.subagentListTool(subAgentRegistry))
             tools.add(me.rerere.rikkahub.subagent.subagentGetTool(subAgentRegistry))
             tools.add(me.rerere.rikkahub.subagent.subagentCancelTool(subAgentRegistry))

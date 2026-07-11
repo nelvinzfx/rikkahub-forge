@@ -246,6 +246,49 @@ class SubAgentEngine(
         }
     }
 
+    /**
+     * Dispatch a sub-agent into an existing worker conversation (continue a failed/
+     * timed-out/cancelled run). Behaves like a normal dispatch but reuses the target
+     * conversation instead of creating a new one. The worker sees the full history
+     * of the previous run, including any partial results, tool outputs, and errors.
+     *
+     * The target conversation is NOT re-marked as headless (it already is), and the
+     * conversation tracker is NOT re-registered (the original entry from the first
+     * dispatch suffices). The parent assistant's concurrency caps still apply.
+     */
+    suspend fun dispatchContinue(
+        parentAssistantId: String,
+        parentChatId: String?,
+        workerConversationId: String,
+        task: String,
+        label: String? = null,
+        modelId: String? = null,
+        systemPrompt: String? = null,
+        tools: List<String>? = null,
+        runInBackground: Boolean = true,
+        timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
+        maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
+        includeMemory: Boolean? = null,
+        includeSoul: Boolean? = null,
+        includeRecentChats: Boolean? = null,
+    ): DispatchResult {
+        val request = SubAgentRequest(
+            task = task,
+            modelId = modelId,
+            systemPrompt = systemPrompt,
+            tools = tools,
+            runInBackground = runInBackground,
+            timeoutSeconds = timeoutSeconds,
+            maxTrips = maxTrips,
+            label = label,
+            includeMemory = includeMemory,
+            includeSoul = includeSoul,
+            includeRecentChats = includeRecentChats,
+            workerConversationId = workerConversationId,
+        )
+        return dispatch(parentAssistantId, parentChatId, request)
+    }
+
     private suspend fun currentAssistantCap(parentAssistantId: String): Int {
         val asstUuid = runCatching { Uuid.parse(parentAssistantId) }.getOrNull() ?: return SubAgentDefaults.MAX_PER_ASSISTANT_CAP
         val settings = settingsStore.settingsFlow.first()
@@ -321,13 +364,28 @@ class SubAgentEngine(
             suppressRecentChats = suppressChats,
             enforceSubAgentPromptRules = true,
         )
-        conversationRepo.insertConversation(conv)
-        // Publish the hidden worker chat id as soon as it exists. The parent chip observes
-        // the registry and can open this exact conversation without exposing it in history.
-        registry.update(runId) { it.copy(conversationId = conv.id.toString()) }
-        chatService.initializeConversation(conv.id)
-        HeadlessConversations.mark(conv.id)
-        SubAgentConversationTracker.register(conv.id.toString(), runId, childDepth, childOrchestratorId)
+        val workerConvId = if (request.workerConversationId != null) {
+            val targetUuid = runCatching { Uuid.parse(request.workerConversationId) }.getOrNull()
+            if (targetUuid == null) {
+                markTerminal(runId, SubAgentStatus.FAILED, "invalid worker_conversation_id")
+                return
+            }
+            // Reuse the existing conversation. Do NOT re-insert, re-mark, or re-register
+            // — the conversation already exists from the original dispatch. Register the
+            // conversationId on the run record so the parent pill can still navigate to it.
+            registry.update(runId) { it.copy(conversationId = request.workerConversationId) }
+            chatService.initializeConversation(targetUuid)
+            targetUuid
+        } else {
+            conversationRepo.insertConversation(conv)
+            // Publish the hidden worker chat id as soon as it exists. The parent chip observes
+            // the registry and can open this exact conversation without exposing it in history.
+            registry.update(runId) { it.copy(conversationId = conv.id.toString()) }
+            chatService.initializeConversation(conv.id)
+            HeadlessConversations.mark(conv.id)
+            SubAgentConversationTracker.register(conv.id.toString(), runId, childDepth, childOrchestratorId)
+            conv.id
+        }
         try {
             // Prepend a wrap-up instruction. Some models naturally write a summary paragraph
             // after their tool-call sequence; others stop after the last tool result and emit
@@ -339,7 +397,7 @@ class SubAgentEngine(
                 appendLine()
                 append("When you have finished, end with one short paragraph in plain text that summarises what you did and what you found. Do NOT stop on a tool call — finish with assistant text. The dispatcher harvests only your final text reply, so this paragraph is the entire response the parent sees.")
             }
-            chatService.sendMessage(conv.id, listOf(UIMessagePart.Text(taskWithWrapup)))
+            chatService.sendMessage(workerConvId, listOf(UIMessagePart.Text(taskWithWrapup)))
             // The naive form `withTimeoutOrNull { …first { it == null } }` followed by a
             // `finished == null` check is BROKEN: `.first { it == null }` returns the matched
             // value — which IS null on successful completion (the Job? went to null when the
@@ -347,12 +405,12 @@ class SubAgentEngine(
             // every sub-agent looked TIMED_OUT despite actually finishing. Use a Unit sentinel
             // so the two outcomes are distinguishable.
             val completed: Unit? = withTimeoutOrNull(request.timeoutSeconds * 1000L) {
-                chatService.getGenerationJobStateFlow(conv.id).first { it == null }
+                chatService.getGenerationJobStateFlow(workerConvId).first { it == null }
                 Unit
             }
             if (completed == null) {
-                val partialResult = harvestFinalText(conv.id)
-                val (tokensIn, tokensOut, trips) = harvestUsage(conv.id)
+                val partialResult = harvestFinalText(workerConvId)
+                val (tokensIn, tokensOut, trips) = harvestUsage(workerConvId)
                 registry.update(runId) { it.copy(result = partialResult, tokensIn = tokensIn, tokensOut = tokensOut, tripCount = trips) }
                 markTerminal(runId, SubAgentStatus.TIMED_OUT, "exceeded ${request.timeoutSeconds}-second cap")
                 notifyParentIfBackground(parentChatId, registry.get(runId))
@@ -362,12 +420,12 @@ class SubAgentEngine(
             // we read the latest persisted state of the conversation and concatenate any
             // text parts from the last assistant message. This mirrors how the
             // CronJobWorker treats LLM-mode jobs.
-            val finalText = harvestFinalText(conv.id)
+            val finalText = harvestFinalText(workerConvId)
             // Phase 30 (Orchestrator Mode Phase A) - token telemetry. Sum prompt/
             // completion tokens across the worker conversation's selected message branch so
             // Phase D's subtree cap has real numbers. tripCount = assistant messages = LLM
             // round-trips. Best-effort: a missing/empty conversation just yields zeros.
-            val (tokensIn, tokensOut, trips) = harvestUsage(conv.id)
+            val (tokensIn, tokensOut, trips) = harvestUsage(workerConvId)
             registry.update(runId) {
                 it.copy(
                     status = SubAgentStatus.SUCCEEDED,
