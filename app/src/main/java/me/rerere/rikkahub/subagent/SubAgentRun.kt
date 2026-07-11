@@ -73,7 +73,7 @@ object SubAgentDefaults {
     const val MAX_LABEL_LENGTH = 60
     const val GLOBAL_CONCURRENCY_CAP = 16
     const val MIN_PER_ASSISTANT_CAP = 1
-    const val MAX_PER_ASSISTANT_CAP = 8
+    const val MAX_PER_ASSISTANT_CAP = 10
     const val REGISTRY_LRU_CAP = 50
 
     /** Default system prompt used when the assistant's per-sub-agent prompt is empty. */
