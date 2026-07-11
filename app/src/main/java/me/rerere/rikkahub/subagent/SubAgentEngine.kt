@@ -492,12 +492,18 @@ class SubAgentEngine(
             }
         }.trimEnd()
 
+        // Use sendMessageIfIdle so the wake message never cancels a user-initiated
+        // generation that started between the "parent idle" check and the sendMessage
+        // call. Wait up to 5 minutes for the parent to be idle; after that, drop the
+        // notification rather than interrupting a human.
         runCatching {
             withTimeoutOrNull(5 * 60_000L) {
-                chatService.getGenerationJobStateFlow(parentUuid).first { it == null }
+                while (!chatService.sendMessageIfIdle(parentUuid, listOf(UIMessagePart.Text(message)))) {
+                    chatService.getGenerationJobStateFlow(parentUuid).first { it == null }
+                    Unit
+                }
                 Unit
             }
-            chatService.sendMessage(parentUuid, listOf(UIMessagePart.Text(message)))
         }.onFailure {
             Log.w(TAG, "failed to notify parent $parentChatId of subagent completion", it)
         }

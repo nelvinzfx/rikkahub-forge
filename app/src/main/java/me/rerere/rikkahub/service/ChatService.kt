@@ -444,6 +444,32 @@ class ChatService(
         }
     }
 
+    /**
+     * Send [content] to [conversationId] ONLY if the conversation is idle (no generation
+     * in flight). Returns true if the message was sent, false if the conversation was
+     * busy (the content was NOT appended — the caller should retry, drop, or enqueue).
+     *
+     * Without this gate, background completion callbacks (sub-agent wake, cron result)
+     * race with the user's own [sendMessage] call: the background job cancels the
+     * user-initiated generation, or the user's sendMessage cancels the background wake
+     * before it finishes, producing silent message loss in both directions.
+     *
+     * The check is a single atomic read of [ConversationSession.generationJob] so the
+     * caller does not need a separate busy-wait-and-retry loop. On success the message is
+     * sent with [sendMessage] (which also cancels any previous job — but since we just
+     * confirmed the session is idle, cancel() is a no-op).
+     */
+    fun sendMessageIfIdle(
+        conversationId: Uuid,
+        content: List<UIMessagePart>,
+        answer: Boolean = true,
+    ): Boolean {
+        val session = sessions[conversationId] ?: return false
+        if (session.getJob()?.isActive == true) return false
+        sendMessage(conversationId, content, answer)
+        return true
+    }
+
     // ---- 发送消息 ----
 
     fun sendMessage(
