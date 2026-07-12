@@ -201,6 +201,7 @@ class SubAgentEngine(
             modelId = cleaned.modelId,
             tools = cleaned.tools,
             runInBackground = cleaned.runInBackground,
+            notifyParent = cleaned.notifyParent,
             timeoutSeconds = cleaned.timeoutSeconds,
             maxTrips = cleaned.maxTrips,
             status = SubAgentStatus.PENDING,
@@ -266,6 +267,7 @@ class SubAgentEngine(
         systemPrompt: String? = null,
         tools: List<String>? = null,
         runInBackground: Boolean = true,
+        notifyParent: Boolean = false,
         timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
         maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
         includeMemory: Boolean? = null,
@@ -284,6 +286,7 @@ class SubAgentEngine(
             includeMemory = includeMemory,
             includeSoul = includeSoul,
             includeRecentChats = includeRecentChats,
+            notifyParent = notifyParent,
             workerConversationId = workerConversationId,
         )
         return dispatch(parentAssistantId, parentChatId, request)
@@ -413,7 +416,9 @@ class SubAgentEngine(
                 val (tokensIn, tokensOut, trips) = harvestUsage(workerConvId)
                 registry.update(runId) { it.copy(result = partialResult, tokensIn = tokensIn, tokensOut = tokensOut, tripCount = trips) }
                 markTerminal(runId, SubAgentStatus.TIMED_OUT, "exceeded ${request.timeoutSeconds}-second cap")
-                notifyParentIfBackground(parentChatId, registry.get(runId))
+                if (registry.get(runId)?.notifyParent == true) {
+                    notifyParentIfBackground(parentChatId, registry.get(runId))
+                }
                 return
             }
             // Harvest the assistant's final text from the conversation. Best-effort —
@@ -465,13 +470,17 @@ class SubAgentEngine(
             ledgerIds.remove(runId)?.let {
                 agentRunRepo.markTerminal(it, AgentRunStatus.succeeded)
             }
-            notifyParentIfBackground(parentChatId, registry.get(runId))
+            if (registry.get(runId)?.notifyParent == true) {
+                notifyParentIfBackground(parentChatId, registry.get(runId))
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "sub-agent run failed", t)
             // CancellationException → CANCELLED, anything else → FAILED.
             val terminal = if (t is kotlinx.coroutines.CancellationException) SubAgentStatus.CANCELLED else SubAgentStatus.FAILED
             markTerminal(runId, terminal, "${t::class.simpleName}: ${t.message.orEmpty()}")
-            notifyParentIfBackground(parentChatId, registry.get(runId))
+            if (registry.get(runId)?.notifyParent == true) {
+                notifyParentIfBackground(parentChatId, registry.get(runId))
+            }
         } finally {
             HeadlessConversations.unmark(conv.id)
             SubAgentConversationTracker.unregister(conv.id.toString())

@@ -25,6 +25,7 @@ data class SubAgentRun(
     val modelId: String?,              // null = inherited from parent
     val tools: List<String>?,          // null = inherited from parent
     val runInBackground: Boolean,
+    val notifyParent: Boolean = false,
     val timeoutSeconds: Int,
     val maxTrips: Int,
     val status: SubAgentStatus,
@@ -112,6 +113,10 @@ data class SubAgentRequest(
     val maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
     val label: String? = null,
     // Phase 30 (Orchestrator Mode Phase B) — per-dispatch inclusion overrides. Null = use
+    // When true, the engine posts a synthetic user message into the parent conversation
+    // when the worker finishes, waking the parent agent. Default false — the parent is
+    // expected to collect results via subagent_wait_all or subagent_get instead.
+    val notifyParent: Boolean = false,
     // the parent assistant's default (subAgentDefaultInclude*). Boolean = override.
     val includeMemory: Boolean? = null,
     val includeSoul: Boolean? = null,

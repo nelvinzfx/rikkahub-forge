@@ -89,6 +89,11 @@ fun subagentDispatchTool(
         worker targeting the original worker's conversation (use the conversation_id
         from the run record) to continue its work.
 
+        Set notify_parent=true to have the engine post a synthetic user message into the
+        parent conversation when the worker finishes. Default false — use subagent_wait_all
+        or subagent_get to collect results explicitly instead. Only enable notify_parent
+        for long-running workers you won't be polling.
+
         Approval-required: every dispatch needs explicit confirmation. Eligible for
         Always Allow if the user trusts the assistant to delegate freely.
     """.trimIndent(),
@@ -109,6 +114,7 @@ fun subagentDispatchTool(
                 put("include_memory", buildJsonObject { put("type", "boolean") })
                 put("include_soul", buildJsonObject { put("type", "boolean") })
                 put("include_recent_chats", buildJsonObject { put("type", "boolean") })
+                put("notify_parent", buildJsonObject { put("type", "boolean") })
             },
             required = listOf("task"),
         )
@@ -145,6 +151,7 @@ fun subagentDispatchTool(
             includeMemory = params["include_memory"]?.jsonPrimitive?.booleanOrNull,
             includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
             includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
+            notifyParent = params["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
         )
         // The engine's recursion guard checks `HeadlessConversations.isHeadless(parentChatId)`
         // — if the calling conversation is itself headless (cron / sub-agent / workflow /
@@ -202,6 +209,7 @@ fun subagentDispatchContinueTool(
                 put("include_memory", buildJsonObject { put("type", "boolean") })
                 put("include_soul", buildJsonObject { put("type", "boolean") })
                 put("include_recent_chats", buildJsonObject { put("type", "boolean") })
+                put("notify_parent", buildJsonObject { put("type", "boolean") })
             },
             required = listOf("worker_conversation_id", "task"),
         )
@@ -239,6 +247,7 @@ fun subagentDispatchContinueTool(
             includeMemory = params["include_memory"]?.jsonPrimitive?.booleanOrNull,
             includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
             includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
+            notifyParent = params["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
         )
         when (result) {
             is SubAgentEngine.DispatchResult.Reject ->
@@ -389,7 +398,8 @@ fun subagentDispatchBatchTool(
         Dispatch multiple worker sub-agents in one call. Use for parallel decomposition —
         spawned workers run concurrently in background by default, then call
         subagent_wait_all to collect results. Set run_in_background=false per worker
-        to block until that worker finishes.
+        to block until that worker finishes. Each worker entry also accepts
+        notify_parent (default false) to wake the parent with a synthetic message.
         Each entry in the workers array accepts the same fields as subagent_dispatch
         (task, label, model_id, system_prompt, tools, run_in_background, timeout_seconds,
         max_trips, include_memory, include_soul, include_recent_chats). task is required.
@@ -444,6 +454,7 @@ fun subagentDispatchBatchTool(
                 includeMemory = obj["include_memory"]?.jsonPrimitive?.booleanOrNull,
                 includeSoul = obj["include_soul"]?.jsonPrimitive?.booleanOrNull,
                 includeRecentChats = obj["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
+                notifyParent = obj["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
             )
             when (val res = engine.dispatch(parentAssistantId, parentChatId, request)) {
                 is SubAgentEngine.DispatchResult.Reject ->
