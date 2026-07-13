@@ -41,6 +41,7 @@ import me.rerere.rikkahub.data.model.NodeFavoriteTarget
 import me.rerere.rikkahub.data.repository.ConversationDraftRepository
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FavoriteRepository
+import me.rerere.rikkahub.costguards.TokenBudgetTracker
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
@@ -87,6 +88,12 @@ class ChatVM(
     val conversationJobs = chatService
         .getConversationJobs()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    // Context window usage: aggregate token usage from conversation messages.
+    // Updated reactively as conversation state changes.
+    val tokenUsage: StateFlow<TokenBudgetTracker.Totals> =
+        conversation.map { conv -> TokenBudgetTracker.aggregate(conv) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, TokenBudgetTracker.Totals(0, 0, 0, 0, 0))
 
     // Phase E — sub-agent runs for THIS conversation (parentChatId matches). The chip row
     // in ChatList collects this to show live worker status with cancel buttons.

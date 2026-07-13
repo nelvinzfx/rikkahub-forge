@@ -80,6 +80,7 @@ import me.rerere.rikkahub.data.model.OrchestratorMode
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.ai.ChatInput
+import me.rerere.rikkahub.ui.components.ai.ContextBar
 import me.rerere.rikkahub.ui.components.ai.FilesPicker
 import me.rerere.rikkahub.ui.components.ai.completion.WorkspaceCompletionProvider
 import me.rerere.rikkahub.ui.components.ai.useCropLauncher
@@ -299,6 +300,7 @@ private fun ChatPageContent(
 ) {
     val scope = rememberCoroutineScope()
     val subAgentRuns by vm.subAgentRuns.collectAsStateWithLifecycle()
+    val tokenUsage by vm.tokenUsage.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
     val context = LocalContext.current
     val workspaceRepository: WorkspaceRepository = koinInject()
@@ -348,6 +350,8 @@ private fun ChatPageContent(
                     bigScreen = bigScreen,
                     drawerState = drawerState,
                     previewMode = previewMode,
+                    contextLength = currentChatModel?.contextLength,
+                    tokensUsed = tokenUsage.totalTokens,
                     onNewChat = {
                         navigateToChatPage(navController)
                     },
@@ -752,6 +756,8 @@ private fun TopBar(
     drawerState: DrawerState,
     bigScreen: Boolean,
     previewMode: Boolean,
+    contextLength: Int?,
+    tokensUsed: Long,
     onClickMenu: () -> Unit,
     onNewChat: () -> Unit,
     onUpdateTitle: (String) -> Unit
@@ -812,6 +818,13 @@ private fun TopBar(
             }
         },
         actions = {
+            ContextBar(
+                contextLength = contextLength,
+                tokensUsed = tokensUsed,
+                modifier = Modifier
+                    .width(120.dp)
+                    .padding(end = 4.dp),
+            )
             IconButton(
                 onClick = {
                     onClickMenu()
