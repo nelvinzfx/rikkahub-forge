@@ -79,7 +79,7 @@ sealed class BuiltInTools {
  */
 fun deterministicModelId(providerId: Uuid, modelId: String): Uuid {
     val name = "$providerId::$modelId".toByteArray(Charsets.UTF_8)
-    return Uuid.fromJavaUUID(JavaUUID.nameUUIDFromBytes(name))
+    return Uuid.parse(JavaUUID.nameUUIDFromBytes(name).toString())
 }
 
 
