@@ -806,6 +806,23 @@ fun List<ProviderSetting>.findModelById(uuid: Uuid): Model? {
     return null
 }
 
+/**
+ * Fallback lookup by modelId string (e.g. "gpt-4o"). Used when the original
+ * Uuid reference is stale -- e.g. a model was deselected then reselected with
+ * a new deterministic Uuid, breaking older conversations that still reference
+ * the old random Uuid. Matching by string restores icon and display name.
+ */
+fun List<ProviderSetting>.findModelByModelId(modelId: String): Model? {
+    this.forEach { setting ->
+        setting.models.forEach { model ->
+            if (model.modelId == modelId) {
+                return model
+            }
+        }
+    }
+    return null
+}
+
 fun Settings.getCurrentChatModel(): Model? {
     return findModelById(this.getCurrentAssistant().chatModelId ?: this.chatModelId)
 }

@@ -74,6 +74,7 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
@@ -795,6 +796,7 @@ private fun TopBar(
                 Column {
                     val assistant = settings.getCurrentAssistant()
                     val model = settings.getCurrentChatModel()
+                        ?: conversation.currentMessages.mapNotNull { it.modelId }.lastOrNull()?.let { settings.providers.findModelById(it) }
                     val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
                     Text(
                         text = conversation.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
@@ -835,6 +837,7 @@ private fun TopBar(
         },
     )
     val gaugeModel = settings.getCurrentChatModel()
+        ?: conversation.currentMessages.mapNotNull { it.modelId }.lastOrNull()?.let { settings.providers.findModelById(it) }
     val usedTokens = remember(conversation) { computeContextUsage(conversation) }
     ContextWindowGauge(
         usedTokens = usedTokens,
