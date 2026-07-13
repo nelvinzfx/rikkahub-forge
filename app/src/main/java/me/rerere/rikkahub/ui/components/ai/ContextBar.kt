@@ -26,10 +26,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Offset
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 @Composable
 fun ContextBar(
@@ -99,8 +100,8 @@ fun ContextBar(
                         .background(
                             Brush.horizontalGradient(
                                 colors = listOf(primary, secondary, error),
-                                start = Offset(0f, 0f),
-                                end = Offset(trackPx, 0f),
+                                startX = 0f,
+                                endX = trackPx,
                             ),
                         ),
                 )
@@ -156,8 +157,8 @@ fun ContextBar(
                         .background(
                             Brush.horizontalGradient(
                                 colors = listOf(primary, secondary, primary),
-                                start = Offset(0f, 0f),
-                                end = Offset(trackPx, 0f),
+                                startX = 0f,
+                                endX = trackPx,
                             ),
                         ),
                 )
