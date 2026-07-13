@@ -45,6 +45,7 @@ private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject =
     if (run.subtreeTokenCancelled) put("subtree_token_cancelled", true)
     if (run.conversationId != null) put("conversation_id", run.conversationId)
     if (run.progressNote != null) put("progress_note", run.progressNote)
+    if (run.reasoningLevel != null) put("reasoning_level", run.reasoningLevel)
 }
 
 /**
@@ -248,6 +249,9 @@ fun subagentDispatchContinueTool(
             includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
             includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
             notifyParent = params["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
+            reasoningLevel = params["reasoning_level"]?.jsonPrimitive?.contentOrNull?.let {
+                runCatching { me.rerere.ai.core.ReasoningLevel.valueOf(it.uppercase()) }.getOrNull()
+            },
         )
         when (result) {
             is SubAgentEngine.DispatchResult.Reject ->

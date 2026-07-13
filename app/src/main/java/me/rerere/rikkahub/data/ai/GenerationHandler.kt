@@ -347,6 +347,7 @@ class GenerationHandler(
         suppressRecentChats: Boolean = false,
         enforceSubAgentPromptRules: Boolean = false,
         orchestratorMode: OrchestratorMode = OrchestratorMode.OFF,
+        reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -482,6 +483,7 @@ class GenerationHandler(
                         suppressRecentChats = suppressRecentChats,
                         enforceSubAgentPromptRules = enforceSubAgentPromptRules,
                         orchestratorMode = orchestratorMode,
+                        reasoningLevelOverride = reasoningLevelOverride,
                     )
                 } catch (t: Throwable) {
                     // CancellationException is honoured verbatim — stopGeneration has its
@@ -1004,6 +1006,7 @@ class GenerationHandler(
         suppressRecentChats: Boolean = false,
         enforceSubAgentPromptRules: Boolean = false,
         orchestratorMode: OrchestratorMode = OrchestratorMode.OFF,
+        reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
     ) {
         val internalMessages = buildList {
             // Conversation-level system prompt override (upstream): when the assistant
@@ -1090,7 +1093,12 @@ class GenerationHandler(
             topP = assistant.topP,
             maxTokens = assistant.maxTokens,
             tools = tools,
-            reasoningLevel = assistant.reasoningLevel,
+            reasoningLevel = when {
+                reasoningLevelOverride != null -> reasoningLevelOverride
+                !enforceSubAgentPromptRules && orchestratorMode != OrchestratorMode.OFF ->
+                    assistant.reasoningLevel.coerceAtMost(me.rerere.ai.core.ReasoningLevel.XHIGH)
+                else -> assistant.reasoningLevel
+            },
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
                 addAll(model.customHeaders)

@@ -477,6 +477,7 @@ class ChatService(
         content: List<UIMessagePart>,
         answer: Boolean = true,
         orchestratorOverride: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
+        reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
     ) {
         if (content.isEmptyInputMessage()) return
 
@@ -537,7 +538,7 @@ class ChatService(
 
                 // 开始补全 — only if router didn't handle the turn
                 if (answer && !routedHandled) {
-                    handleMessageComplete(conversationId, orchestratorMode = turnOrchestratorMode)
+                    handleMessageComplete(conversationId, orchestratorMode = turnOrchestratorMode, reasoningLevelOverride = reasoningLevelOverride)
                 }
 
                 _generationDoneFlow.emit(conversationId)
@@ -867,6 +868,7 @@ class ChatService(
         conversationId: Uuid,
         messageRange: ClosedRange<Int>? = null,
         orchestratorMode: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
+        reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
     ) {
         val settings = settingsStore.settingsFlow.first()
         // Resolve the assistant from this conversation's own assistantId — the global
@@ -1001,6 +1003,7 @@ class ChatService(
                 suppressRecentChats = conversation.suppressRecentChats,
                 enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
                 orchestratorMode = effectiveOrchestratorMode,
+                reasoningLevelOverride = reasoningLevelOverride,
                 memories = memoryRepository.getCoreMemories(
                   assistantId = if (assistant.useGlobalMemory) {
                       MemoryRepository.GLOBAL_MEMORY_ID

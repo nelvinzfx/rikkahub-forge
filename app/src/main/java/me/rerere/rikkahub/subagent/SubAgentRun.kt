@@ -26,6 +26,7 @@ data class SubAgentRun(
     val tools: List<String>?,          // null = inherited from parent
     val runInBackground: Boolean,
     val notifyParent: Boolean = false,
+    val reasoningLevel: String? = null,   // null = inherited from assistant
     val timeoutSeconds: Int,
     val maxTrips: Int,
     val status: SubAgentStatus,
@@ -121,6 +122,9 @@ data class SubAgentRequest(
     val includeMemory: Boolean? = null,
     val includeSoul: Boolean? = null,
     val includeRecentChats: Boolean? = null,
+    // Reasoning level override for this worker. Null = resolve from assistant's
+    // subAgentReasoningLevel, then fall back to ReasoningLevel.AUTO.
+    val reasoningLevel: me.rerere.ai.core.ReasoningLevel? = null,
 )
 
 object SubAgentRequestValidator {

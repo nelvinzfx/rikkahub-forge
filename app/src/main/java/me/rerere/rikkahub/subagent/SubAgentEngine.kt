@@ -202,6 +202,7 @@ class SubAgentEngine(
             tools = cleaned.tools,
             runInBackground = cleaned.runInBackground,
             notifyParent = cleaned.notifyParent,
+            reasoningLevel = cleaned.reasoningLevel?.name,
             timeoutSeconds = cleaned.timeoutSeconds,
             maxTrips = cleaned.maxTrips,
             status = SubAgentStatus.PENDING,
@@ -268,6 +269,7 @@ class SubAgentEngine(
         tools: List<String>? = null,
         runInBackground: Boolean = true,
         notifyParent: Boolean = false,
+        reasoningLevel: me.rerere.ai.core.ReasoningLevel? = null,
         timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
         maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
         includeMemory: Boolean? = null,
@@ -287,6 +289,7 @@ class SubAgentEngine(
             includeSoul = includeSoul,
             includeRecentChats = includeRecentChats,
             notifyParent = notifyParent,
+            reasoningLevel = reasoningLevel,
             workerConversationId = workerConversationId,
         )
         return dispatch(parentAssistantId, parentChatId, request)
@@ -348,6 +351,9 @@ class SubAgentEngine(
                 chosenModelId = null
             }
         }
+        val workerReasoningLevel = request.reasoningLevel
+            ?: parentAssistant?.subAgentReasoningLevel
+            ?: me.rerere.ai.core.ReasoningLevel.AUTO
         val workerSystemPrompt = (request.systemPrompt ?: parentAssistant?.subAgentSystemPrompt)
             ?.takeIf { it.isNotBlank() }
         // Phase B — resolve include_* args against assistant defaults. suppress = !(include).
@@ -400,7 +406,11 @@ class SubAgentEngine(
                 appendLine()
                 append("When you have finished, end with one short paragraph in plain text that summarises what you did and what you found. Do NOT stop on a tool call — finish with assistant text. The dispatcher harvests only your final text reply, so this paragraph is the entire response the parent sees.")
             }
-            chatService.sendMessage(workerConvId, listOf(UIMessagePart.Text(taskWithWrapup)))
+            chatService.sendMessage(
+                workerConvId,
+                listOf(UIMessagePart.Text(taskWithWrapup)),
+                reasoningLevelOverride = workerReasoningLevel,
+            )
             // The naive form `withTimeoutOrNull { …first { it == null } }` followed by a
             // `finished == null` check is BROKEN: `.first { it == null }` returns the matched
             // value — which IS null on successful completion (the Job? went to null when the
@@ -435,6 +445,7 @@ class SubAgentEngine(
                 it.copy(
                     status = SubAgentStatus.SUCCEEDED,
                     result = finalText,
+                    reasoningLevel = workerReasoningLevel.name,
                     finishedAtMs = System.currentTimeMillis(),
                     tokensIn = tokensIn,
                     tokensOut = tokensOut,
