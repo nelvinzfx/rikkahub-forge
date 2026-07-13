@@ -127,9 +127,15 @@ class OpenAIProvider(
                     openRouterModelFromJson(modelObj)
                 } else {
                     val id = modelObj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    // Some OpenAI-compatible backends (vLLM, LiteLLM, custom proxies) expose
+                    // the model's context window in the /v1/models response. Try "context_window"
+                    // first, then "context_length" as a common fallback.
+                    val ctxLen = modelObj["context_window"]?.jsonPrimitive?.intOrNull
+                        ?: modelObj["context_length"]?.jsonPrimitive?.intOrNull
                     Model(
                         modelId = id,
                         displayName = id,
+                        contextLength = ctxLen,
                     )
                 }
             }
