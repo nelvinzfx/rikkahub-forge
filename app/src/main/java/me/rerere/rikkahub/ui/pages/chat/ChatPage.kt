@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
@@ -83,6 +84,9 @@ import me.rerere.rikkahub.ui.components.ai.ChatInput
 import me.rerere.rikkahub.ui.components.ai.FilesPicker
 import me.rerere.rikkahub.ui.components.ai.completion.WorkspaceCompletionProvider
 import me.rerere.rikkahub.ui.components.ai.useCropLauncher
+import me.rerere.rikkahub.ui.components.ui.ContextWindowGauge
+import me.rerere.rikkahub.ui.components.ui.DEFAULT_CONTEXT_LENGTH
+import me.rerere.rikkahub.ui.components.ui.computeContextUsage
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionCamera
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
 import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
@@ -762,6 +766,7 @@ private fun TopBar(
         onUpdateTitle(it)
     }
 
+    Column {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
         navigationIcon = {
@@ -829,6 +834,14 @@ private fun TopBar(
             }
         },
     )
+    val gaugeModel = settings.getCurrentChatModel()
+    val usedTokens = remember(conversation) { computeContextUsage(conversation) }
+    ContextWindowGauge(
+        usedTokens = usedTokens,
+        contextLength = gaugeModel?.contextLength ?: DEFAULT_CONTEXT_LENGTH,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+    )
+    }
     titleState.EditStateContent { title, onUpdate ->
         AlertDialog(
             onDismissRequest = {
