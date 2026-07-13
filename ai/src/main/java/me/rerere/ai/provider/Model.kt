@@ -2,6 +2,7 @@ package me.rerere.ai.provider
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.UUID as JavaUUID
 import kotlin.uuid.Uuid
 
 @Serializable
@@ -65,5 +66,20 @@ sealed class BuiltInTools {
     data object ImageGeneration : BuiltInTools()
 }
 
+/**
+ * Generate a deterministic Uuid for a Model based on its providerId + modelId.
+ *
+ * Fixes the issue where re-selecting a model after de-selecting generates a
+ * new random Uuid (via [Model]'s default `id = Uuid.random()`), breaking all
+ * conversations that referenced the old Uuid via `chatModelId`.
+ *
+ * Using UUID.nameUUIDFromBytes (v3 / MD5-based) ensures the same
+ * providerId + modelId pair always produces the same Uuid, so deselect /
+ * reselect cycles preserve model identity across existing conversations.
+ */
+fun deterministicModelId(providerId: Uuid, modelId: String): Uuid {
+    val name = "$providerId::$modelId".toByteArray(Charsets.UTF_8)
+    return Uuid.fromJavaUUID(JavaUUID.nameUUIDFromBytes(name))
+}
 
 

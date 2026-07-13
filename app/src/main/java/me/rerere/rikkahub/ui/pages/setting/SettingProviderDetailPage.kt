@@ -111,6 +111,7 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.deterministicModelId
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.R
@@ -902,7 +903,7 @@ private fun AddModelButton(
             models = models,
             selectedModels = selectedModels,
             onModelSelected = { model ->
-                onAddModel(model.enrichCapabilities())
+                onAddModel(model.copy(id = deterministicModelId(parentProvider.id, model.modelId)).enrichCapabilities())
             },
             onModelDeselected = { model ->
                 onRemoveModel(model)
@@ -912,7 +913,9 @@ private fun AddModelButton(
                     parentProvider.copyProvider(
                         models = parentProvider.models + it.filter { model ->
                             parentProvider.models.none { existing -> existing.modelId == model.modelId }
-                        }.map { model -> model.enrichCapabilities() }
+                        }.map { model ->
+                            model.copy(id = deterministicModelId(parentProvider.id, model.modelId)).enrichCapabilities()
+                        }
                     )
                 )
             },
