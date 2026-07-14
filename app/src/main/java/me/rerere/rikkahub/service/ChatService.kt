@@ -1203,7 +1203,7 @@ class ChatService(
                                 conversation = finalConversation,
                                 additionalPrompt = "",
                                 targetTokens = assistant.autoCompactionContextWindow,
-                                keepRecentMessages = assistant.autoCompactionKeepRecentMessages,
+                                keepRecentMessages = 0,
                             )
                         }
                     } catch (e: Exception) {
