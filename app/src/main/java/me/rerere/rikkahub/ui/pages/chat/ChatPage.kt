@@ -554,16 +554,14 @@ private fun ChatPageContent(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        RabbitLoading()
+                        RabbitLoadingIndicator()
                     }
                 },
                 confirmButton = {},
                 dismissButton = {},
             )
-        }
-        }
 
-        if (showFilesSheet) {
+          if (showFilesSheet) {
             ChatFilesPickerSheet(
                 inputState = inputState,
                 setting = setting,
