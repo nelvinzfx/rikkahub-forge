@@ -53,7 +53,7 @@ data class Assistant(
     // Reasoning level applied to workers dispatched by this assistant. Null = inherit the
     // assistant's own reasoningLevel. Set to a specific level (e.g. OFF, LOW) to save on
     // inference costs when workers run cheaper/smaller models. Overridable per-dispatch.
-    val subAgentReasoningLevel: ReasoningLevel? = null,
+    val subAgentReasoningLevel: ReasoningLevel? = ReasoningLevel.HIGH,
     val maxConcurrentSubAgents: Int = 3,
     // Phase 30 (Orchestrator Mode Phase B) — per-worker inclusion defaults. When the LLM
     // omits the corresponding include_* arg in subagent_dispatch, these determine whether

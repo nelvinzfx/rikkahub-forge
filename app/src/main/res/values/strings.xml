@@ -147,6 +147,8 @@
   <string name="assistant_page_template_variable_time">Time</string>
   <string name="assistant_page_template_variables_label">Variables:</string>
   <string name="assistant_page_thinking_budget">Thinking Budget</string>
+  <string name="assistant_page_subagent_thinking_budget">Sub-agent Thinking Budget</string>
+  <string name="assistant_page_subagent_thinking_budget_desc">Reasoning level for dispatched sub-agent workers. Can be overridden per-dispatch.</string>
   <string name="assistant_page_time_reminder">Time Reminder</string>
   <string name="assistant_page_time_reminder_desc">Automatically inject time reminders before messages with large time gaps to help AI understand conversation intervals</string>
   <string name="assistant_page_title">Assistant Settings</string>

@@ -46,6 +46,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.rikkahub.ui.components.ai.ReasoningButton
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.FormItem
@@ -469,6 +470,23 @@ internal fun AssistantBasicContent(
                     reasoningLevel = assistant.reasoningLevel,
                     onUpdateReasoningLevel = { level ->
                         onUpdate(assistant.copy(reasoningLevel = level))
+                    }
+                )
+            }
+            HorizontalDivider()
+            FormItem(
+                modifier = Modifier.padding(8.dp),
+                label = {
+                    Text(stringResource(R.string.assistant_page_subagent_thinking_budget))
+                },
+                description = {
+                    Text(stringResource(R.string.assistant_page_subagent_thinking_budget_desc))
+                }
+            ) {
+                ReasoningButton(
+                    reasoningLevel = assistant.subAgentReasoningLevel ?: ReasoningLevel.HIGH,
+                    onUpdateReasoningLevel = { level ->
+                        onUpdate(assistant.copy(subAgentReasoningLevel = level))
                     }
                 )
             }
