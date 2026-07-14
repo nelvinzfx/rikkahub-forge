@@ -1,15 +1,11 @@
 package me.rerere.rikkahub.ui.pages.assistant.detail
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -31,7 +27,6 @@ import androidx.compose.material3.Text
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.Tick02
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -625,53 +620,28 @@ internal fun AssistantBasicContent(
                   if (assistant.autoCompactionEnabled) {
                       HorizontalDivider()
 
-                      // Context window dropdown
+                      // Context window input
                       FormItem(
                           label = { Text("Context Window") },
-                          description = { Text("The total context window of your model. Used to calculate when to trigger compaction.") },
+                          description = { Text("The total context window of your model (in tokens). Used to calculate when to trigger compaction.") },
                       ) {
-                          val presetWindows = listOf(
-                              128_000 to "128k",
-                              200_000 to "200k",
-                              256_000 to "256k",
-                              500_000 to "500k",
-                              1_000_000 to "1M",
-                              1_050_000 to "1.05M (GPT-5.x)",
-                              2_000_000 to "2M (Gemini)",
-                              4_100_000 to "4.1M (Gemini 3)",
-                          )
-                          var expanded by remember { mutableStateOf(false) }
-                          Box {
-                              Surface(
-                                  onClick = { expanded = true },
-                                  color = MaterialTheme.colorScheme.surfaceVariant,
-                                  shape = MaterialTheme.shapes.small,
-                                  modifier = Modifier.fillMaxWidth(),
-                              ) {
-                                  Text(
-                                      text = formatTokens(assistant.autoCompactionContextWindow.toLong()),
-                                      modifier = Modifier.padding(12.dp),
-                                      style = MaterialTheme.typography.bodyMedium,
-                                  )
-                              }
-                              DropdownMenu(
-                                  expanded = expanded,
-                                  onDismissRequest = { expanded = false },
-                              ) {
-                                  presetWindows.forEach { (value, label) ->
-                                      DropdownMenuItem(
-                                          text = { Text(label) },
-                                          onClick = {
-                                              onUpdate(assistant.copy(autoCompactionContextWindow = value))
-                                              expanded = false
-                                          },
-                                          leadingIcon = if (value == assistant.autoCompactionContextWindow) {
-                                              { Icon(HugeIcons.Tick02, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                                          } else null,
-                                      )
-                                  }
-                              }
+                          var contextWindowText by remember(assistant.autoCompactionContextWindow) {
+                              mutableStateOf(assistant.autoCompactionContextWindow.toString())
                           }
+                          OutlinedTextField(
+                              value = contextWindowText,
+                              onValueChange = { input ->
+                                  contextWindowText = input.filter { it.isDigit() }
+                                  contextWindowText.toIntOrNull()?.let { value ->
+                                      if (value > 0) {
+                                          onUpdate(assistant.copy(autoCompactionContextWindow = value))
+                                      }
+                                  }
+                              },
+                              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                              singleLine = true,
+                              modifier = Modifier.fillMaxWidth(),
+                          )
                       }
 
                       // Trigger percentage slider
