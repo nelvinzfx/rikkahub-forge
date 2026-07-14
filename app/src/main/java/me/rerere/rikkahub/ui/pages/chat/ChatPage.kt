@@ -90,7 +90,7 @@ import me.rerere.rikkahub.ui.components.ai.completion.WorkspaceCompletionProvide
 import me.rerere.rikkahub.ui.components.ai.useCropLauncher
 import me.rerere.rikkahub.ui.components.ui.ContextWindowGauge
 import me.rerere.rikkahub.ui.components.ui.DEFAULT_CONTEXT_LENGTH
-import me.rerere.rikkahub.ui.components.ui.RabbitLoading
+import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
 import me.rerere.rikkahub.ui.components.ui.computeContextUsage
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionCamera
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
@@ -560,8 +560,9 @@ private fun ChatPageContent(
                 confirmButton = {},
                 dismissButton = {},
             )
+        }
 
-          if (showFilesSheet) {
+        if (showFilesSheet) {
             ChatFilesPickerSheet(
                 inputState = inputState,
                 setting = setting,
