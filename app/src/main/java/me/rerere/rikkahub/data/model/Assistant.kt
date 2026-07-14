@@ -87,6 +87,14 @@ data class Assistant(
     val fastPathRouterEnabled: Boolean = false,
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
+    // Phase 31 — auto-compaction. When enabled, after each successful assistant
+    // response the engine checks whether the conversation's estimated context
+    // tokens exceed contextWindow * triggerPercent / 100. If so, it silently
+    // runs compressConversation() in the background to keep the chat within budget.
+    val autoCompactionEnabled: Boolean = false,
+    val autoCompactionContextWindow: Int = 200_000,
+    val autoCompactionTriggerPercent: Int = 80,
+    val autoCompactionKeepRecentMessages: Int = 32,
 )
 
 @Serializable

@@ -1,7 +1,21 @@
 package me.rerere.rikkahub.ui.pages.assistant.detail
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier.width
+import androidx.compose.ui.text.style.TextAlign
+import me.rerere.rikkahub.ui.components.ui.SwitchRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -53,6 +67,20 @@ import org.koin.core.parameter.parametersOf
 import kotlin.math.roundToInt
 import kotlin.uuid.Uuid
 import me.rerere.rikkahub.data.model.Tag as DataTag
+
+private fun formatTokens(tokens: Long): String = when {
+    tokens < 1000 -> "$tokens"
+    tokens < 1_000_000 -> {
+        val v = tokens / 1000.0
+        if (v == v.toInt().toDouble()) "${v.toInt()}k"
+        else "${"%.1f".format(v)}k"
+    }
+    else -> {
+        val v = tokens / 1_000_000.0
+        if (v == v.toInt().toDouble()) "${v.toInt()}M"
+        else "${"%.1f".format(v)}M"
+    }
+}
 
 @Composable
 fun AssistantBasicPage(id: String) {
@@ -569,4 +597,135 @@ internal fun AssistantBasicContent(
             }
         }
     }
+
+          // Auto-compaction settings
+          Card(
+              modifier = Modifier.padding(8.dp),
+              elevation = CardDefaults.cardElevation(0.dp),
+          ) {
+              Column(
+                  modifier = Modifier.padding(8.dp),
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                  // Enable/disable toggle
+                  SwitchRow(
+                      checked = assistant.autoCompactionEnabled,
+                      onCheckedChange = {
+                          onUpdate(assistant.copy(autoCompactionEnabled = it))
+                      },
+                      title = { Text("Auto-Compaction") },
+                      description = {
+                          Text("Automatically compress conversation when context window fills up. Triggers after each assistant response when token usage exceeds the set percentage of the context window.")
+                      },
+                  )
+
+                  if (assistant.autoCompactionEnabled) {
+                      HorizontalDivider()
+
+                      // Context window dropdown
+                      FormItem(
+                          label = { Text("Context Window") },
+                          description = { Text("The total context window of your model. Used to calculate when to trigger compaction.") },
+                      ) {
+                          val presetWindows = listOf(
+                              128_000 to "128k",
+                              200_000 to "200k",
+                              256_000 to "256k",
+                              500_000 to "500k",
+                              1_000_000 to "1M",
+                              1_050_000 to "1.05M (GPT-5.x)",
+                              2_000_000 to "2M (Gemini)",
+                              4_100_000 to "4.1M (Gemini 3)",
+                          )
+                          var expanded by remember { mutableStateOf(false) }
+                          Box {
+                              Surface(
+                                  onClick = { expanded = true },
+                                  color = MaterialTheme.colorScheme.surfaceVariant,
+                                  shape = MaterialTheme.shapes.small,
+                                  modifier = Modifier.fillMaxWidth(),
+                              ) {
+                                  Text(
+                                      text = formatTokens(assistant.autoCompactionContextWindow.toLong()),
+                                      modifier = Modifier.padding(12.dp),
+                                      style = MaterialTheme.typography.bodyMedium,
+                                  )
+                              }
+                              DropdownMenu(
+                                  expanded = expanded,
+                                  onDismissRequest = { expanded = false },
+                              ) {
+                                  presetWindows.forEach { (value, label) ->
+                                      DropdownMenuItem(
+                                          text = { Text(label) },
+                                          onClick = {
+                                              onUpdate(assistant.copy(autoCompactionContextWindow = value))
+                                              expanded = false
+                                          },
+                                          leadingIcon = if (value == assistant.autoCompactionContextWindow) {
+                                              { Icon(Icons.Default.Check, contentDescription = null) }
+                                          } else null,
+                                      )
+                                  }
+                              }
+                          }
+                      }
+
+                      // Trigger percentage slider
+                      FormItem(
+                          label = { Text("Trigger at") },
+                          description = { Text("Start compaction when context reaches this percentage of the window.") },
+                      ) {
+                          Column {
+                              Slider(
+                                  value = assistant.autoCompactionTriggerPercent.toFloat(),
+                                  onValueChange = {
+                                      onUpdate(assistant.copy(autoCompactionTriggerPercent = it.toInt().coerceIn(50, 95)))
+                                  },
+                                  valueRange = 50f..95f,
+                                  steps = 8,
+                                  modifier = Modifier.fillMaxWidth(),
+                              )
+                              Text(
+                                  text = "${assistant.autoCompactionTriggerPercent}%",
+                                  style = MaterialTheme.typography.labelSmall,
+                                  color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                              )
+                          }
+                      }
+
+                      // Keep recent messages count
+                      FormItem(
+                          label = { Text("Keep Recent Messages") },
+                          description = { Text("Number of most recent messages to preserve (not compressed).") },
+                      ) {
+                          Row(
+                              verticalAlignment = Alignment.CenterVertically,
+                              horizontalArrangement = Arrangement.spacedBy(8.dp),
+                          ) {
+                              IconButton(onClick = {
+                                  onUpdate(assistant.copy(
+                                      autoCompactionKeepRecentMessages = (assistant.autoCompactionKeepRecentMessages - 4).coerceAtLeast(4)
+                                  ))
+                              }) {
+                                  Icon(Icons.Default.Remove, "Less")
+                              }
+                              Text(
+                                  text = "${assistant.autoCompactionKeepRecentMessages}",
+                                  style = MaterialTheme.typography.bodyLarge,
+                                  modifier = Modifier.width(48.dp),
+                                  textAlign = TextAlign.Center,
+                              )
+                              IconButton(onClick = {
+                                  onUpdate(assistant.copy(
+                                      autoCompactionKeepRecentMessages = (assistant.autoCompactionKeepRecentMessages + 4).coerceAtMost(256)
+                                  ))
+                              }) {
+                                  Icon(Icons.Default.Add, "More")
+                              }
+                          }
+                      }
+                  }
+              }
+          }
 }

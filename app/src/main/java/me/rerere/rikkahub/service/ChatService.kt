@@ -1185,6 +1185,36 @@ class ChatService(
             val finalConversation = getConversationFlow(conversationId).value
             saveConversation(conversationId, finalConversation)
 
+            // Phase 31 — auto-compaction: if enabled, check context pressure and
+            // silently compress in background when above threshold.
+            if (assistant.autoCompactionEnabled) {
+                launchWithConversationReference(conversationId) {
+                    try {
+                        val usedTokens = finalConversation.currentMessages
+                            .lastOrNull { it.usage != null }
+                            ?.let { msg ->
+                                val u = msg.usage!!
+                                (u.totalTokens.takeIf { it > 0 }
+                                    ?: (u.promptTokens + u.completionTokens)).toLong()
+                            } ?: 0L
+                        val threshold = (assistant.autoCompactionContextWindow.toLong()
+                            * assistant.autoCompactionTriggerPercent / 100)
+                        if (usedTokens >= threshold) {
+                            Log.d(TAG, "auto-compaction: triggering ($usedTokens >= $threshold)")
+                            compressConversation(
+                                conversationId = conversationId,
+                                conversation = finalConversation,
+                                additionalPrompt = "",
+                                targetTokens = assistant.autoCompactionContextWindow,
+                                keepRecentMessages = assistant.autoCompactionKeepRecentMessages,
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "auto-compaction: background compress failed", e)
+                    }
+                }
+            }
+
             launchWithConversationReference(conversationId) {
                 generateTitle(conversationId, finalConversation)
             }
