@@ -196,6 +196,9 @@ class ChatService(
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
 
+    // Auto-compaction state per conversation: true while compaction is running.
+    // sendMessage blocks while true, preventing race conditions with user input.
+    private val compactingConversations = ConcurrentHashMap.newKeySet<Uuid>()
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
@@ -480,6 +483,16 @@ class ChatService(
         reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
     ) {
         if (content.isEmptyInputMessage()) return
+
+        // Block if auto-compaction is in progress for this conversation.
+        // Poll every 200ms until done; the compaction itself finishes in seconds.
+        if (compactingConversations.contains(conversationId)) {
+            kotlinx.coroutines.runBlocking {
+                while (compactingConversations.contains(conversationId)) {
+                    kotlinx.coroutines.delay(200)
+                }
+            }
+        }
 
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
@@ -1198,15 +1211,32 @@ class ChatService(
                             * assistant.autoCompactionTriggerPercent / 100)
                         if (usedTokens >= threshold) {
                             Log.d(TAG, "auto-compaction: triggering ($usedTokens >= $threshold)")
-                            compressConversation(
+                            compactingConversations.add(conversationId)
+                            try {
+                                compressConversation(
+                                    conversationId = conversationId,
+                                    conversation = finalConversation,
+                                    additionalPrompt = "",
+                                    targetTokens = assistant.autoCompactionContextWindow,
+                                    keepRecentMessages = 0,
+                                )
+                            } finally {
+                                compactingConversations.remove(conversationId)
+                            }
+                            // After compaction, send a follow-up assistant message
+                            // to continue the turn. Must be done AFTER removing from
+                            // compactingConversations to avoid deadlocking ourselves.
+                            Log.d(TAG, "auto-compaction: done, continuing turn")
+                            sendMessage(
                                 conversationId = conversationId,
-                                conversation = finalConversation,
-                                additionalPrompt = "",
-                                targetTokens = assistant.autoCompactionContextWindow,
-                                keepRecentMessages = 0,
+                                content = listOf(
+                                    me.rerere.ai.ui.UIMessagePart.Text("continue")
+                                ),
+                                answer = true,
                             )
                         }
                     } catch (e: Exception) {
+                        compactingConversations.remove(conversationId)
                         Log.w(TAG, "auto-compaction: background compress failed", e)
                     }
                 }
