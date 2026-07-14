@@ -4,18 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
-import androidx.compose.ui.Modifier.width
 import androidx.compose.ui.text.style.TextAlign
-import me.rerere.rikkahub.ui.components.ui.SwitchRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -34,6 +28,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Add01
+import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Tick02
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -608,15 +606,20 @@ internal fun AssistantBasicContent(
                   verticalArrangement = Arrangement.spacedBy(8.dp),
               ) {
                   // Enable/disable toggle
-                  SwitchRow(
-                      checked = assistant.autoCompactionEnabled,
-                      onCheckedChange = {
-                          onUpdate(assistant.copy(autoCompactionEnabled = it))
-                      },
-                      title = { Text("Auto-Compaction") },
+                  FormItem(
+                      modifier = Modifier.padding(8.dp),
+                      label = { Text("Auto-Compaction") },
                       description = {
                           Text("Automatically compress conversation when context window fills up. Triggers after each assistant response when token usage exceeds the set percentage of the context window.")
                       },
+                      tail = {
+                          Switch(
+                              checked = assistant.autoCompactionEnabled,
+                              onCheckedChange = {
+                                  onUpdate(assistant.copy(autoCompactionEnabled = it))
+                              }
+                          )
+                      }
                   )
 
                   if (assistant.autoCompactionEnabled) {
@@ -663,7 +666,7 @@ internal fun AssistantBasicContent(
                                               expanded = false
                                           },
                                           leadingIcon = if (value == assistant.autoCompactionContextWindow) {
-                                              { Icon(Icons.Default.Check, contentDescription = null) }
+                                              { Icon(HugeIcons.Tick02, contentDescription = null, modifier = Modifier.size(16.dp)) }
                                           } else null,
                                       )
                                   }
@@ -708,12 +711,11 @@ internal fun AssistantBasicContent(
                                       autoCompactionKeepRecentMessages = (assistant.autoCompactionKeepRecentMessages - 4).coerceAtLeast(4)
                                   ))
                               }) {
-                                  Icon(Icons.Default.Remove, "Less")
+                                  Icon(HugeIcons.Cancel01, contentDescription = "Less", modifier = Modifier.size(16.dp))
                               }
                               Text(
                                   text = "${assistant.autoCompactionKeepRecentMessages}",
                                   style = MaterialTheme.typography.bodyLarge,
-                                  modifier = Modifier.width(48.dp),
                                   textAlign = TextAlign.Center,
                               )
                               IconButton(onClick = {
@@ -721,7 +723,7 @@ internal fun AssistantBasicContent(
                                       autoCompactionKeepRecentMessages = (assistant.autoCompactionKeepRecentMessages + 4).coerceAtMost(256)
                                   ))
                               }) {
-                                  Icon(Icons.Default.Add, "More")
+                                  Icon(HugeIcons.Add01, contentDescription = "More", modifier = Modifier.size(16.dp))
                               }
                           }
                       }
