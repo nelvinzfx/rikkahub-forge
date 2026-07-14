@@ -1190,13 +1190,10 @@ class ChatService(
             if (assistant.autoCompactionEnabled) {
                 launchWithConversationReference(conversationId) {
                     try {
-                        val usedTokens = finalConversation.currentMessages
-                            .lastOrNull { it.usage != null }
-                            ?.let { msg ->
-                                val u = msg.usage!!
-                                (u.totalTokens.takeIf { it > 0 }
-                                    ?: (u.promptTokens + u.completionTokens)).toLong()
-                            } ?: 0L
+                        // Use TokenBudgetTracker.aggregate for cumulative token count
+                        // across all messages, not just the last one with usage data.
+                        val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
+                            .aggregate(finalConversation).totalTokens
                         val threshold = (assistant.autoCompactionContextWindow.toLong()
                             * assistant.autoCompactionTriggerPercent / 100)
                         if (usedTokens >= threshold) {
