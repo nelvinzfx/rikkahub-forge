@@ -2,26 +2,48 @@ package me.rerere.rikkahub.ui.pages.assistant.detail
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Add01
+import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -74,6 +96,116 @@ internal fun AssistantRequestContent(
             .imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Auto-compaction settings
+        Card(
+            colors = CustomColors.cardColorsOnSurfaceContainer
+        ) {
+            Column(
+                modifier = Modifier.padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FormItem(
+                    modifier = Modifier.padding(8.dp),
+                    label = { Text("Auto-Compaction") },
+                    description = {
+                        Text("Automatically compress conversation when context window fills up. Triggers after each assistant response when token usage exceeds the set percentage of the context window.")
+                    },
+                    tail = {
+                        Switch(
+                            checked = assistant.autoCompactionEnabled,
+                            onCheckedChange = {
+                                onUpdate(assistant.copy(autoCompactionEnabled = it))
+                            }
+                        )
+                    }
+                )
+
+                if (assistant.autoCompactionEnabled) {
+                    HorizontalDivider()
+
+                    // Context window input
+                    FormItem(
+                        label = { Text("Context Window") },
+                        description = { Text("The total context window of your model (in tokens). Used to calculate when to trigger compaction.") },
+                    ) {
+                        var contextWindowText by remember(assistant.autoCompactionContextWindow) {
+                            mutableStateOf(assistant.autoCompactionContextWindow.toString())
+                        }
+                        OutlinedTextField(
+                            value = contextWindowText,
+                            onValueChange = { input ->
+                                contextWindowText = input.filter { it.isDigit() }
+                                contextWindowText.toIntOrNull()?.let { value ->
+                                    if (value > 0) {
+                                        onUpdate(assistant.copy(autoCompactionContextWindow = value))
+                                    }
+                                }
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    // Trigger percentage slider
+                    FormItem(
+                        label = { Text("Trigger at") },
+                        description = { Text("Start compaction when context reaches this percentage of the window.") },
+                    ) {
+                        Column {
+                            Slider(
+                                value = assistant.autoCompactionTriggerPercent.toFloat(),
+                                onValueChange = {
+                                    onUpdate(assistant.copy(autoCompactionTriggerPercent = it.toInt().coerceIn(50, 95)))
+                                },
+                                valueRange = 50f..95f,
+                                steps = 8,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                text = "${assistant.autoCompactionTriggerPercent}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.75f),
+                            )
+                        }
+                    }
+
+                    // Keep recent messages count
+                    FormItem(
+                        label = { Text("Keep Recent Messages") },
+                        description = { Text("Number of most recent messages to preserve (not compressed).") },
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            IconButton(onClick = {
+                                onUpdate(assistant.copy(
+                                    autoCompactionKeepRecentMessages = (assistant.autoCompactionKeepRecentMessages - 4).coerceAtLeast(4)
+                                ))
+                            }) {
+                                Icon(HugeIcons.Cancel01, contentDescription = "Less", modifier = Modifier.size(16.dp))
+                            }
+                            Text(
+                                text = "${assistant.autoCompactionKeepRecentMessages}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                textAlign = TextAlign.Center,
+                            )
+                            IconButton(onClick = {
+                                onUpdate(assistant.copy(
+                                    autoCompactionKeepRecentMessages = (assistant.autoCompactionKeepRecentMessages + 4).coerceAtMost(256)
+                                ))
+                            }) {
+                                Icon(HugeIcons.Add01, contentDescription = "More", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalDivider()
+
         CustomHeaders(
             headers = assistant.customHeaders,
             onUpdate = {
