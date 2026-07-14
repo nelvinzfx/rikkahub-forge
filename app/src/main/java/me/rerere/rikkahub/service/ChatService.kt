@@ -198,7 +198,19 @@ class ChatService(
 
     // Auto-compaction state per conversation: true while compaction is running.
     // sendMessage blocks while true, preventing race conditions with user input.
-    private val compactingConversations = ConcurrentHashMap.newKeySet<Uuid>()
+    // Exposed as a flow so the UI can show a compaction dialog.
+    private val _compactingConversations = MutableStateFlow<Set<Uuid>>(emptySet())
+    val compactingConversations: StateFlow<Set<Uuid>> = _compactingConversations.asStateFlow()
+    private val compactingSet = ConcurrentHashMap.newKeySet<Uuid>()
+    private fun setCompacting(conversationId: Uuid, compacting: Boolean) {
+        if (compacting) {
+            compactingSet.add(conversationId)
+        } else {
+            compactingSet.remove(conversationId)
+        }
+        _compactingConversations.value = compactingSet.toSet()
+    }
+    private fun isCompacting(conversationId: Uuid): Boolean = compactingSet.contains(conversationId)
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
@@ -486,9 +498,9 @@ class ChatService(
 
         // Block if auto-compaction is in progress for this conversation.
         // Poll every 200ms until done; the compaction itself finishes in seconds.
-        if (compactingConversations.contains(conversationId)) {
+        if (isCompacting(conversationId)) {
             kotlinx.coroutines.runBlocking {
-                while (compactingConversations.contains(conversationId)) {
+                while (isCompacting(conversationId)) {
                     kotlinx.coroutines.delay(200)
                 }
             }
@@ -1211,7 +1223,7 @@ class ChatService(
                             * assistant.autoCompactionTriggerPercent / 100)
                         if (usedTokens >= threshold) {
                             Log.d(TAG, "auto-compaction: triggering ($usedTokens >= $threshold)")
-                            compactingConversations.add(conversationId)
+                            setCompacting(conversationId, true)
                             try {
                                 compressConversation(
                                     conversationId = conversationId,
@@ -1221,11 +1233,11 @@ class ChatService(
                                     keepRecentMessages = 0,
                                 )
                             } finally {
-                                compactingConversations.remove(conversationId)
+                                setCompacting(conversationId, false)
                             }
                             // After compaction, send a follow-up assistant message
                             // to continue the turn. Must be done AFTER removing from
-                            // compactingConversations to avoid deadlocking ourselves.
+                            // compacting state to avoid deadlocking ourselves.
                             Log.d(TAG, "auto-compaction: done, continuing turn")
                             sendMessage(
                                 conversationId = conversationId,
@@ -1236,7 +1248,7 @@ class ChatService(
                             )
                         }
                     } catch (e: Exception) {
-                        compactingConversations.remove(conversationId)
+                        setCompacting(conversationId, false)
                         Log.w(TAG, "auto-compaction: background compress failed", e)
                     }
                 }

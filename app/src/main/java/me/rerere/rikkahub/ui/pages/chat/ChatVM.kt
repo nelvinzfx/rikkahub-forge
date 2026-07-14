@@ -180,6 +180,7 @@ class ChatVM(
 
     // MCP管理器
     val mcpManager = chatService.mcpManager
+    val compactingConversations: StateFlow<Set<kotlin.uuid.Uuid>> = chatService.compactingConversations
 
     // 更新设置
     fun updateSettings(newSettings: Settings) {
