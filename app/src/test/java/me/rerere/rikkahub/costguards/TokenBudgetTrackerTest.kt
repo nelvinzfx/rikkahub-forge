@@ -3,9 +3,12 @@ package me.rerere.rikkahub.costguards
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
 
@@ -74,6 +77,50 @@ class TokenBudgetTrackerTest {
         ))
         val totals = TokenBudgetTracker.aggregate(conv)
         assertEquals(1500L, totals.perMessageMax)
+    }
+
+    @Test fun `projected context uses latest usage instead of cumulative usage`() {
+        val conv = mkConversation(listOf(
+            mkMessage(prompt = 50_000, completion = 20_000),
+            mkMessage(prompt = 70_000, completion = 20_000),
+            mkMessage(prompt = 100_000, completion = 22_700),
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(UIMessagePart.Text("a".repeat(120))),
+            ),
+        ))
+
+        val projected = TokenBudgetTracker.projectedContextTokens(conv)
+        assertEquals(122_744L, projected)
+        assertFalse(projected >= 272_000L)
+        assertTrue(TokenBudgetTracker.aggregate(conv).totalTokens >= 272_000L)
+    }
+
+    @Test fun `projected context estimates pending user message`() {
+        val conv = mkConversation(listOf(
+            mkMessage(prompt = 240_000, completion = 20_000),
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(UIMessagePart.Text("a".repeat(36_000))),
+            ),
+        ))
+
+        assertEquals(272_004L, TokenBudgetTracker.projectedContextTokens(conv))
+    }
+
+    @Test fun `projected context estimates all messages without provider usage`() {
+        val conv = mkConversation(listOf(
+            UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(UIMessagePart.Text("a".repeat(300))),
+            ),
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Text("b".repeat(150))),
+            ),
+        ))
+
+        assertEquals(158L, TokenBudgetTracker.projectedContextTokens(conv))
     }
 
     @Test fun `classify NO_BUDGET when both caps null`() {

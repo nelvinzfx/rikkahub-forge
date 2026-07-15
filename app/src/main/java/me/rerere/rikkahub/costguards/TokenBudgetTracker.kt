@@ -1,6 +1,8 @@
 package me.rerere.rikkahub.costguards
 
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
 
 /**
@@ -66,6 +68,40 @@ object TokenBudgetTracker {
             perMessageMax = perMax,
             messageCount = count,
         )
+    }
+
+    /**
+     * Estimated size of the next request context. Provider usage is cumulative for one
+     * request, so use only the latest measured message, then estimate messages appended
+     * after it. Summing every usage double-counts earlier context.
+     */
+    fun projectedContextTokens(conversation: Conversation): Long {
+        val messages = conversation.currentMessages
+        val measuredIndex = messages.indexOfLast { it.usage != null }
+        val measuredTokens = messages.getOrNull(measuredIndex)?.usage?.let { usage ->
+            (usage.totalTokens.takeIf { it > 0 }
+                ?: (usage.promptTokens + usage.completionTokens)).toLong()
+        } ?: 0L
+        val suffixStart = if (measuredIndex >= 0) measuredIndex + 1 else 0
+        return measuredTokens + messages.drop(suffixStart).sumOf(::estimateMessageTokens)
+    }
+
+    private fun estimateMessageTokens(message: UIMessage): Long =
+        message.parts.sumOf(::estimatePartTokens) + 4L
+
+    private fun estimatePartTokens(part: UIMessagePart): Long = when (part) {
+        is UIMessagePart.Text -> estimateTextTokens(part.text)
+        is UIMessagePart.Reasoning -> estimateTextTokens(part.reasoning)
+        is UIMessagePart.Tool -> estimateTextTokens(part.toolName) +
+            estimateTextTokens(part.input) + part.output.sumOf(::estimatePartTokens)
+        else -> 256L
+    }
+
+    private fun estimateTextTokens(text: String): Long {
+        var ascii = 0L
+        var nonAscii = 0L
+        text.forEach { if (it.code <= 0x7f) ascii++ else nonAscii++ }
+        return (ascii + 2L) / 3L + nonAscii
     }
 
     fun classify(totals: Totals, softCap: Int?, hardCap: Int?): BudgetStatus {

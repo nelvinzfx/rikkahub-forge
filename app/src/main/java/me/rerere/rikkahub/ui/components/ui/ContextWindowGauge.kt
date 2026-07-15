@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import me.rerere.rikkahub.costguards.TokenBudgetTracker
 import me.rerere.rikkahub.data.model.Conversation
 import kotlin.math.roundToInt
 
@@ -146,20 +147,9 @@ fun ContextWindowGauge(
     }
 }
 
-/**
- * Approximate the current context window usage by taking the token totals
- * from the most recent message that has [TokenUsage] data. The last
- * [promptTokens + completionTokens] is the best proxy for "how full the
- * context is right now" without making a separate token-counting API call.
- */
-fun computeContextUsage(conversation: Conversation): Long {
-    return conversation.currentMessages
-        .lastOrNull { it.usage != null }
-        ?.let { msg ->
-            val u = msg.usage!!
-            (u.totalTokens.takeIf { it > 0 } ?: (u.promptTokens + u.completionTokens)).toLong()
-        } ?: 0L
-}
+/** Latest provider-measured context plus locally estimated unmeasured messages. */
+fun computeContextUsage(conversation: Conversation): Long =
+    TokenBudgetTracker.projectedContextTokens(conversation)
 
 private fun formatTokens(tokens: Long): String = when {
     tokens < 1000 -> tokens.toString()

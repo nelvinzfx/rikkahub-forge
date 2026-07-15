@@ -546,7 +546,7 @@ class ChatService(
                 // Gate this turn before any router or LLM work starts. The just-persisted user
                 // message is kept verbatim while every completed prior turn is summarized.
                 val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
-                    .aggregate(afterUserSave).totalTokens
+                    .projectedContextTokens(afterUserSave)
                 if (shouldAutoCompactBeforeGeneration(
                         answer = answer,
                         enabled = assistant.autoCompactionEnabled,
