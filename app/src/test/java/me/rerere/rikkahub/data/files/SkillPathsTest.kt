@@ -9,6 +9,15 @@ import org.junit.Test
 
 class SkillPathsTest {
     @Test
+    fun `retired bundled cleanup preserves user installed and retained skills`() {
+        assertEquals(true, shouldDeleteRetiredBundledSkill("virtual-piano", hasSeedMarker = true))
+        assertEquals(false, shouldDeleteRetiredBundledSkill("virtual-piano", hasSeedMarker = false))
+        assertEquals(false, shouldDeleteRetiredBundledSkill("agent-core", hasSeedMarker = true))
+        assertEquals(false, shouldDeleteRetiredBundledSkill("autonomous-agent", hasSeedMarker = true))
+        assertEquals(false, shouldDeleteRetiredBundledSkill("openclaw-converter", hasSeedMarker = true))
+    }
+
+    @Test
     fun `parse supports CRLF frontmatter`() {
         val content = "---\r\nname: test-skill\r\ndescription: test\r\n---\r\n\r\nbody"
 

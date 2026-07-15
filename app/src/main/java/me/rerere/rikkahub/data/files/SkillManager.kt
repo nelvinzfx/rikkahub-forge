@@ -7,6 +7,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.SettingsStore
 
+internal val RETIRED_BUNDLED_SKILLS = setOf(
+    "auto-reply",
+    "calculate-hash",
+    "interactive-map",
+    "kitchen-adventure",
+    "mood-tracker",
+    "morning-briefing",
+    "notification-summarise-and-act",
+    "qr-code",
+    "query-wikipedia",
+    "smart-forward",
+    "text-spinner",
+    "virtual-piano",
+)
+
+internal fun shouldDeleteRetiredBundledSkill(name: String, hasSeedMarker: Boolean): Boolean =
+    hasSeedMarker && name in RETIRED_BUNDLED_SKILLS
+
 class SkillManager(
     private val context: Context,
     private val settingsStore: SettingsStore,
@@ -255,6 +273,17 @@ class SkillManager(
             Log.w(TAG, "seedDefaultSkillsIfNeeded: cannot list assets", e)
             return
         }
+        // Remove demos retired from the APK. A missing seed marker means the directory is
+        // user-owned, even if its name matches an old bundled skill, so leave it untouched.
+        RETIRED_BUNDLED_SKILLS.forEach { skillName ->
+            val retiredDir = SkillPaths.resolveSkillDir(getSkillsDir(), skillName) ?: return@forEach
+            if (shouldDeleteRetiredBundledSkill(skillName, retiredDir.resolve(".seeded").exists()) &&
+                retiredDir.deleteRecursively()
+            ) {
+                Log.i(TAG, "seedDefaultSkillsIfNeeded: removed retired bundled skill $skillName")
+            }
+        }
+
         for (skillName in skillNames) {
             val targetDir = SkillPaths.resolveSkillDir(getSkillsDir(), skillName) ?: continue
 
