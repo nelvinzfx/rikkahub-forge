@@ -99,7 +99,7 @@ internal fun AssistantRequestContent(
                     modifier = Modifier.padding(8.dp),
                     label = { Text("Auto-Compaction") },
                     description = {
-                        Text("Automatically compress conversation when context window fills up. Triggers after each assistant response when token usage exceeds the set percentage of the context window.")
+                        Text("Automatically compress completed history before generating a response when token usage exceeds the set percentage of the context window. Your pending message is preserved.")
                     },
                     tail = {
                         Switch(

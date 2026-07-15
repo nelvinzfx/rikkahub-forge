@@ -116,6 +116,14 @@ internal fun backgroundTextGenerationParams(
     customBody = model.customBodies,
 )
 
+internal fun shouldAutoCompactBeforeGeneration(
+    answer: Boolean,
+    enabled: Boolean,
+    usedTokens: Long,
+    contextWindow: Int,
+    triggerPercent: Int,
+): Boolean = answer && enabled && usedTokens >= contextWindow.toLong() * triggerPercent / 100
+
 /**
  * Apply [conversation] to [session]'s state only while the session is NOT generating.
  * Uses a compareAndSet loop so the isGenerating check and the write are observed
@@ -196,8 +204,8 @@ class ChatService(
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
 
-    // Auto-compaction state per conversation: true while compaction is running.
-    // sendMessage blocks while true, preventing race conditions with user input.
+    // Auto-compaction state per conversation. Generation is gated in sendMessage while
+    // prior completed turns are compressed; the pending user message stays outside the summary.
     // Exposed as a flow so the UI can show a compaction dialog.
     private val _compactingConversations = MutableStateFlow<Set<Uuid>>(emptySet())
     val compactingConversations: StateFlow<Set<Uuid>> = _compactingConversations.asStateFlow()
@@ -210,7 +218,6 @@ class ChatService(
         }
         _compactingConversations.value = compactingSet.toSet()
     }
-    private fun isCompacting(conversationId: Uuid): Boolean = compactingSet.contains(conversationId)
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
@@ -496,16 +503,6 @@ class ChatService(
     ) {
         if (content.isEmptyInputMessage()) return
 
-        // Block if auto-compaction is in progress for this conversation.
-        // Poll every 200ms until done; the compaction itself finishes in seconds.
-        if (isCompacting(conversationId)) {
-            kotlinx.coroutines.runBlocking {
-                while (isCompacting(conversationId)) {
-                    kotlinx.coroutines.delay(200)
-                }
-            }
-        }
-
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
         previousJob?.cancel()
@@ -538,13 +535,51 @@ class ChatService(
                 }
 
                 // 添加消息到列表
-                val withUser = currentConversation.copy(
+                var afterUserSave = currentConversation.copy(
                     messageNodes = currentConversation.messageNodes + UIMessage(
                         role = MessageRole.USER,
                         parts = processedContent,
                     ).toMessageNode(),
                 )
-                saveConversation(conversationId, withUser)
+                saveConversation(conversationId, afterUserSave)
+
+                // Gate this turn before any router or LLM work starts. The just-persisted user
+                // message is kept verbatim while every completed prior turn is summarized.
+                val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
+                    .aggregate(afterUserSave).totalTokens
+                if (shouldAutoCompactBeforeGeneration(
+                        answer = answer,
+                        enabled = assistant.autoCompactionEnabled,
+                        usedTokens = usedTokens,
+                        contextWindow = assistant.autoCompactionContextWindow,
+                        triggerPercent = assistant.autoCompactionTriggerPercent,
+                    )
+                ) {
+                    Log.d(TAG, "auto-compaction: gating generation ($usedTokens tokens)")
+                    setCompacting(conversationId, true)
+                    val compactionResult = try {
+                        compressConversation(
+                            conversationId = conversationId,
+                            conversation = afterUserSave,
+                            additionalPrompt = "",
+                            targetTokens = assistant.autoCompactionContextWindow,
+                            keepRecentMessages = 1,
+                        )
+                    } finally {
+                        setCompacting(conversationId, false)
+                    }
+                    if (compactionResult.isFailure) {
+                        val error = compactionResult.exceptionOrNull()!!
+                        Log.w(TAG, "auto-compaction: pre-generation compaction failed", error)
+                        addError(
+                            error,
+                            conversationId,
+                            title = context.getString(R.string.error_title_compress_conversation),
+                        )
+                        return@launch
+                    }
+                    afterUserSave = session.state.value
+                }
 
                 // Phase 16 — fast-path router. If the assistant has it enabled and the user's
                 // message matches a deterministic intent, run the matching tool and inject the
@@ -555,7 +590,7 @@ class ChatService(
                     tryFastPathRoute(
                         conversationId,
                         processedContent,
-                        withUser,
+                        afterUserSave,
                         assistant,
                         turnOrchestratorMode,
                     )
@@ -1209,50 +1244,6 @@ class ChatService(
         }.onSuccess {
             val finalConversation = getConversationFlow(conversationId).value
             saveConversation(conversationId, finalConversation)
-
-            // Phase 31 — auto-compaction: if enabled, check context pressure and
-            // silently compress in background when above threshold.
-            if (assistant.autoCompactionEnabled) {
-                launchWithConversationReference(conversationId) {
-                    try {
-                        // Use TokenBudgetTracker.aggregate for cumulative token count
-                        // across all messages, not just the last one with usage data.
-                        val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
-                            .aggregate(finalConversation).totalTokens
-                        val threshold = (assistant.autoCompactionContextWindow.toLong()
-                            * assistant.autoCompactionTriggerPercent / 100)
-                        if (usedTokens >= threshold) {
-                            Log.d(TAG, "auto-compaction: triggering ($usedTokens >= $threshold)")
-                            setCompacting(conversationId, true)
-                            try {
-                                compressConversation(
-                                    conversationId = conversationId,
-                                    conversation = finalConversation,
-                                    additionalPrompt = "",
-                                    targetTokens = assistant.autoCompactionContextWindow,
-                                    keepRecentMessages = 0,
-                                )
-                            } finally {
-                                setCompacting(conversationId, false)
-                            }
-                            // After compaction, send a follow-up assistant message
-                            // to continue the turn. Must be done AFTER removing from
-                            // compacting state to avoid deadlocking ourselves.
-                            Log.d(TAG, "auto-compaction: done, continuing turn")
-                            sendMessage(
-                                conversationId = conversationId,
-                                content = listOf(
-                                    me.rerere.ai.ui.UIMessagePart.Text("continue")
-                                ),
-                                answer = true,
-                            )
-                        }
-                    } catch (e: Exception) {
-                        setCompacting(conversationId, false)
-                        Log.w(TAG, "auto-compaction: background compress failed", e)
-                    }
-                }
-            }
 
             launchWithConversationReference(conversationId) {
                 generateTitle(conversationId, finalConversation)

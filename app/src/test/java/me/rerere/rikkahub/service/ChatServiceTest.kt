@@ -6,6 +6,8 @@ import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatServiceTest {
@@ -25,5 +27,13 @@ class ChatServiceTest {
         assertEquals(ReasoningLevel.OFF, params.reasoningLevel)
         assertEquals(headers, params.customHeaders)
         assertEquals(bodies, params.customBody)
+    }
+
+    @Test
+    fun `auto compaction gates generation only when an answered turn reaches threshold`() {
+        assertTrue(shouldAutoCompactBeforeGeneration(true, true, 80_000, 100_000, 80))
+        assertFalse(shouldAutoCompactBeforeGeneration(true, true, 79_999, 100_000, 80))
+        assertFalse(shouldAutoCompactBeforeGeneration(false, true, 80_000, 100_000, 80))
+        assertFalse(shouldAutoCompactBeforeGeneration(true, false, 80_000, 100_000, 80))
     }
 }
