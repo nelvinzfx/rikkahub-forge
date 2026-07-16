@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.ai.tools
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -31,33 +32,46 @@ internal fun findMentionedSkillNames(
         .toList()
 }
 
-internal fun buildMentionedSkillsPrompt(
+internal suspend fun buildMentionedSkillsPrompt(
     userText: String,
     enabledSkills: Set<String>,
     allSkills: List<SkillMetadata>,
-    contentReader: (String) -> String?,
+    useSkillTool: Tool?,
 ): String {
-    val mentionedNames = findMentionedSkillNames(userText, enabledSkills)
-    if (mentionedNames.isEmpty()) return ""
+    if (useSkillTool?.name != "use_skill") return ""
 
-    val metadataByName = allSkills.associateBy { it.name }
-    val activated = mentionedNames.mapNotNull { name ->
-        val metadata = metadataByName[name] ?: return@mapNotNull null
-        if (metadata.autoLoad) return@mapNotNull null
-        val body = runCatching { contentReader(name) }.getOrNull()?.takeIf { it.isNotBlank() }
-            ?: return@mapNotNull null
-        name to body.trim()
-    }
+    val installedNames = allSkills.mapTo(hashSetOf()) { it.name.lowercase() }
+    val activated = findMentionedSkillNames(userText, enabledSkills)
+        .filter { it.lowercase() in installedNames }
+        .map { name ->
+            val input = buildJsonObject { put("name", name) }
+            val output = runCatching { useSkillTool.execute(input) }
+                .getOrElse { error ->
+                    if (error is CancellationException) throw error
+                    listOf(
+                        UIMessagePart.Text(
+                            buildJsonObject {
+                                put("error", "tool_failed")
+                                put("detail", (error.message ?: error.javaClass.simpleName).take(500))
+                                put("exception", error.javaClass.simpleName)
+                            }.toString()
+                        )
+                    )
+                }
+                .filterIsInstance<UIMessagePart.Text>()
+                .joinToString("\n") { it.text }
+            name to output
+        }
     if (activated.isEmpty()) return ""
 
     return buildString {
-        appendLine("The user explicitly activated the following skills for this turn with @mentions.")
-        appendLine("Apply their instructions now. Their contents are already loaded; do not call use_skill for these names unless an activated skill explicitly directs you to a linked file.")
+        appendLine("The following use_skill calls were automatically executed before this turn.")
+        appendLine("Apply their returned instructions while processing the user's unchanged request.")
         appendLine("<activated_skills>")
-        activated.forEach { (name, body) ->
-            appendLine("  <activated_skill name=\"$name\">")
-            appendLine(body)
-            appendLine("  </activated_skill>")
+        activated.forEach { (name, output) ->
+            appendLine("  <use_skill name=\"$name\">")
+            appendLine(output)
+            appendLine("  </use_skill>")
         }
         append("</activated_skills>")
     }

@@ -1005,6 +1005,15 @@ class ChatService(
             } else {
                 skillManager.listSkills()
             }
+            val skillTools = if (assistant.enabledSkills.isEmpty()) {
+                emptyList()
+            } else {
+                createSkillTools(
+                    enabledSkills = assistant.enabledSkills,
+                    allSkills = allSkills,
+                    skillManager = skillManager,
+                )
+            }
             val mentionedSkillsPrompt = buildMentionedSkillsPrompt(
                 userText = generationMessages.lastOrNull { it.role == MessageRole.USER }
                     ?.parts
@@ -1013,7 +1022,7 @@ class ChatService(
                     .orEmpty(),
                 enabledSkills = assistant.enabledSkills,
                 allSkills = allSkills,
-                contentReader = skillManager::readSkillBody,
+                useSkillTool = skillTools.firstOrNull { it.name == "use_skill" },
             )
             val systemAddendum = listOfNotNull(
                 me.rerere.rikkahub.data.ai.tools.ConversationSystemAddendum.get(conversationId),
@@ -1123,15 +1132,7 @@ class ChatService(
                     }
                     addAll(localTools.getTools(localToolOptions, invocationCtx))
                     addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
-                    if (assistant.enabledSkills.isNotEmpty()) {
-                        addAll(
-                            createSkillTools(
-                                enabledSkills = assistant.enabledSkills,
-                                allSkills = allSkills,
-                                skillManager = skillManager,
-                            )
-                        )
-                    }
+                    addAll(skillTools)
                     mcpManager.getAllAvailableTools().also { allTools ->
                         // Upstream name validation: a server name that isn't pure
                         // English+digits would produce an invalid `mcp__<name>__tool`
