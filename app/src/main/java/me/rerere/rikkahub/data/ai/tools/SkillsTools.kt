@@ -10,6 +10,59 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.files.SkillManager
 import me.rerere.rikkahub.data.files.SkillMetadata
 
+private val SKILL_MENTION_REGEX =
+    Regex("@([A-Za-z0-9_-]{1,40})(?![A-Za-z0-9_/\\\\-])")
+
+private fun Char.isSkillMentionBoundary(): Boolean =
+    isWhitespace() || this in "([{<\"'"
+
+internal fun findMentionedSkillNames(
+    text: String,
+    enabledSkills: Set<String>,
+): List<String> {
+    if (text.isBlank() || enabledSkills.isEmpty()) return emptyList()
+    val canonicalNames = enabledSkills.associateBy { it.lowercase() }
+    return SKILL_MENTION_REGEX.findAll(text)
+        .filter { match ->
+            match.range.first == 0 || text[match.range.first - 1].isSkillMentionBoundary()
+        }
+        .mapNotNull { match -> canonicalNames[match.groupValues[1].lowercase()] }
+        .distinct()
+        .toList()
+}
+
+internal fun buildMentionedSkillsPrompt(
+    userText: String,
+    enabledSkills: Set<String>,
+    allSkills: List<SkillMetadata>,
+    contentReader: (String) -> String?,
+): String {
+    val mentionedNames = findMentionedSkillNames(userText, enabledSkills)
+    if (mentionedNames.isEmpty()) return ""
+
+    val metadataByName = allSkills.associateBy { it.name }
+    val activated = mentionedNames.mapNotNull { name ->
+        val metadata = metadataByName[name] ?: return@mapNotNull null
+        if (metadata.autoLoad) return@mapNotNull null
+        val body = runCatching { contentReader(name) }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        name to body.trim()
+    }
+    if (activated.isEmpty()) return ""
+
+    return buildString {
+        appendLine("The user explicitly activated the following skills for this turn with @mentions.")
+        appendLine("Apply their instructions now. Their contents are already loaded; do not call use_skill for these names unless an activated skill explicitly directs you to a linked file.")
+        appendLine("<activated_skills>")
+        activated.forEach { (name, body) ->
+            appendLine("  <activated_skill name=\"$name\">")
+            appendLine(body)
+            appendLine("  </activated_skill>")
+        }
+        append("</activated_skills>")
+    }
+}
+
 fun createSkillTools(
     enabledSkills: Set<String>,
     allSkills: List<SkillMetadata>,

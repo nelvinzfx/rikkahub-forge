@@ -63,6 +63,7 @@ import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.tools.LocalTools
+import me.rerere.rikkahub.data.ai.tools.buildMentionedSkillsPrompt
 import me.rerere.rikkahub.data.ai.tools.createSearchTools
 import me.rerere.rikkahub.data.ai.tools.createSkillTools
 import me.rerere.rikkahub.data.ai.tools.createWorkspaceTools
@@ -992,6 +993,32 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
+            val generationMessages = conversation.currentMessages.let {
+                if (messageRange != null) {
+                    it.subList(messageRange.start, messageRange.endInclusive + 1)
+                } else {
+                    it
+                }
+            }
+            val allSkills = if (assistant.enabledSkills.isEmpty()) {
+                emptyList()
+            } else {
+                skillManager.listSkills()
+            }
+            val mentionedSkillsPrompt = buildMentionedSkillsPrompt(
+                userText = generationMessages.lastOrNull { it.role == MessageRole.USER }
+                    ?.parts
+                    ?.filterIsInstance<UIMessagePart.Text>()
+                    ?.joinToString("\n") { it.text }
+                    .orEmpty(),
+                enabledSkills = assistant.enabledSkills,
+                allSkills = allSkills,
+                contentReader = skillManager::readSkillBody,
+            )
+            val systemAddendum = listOfNotNull(
+                me.rerere.rikkahub.data.ai.tools.ConversationSystemAddendum.get(conversationId),
+                mentionedSkillsPrompt.takeIf { it.isNotBlank() },
+            ).joinToString("\n\n").takeIf { it.isNotBlank() }
             val effectiveOrchestratorMode = when {
                 conversation.enforceSubAgentPromptRules -> me.rerere.rikkahub.data.model.OrchestratorMode.OFF
                 orchestratorMode != null -> orchestratorMode
@@ -1004,12 +1031,10 @@ class ChatService(
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
-                // Read once per call so the surface that wrote the addendum (Telegram bot,
-                // anything else) gets its runtime context into the system prompt without
-                // having to plumb a parameter all the way through sendMessage. Returns null
-                // for in-app conversations that didn't register one.
-                systemAddendum = me.rerere.rikkahub.data.ai.tools
-                    .ConversationSystemAddendum.get(conversationId),
+                // Combine the surface runtime context with any skills explicitly activated
+                // by @mention in the latest user turn. Both are rebuilt per generation and
+                // never persisted into conversation history.
+                systemAddendum = systemAddendum,
                 conversationId = conversationId.toString(),
                 isToolAutoApproved = { toolName ->
                     // YOLO mode ("I AM STUPID" toggle in Settings → Tool approvals): every
@@ -1046,13 +1071,7 @@ class ChatService(
                             toolApprovalPreferences.current().contains(toolName)
                     }
                 },
-                messages = conversation.currentMessages.let {
-                    if (messageRange != null) {
-                        it.subList(messageRange.start, messageRange.endInclusive + 1)
-                    } else {
-                        it
-                    }
-                },
+                messages = generationMessages,
                 assistant = assistant,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
@@ -1108,7 +1127,7 @@ class ChatService(
                         addAll(
                             createSkillTools(
                                 enabledSkills = assistant.enabledSkills,
-                                allSkills = skillManager.listSkills(),
+                                allSkills = allSkills,
                                 skillManager = skillManager,
                             )
                         )
