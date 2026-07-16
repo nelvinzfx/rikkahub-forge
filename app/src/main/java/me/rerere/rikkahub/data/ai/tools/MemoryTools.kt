@@ -79,7 +79,7 @@ fun buildMemoryTools(
     ),
     Tool(
         name = "search_memories",
-        description = "Search this assistant's long-term memory bank. Returns ranked snippets; use get_memory for full content.",
+        description = "Search this assistant's long-term memory bank with broad multi-term recall across titles, content, and tags. Returns ranked snippets; use get_memory for full content.",
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {

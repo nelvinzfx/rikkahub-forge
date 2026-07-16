@@ -17,12 +17,15 @@ import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
+import me.rerere.rikkahub.data.db.dao.ConversationRecallCandidate
 import me.rerere.rikkahub.data.db.dao.searchConversationRecall
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.search.RecallSearch
+import me.rerere.rikkahub.data.search.RecallSearchPlan
 import me.rerere.rikkahub.utils.JsonInstant
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -167,19 +170,15 @@ class ConversationRepository(
     }
 
     suspend fun searchConversationRecall(query: String, limit: Int = 10): List<ConversationRecallResult> {
-        val pattern = "%${escapeLike(query)}%"
-        return messageNodeDAO.searchConversationRecall(pattern)
-            .distinctBy { it.conversationId }
-            .take(limit.coerceAtLeast(1))
-            .map { candidate ->
-                ConversationRecallResult(
-                    conversationId = candidate.conversationId,
-                    title = candidate.title,
-                    matchedSnippet = snippetAround(candidate.matchedText, query),
-                    matchType = candidate.matchType,
-                    timestamp = candidate.timestamp,
-                )
-            }
+        val plan = RecallSearch.plan(query)
+        if (plan.isEmpty) return emptyList()
+
+        val requestedLimit = limit.coerceIn(1, 100)
+        val candidateLimit = (requestedLimit * 20).coerceAtLeast(100).coerceAtMost(1000)
+        return rankConversationRecall(
+            candidates = messageNodeDAO.searchConversationRecall(RecallSearch.likePatterns(plan), candidateLimit),
+            plan = plan,
+        ).take(requestedLimit)
     }
 
     fun searchConversationsPaging(titleKeyword: String): Flow<PagingData<Conversation>> = Pager(
@@ -406,23 +405,6 @@ class ConversationRepository(
         )
     }
 
-    private fun escapeLike(value: String): String = value
-        .replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-
-    private fun snippetAround(text: String, query: String, maxLength: Int = 100): String {
-        if (text.length <= maxLength) return text
-        val match = text.indexOf(query, ignoreCase = true).coerceAtLeast(0)
-        val start = (match - maxLength / 2).coerceIn(0, text.length - maxLength)
-        val end = (start + maxLength).coerceAtMost(text.length)
-        return buildString {
-            if (start > 0) append("…")
-            append(text.substring(start, end))
-            if (end < text.length) append("…")
-        }
-    }
-
     private suspend fun loadMessageNodes(conversationId: String): List<MessageNode> {
         val favoriteNodeIds = favoriteDAO
             .getFavoriteNodeIdsOfConversation(conversationId)
@@ -477,6 +459,38 @@ class ConversationRepository(
         messageNodeDAO.insertAll(entities)
     }
 }
+
+internal fun rankConversationRecall(
+    candidates: List<ConversationRecallCandidate>,
+    plan: RecallSearchPlan,
+): List<ConversationRecallResult> = candidates
+    .groupBy { it.conversationId }
+    .values
+    .map { group ->
+        val title = group.first().title
+        val best = group.maxWith(
+            compareBy<ConversationRecallCandidate> {
+                RecallSearch.scoreConversationCandidate(it.matchType, it.matchedText, plan)
+            }.thenBy { it.timestamp }
+        )
+        val score = RecallSearch.scoreConversation(
+            title = title,
+            matchedTexts = group.map { it.matchedText }.distinct(),
+            plan = plan,
+        )
+        score to ConversationRecallResult(
+            conversationId = group.first().conversationId,
+            title = title,
+            matchedSnippet = RecallSearch.snippetAround(best.matchedText, plan),
+            matchType = best.matchType,
+            timestamp = group.maxOf { it.timestamp },
+        )
+    }
+    .sortedWith(
+        compareByDescending<Pair<Int, ConversationRecallResult>> { it.first }
+            .thenByDescending { it.second.timestamp }
+    )
+    .map { it.second }
 
 /**
  * 轻量级的会话查询结果，不包含 nodes 和 suggestions 字段

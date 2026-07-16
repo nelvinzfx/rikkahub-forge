@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
+import me.rerere.rikkahub.data.search.RecallSearch
 
 const val MEMORY_FTS_CREATE_SQL = """
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -52,6 +53,11 @@ class MemoryFtsManager(private val database: AppDatabase) {
 
     suspend fun search(assistantId: String, query: String, limit: Int): List<MemorySearchHit> =
         withContext(Dispatchers.IO) {
+            val plan = RecallSearch.plan(query)
+            if (plan.isEmpty) return@withContext emptyList()
+
+            val requestedLimit = limit.coerceIn(1, 100)
+            val candidateLimit = (requestedLimit * 20).coerceAtLeast(100).coerceAtMost(1000)
             val hits = mutableListOf<MemorySearchHit>()
             val cursor = db.query(
                 """
@@ -64,7 +70,7 @@ class MemoryFtsManager(private val database: AppDatabase) {
                 ORDER BY score ASC, m.importance DESC, m.updated_at DESC
                 LIMIT ?
                 """.trimIndent(),
-                arrayOf<Any?>(toFtsQuery(query), assistantId, limit.coerceIn(1, 100)),
+                arrayOf<Any?>(RecallSearch.toFtsOrQuery(plan), assistantId, candidateLimit),
             )
             cursor.use {
                 while (it.moveToNext()) {
@@ -77,6 +83,18 @@ class MemoryFtsManager(private val database: AppDatabase) {
                 }
             }
             hits
+                .map { hit ->
+                    hit.copy(
+                        score = RecallSearch.scoreMemory(hit.title, hit.content, hit.tags, plan).toDouble(),
+                        snippet = RecallSearch.bestSnippet(hit.title, hit.content, hit.tags, plan),
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<MemorySearchHit> { it.score }
+                        .thenByDescending { it.importance }
+                        .thenByDescending { it.updatedAt }
+                )
+                .take(requestedLimit)
         }
 
     suspend fun rebuild(memories: List<MemoryEntity>) = withContext(Dispatchers.IO) {
@@ -88,10 +106,4 @@ class MemoryFtsManager(private val database: AppDatabase) {
             )
         }
     }
-
-    private fun toFtsQuery(input: String): String = input
-        .trim()
-        .split(Regex("\\s+"))
-        .filter { it.isNotBlank() }
-        .joinToString(" AND ") { token -> "\"${token.replace("\"", "\"\"")}\"*" }
 }

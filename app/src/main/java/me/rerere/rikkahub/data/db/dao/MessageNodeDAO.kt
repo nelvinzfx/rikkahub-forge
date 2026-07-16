@@ -69,18 +69,25 @@ data class ConversationRecallCandidate(
     val matchRank: Int,
 )
 
-suspend fun MessageNodeDAO.searchConversationRecall(pattern: String): List<ConversationRecallCandidate> =
-    searchConversationRecallRaw(
+suspend fun MessageNodeDAO.searchConversationRecall(
+    patterns: List<String>,
+    limit: Int,
+): List<ConversationRecallCandidate> {
+    if (patterns.isEmpty()) return emptyList()
+    val textExpression = "CAST(json_extract(part.value, '$.text') AS TEXT)"
+    val titleWhere = patterns.joinToString(" OR ") { "c.title LIKE ? ESCAPE '\\' COLLATE NOCASE" }
+    val contentWhere = patterns.joinToString(" OR ") { "$textExpression LIKE ? ESCAPE '\\' COLLATE NOCASE" }
+    return searchConversationRecallRaw(
         SimpleSQLiteQuery(
             """
             SELECT conversationId, title, matchedText, matchType, timestamp, matchRank FROM (
                 SELECT c.id AS conversationId, c.title AS title, c.title AS matchedText,
                        'title' AS matchType, c.update_at AS timestamp, 0 AS matchRank
                 FROM conversationentity c
-                WHERE c.title LIKE ? ESCAPE '\' COLLATE NOCASE
+                WHERE $titleWhere
                 UNION ALL
                 SELECT c.id AS conversationId, c.title AS title,
-                       CAST(json_extract(part.value, '$.text') AS TEXT) AS matchedText,
+                       $textExpression AS matchedText,
                        'content' AS matchType,
                        COALESCE(
                            CAST(strftime('%s', json_extract(message.value, '$.createdAt')) AS INTEGER) * 1000,
@@ -92,13 +99,19 @@ suspend fun MessageNodeDAO.searchConversationRecall(pattern: String): List<Conve
                 JOIN json_each(node.messages) message
                 JOIN json_each(json_extract(message.value, '$.parts')) part
                 WHERE json_extract(part.value, '$.text') IS NOT NULL
-                  AND CAST(json_extract(part.value, '$.text') AS TEXT) LIKE ? ESCAPE '\' COLLATE NOCASE
+                  AND ($contentWhere)
             )
             ORDER BY matchRank ASC, timestamp DESC
+            LIMIT ?
             """.trimIndent(),
-            arrayOf(pattern, pattern),
+            buildList<Any?> {
+                addAll(patterns)
+                addAll(patterns)
+                add(limit.coerceIn(1, 1000))
+            }.toTypedArray(),
         )
     )
+}
 
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private val TOKEN_STATS_SQL = SimpleSQLiteQuery(

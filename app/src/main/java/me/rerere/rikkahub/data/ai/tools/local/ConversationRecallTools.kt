@@ -19,13 +19,13 @@ import kotlin.uuid.Uuid
 
 fun searchConversationsTool(repository: ConversationRepository): Tool = Tool(
     name = "search_conversations",
-    description = "Search saved conversation titles and message content. Title matches rank first; content matches are ordered newest first. Returns one result per conversation with a snippet around the match.",
+    description = "Search saved conversation titles and message content with broad multi-term recall. Queries may contain several related words; results are ranked by phrase match, term coverage, title/content relevance, and recency. Returns one result per conversation with a snippet around the best match.",
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("query", buildJsonObject {
                     put("type", "string")
-                    put("description", "Required case-insensitive search term")
+                    put("description", "Required case-insensitive search query; use natural multi-word queries when relevant")
                 })
                 put("limit", buildJsonObject {
                     put("type", "integer")
