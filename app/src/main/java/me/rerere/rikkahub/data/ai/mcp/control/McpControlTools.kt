@@ -134,10 +134,12 @@ internal fun inputSchemaJson(schema: InputSchema?): JsonObject? = when (schema) 
     null -> null
     is InputSchema.Obj -> buildJsonObject {
         put("type", "object")
+        schema.schema?.let { put("\$schema", it) }
         put("properties", schema.properties)
         schema.required?.let { req ->
             putJsonArray("required") { req.forEach { add(it) } }
         }
+        schema.defs?.let { put("\$defs", it) }
     }
 }
 

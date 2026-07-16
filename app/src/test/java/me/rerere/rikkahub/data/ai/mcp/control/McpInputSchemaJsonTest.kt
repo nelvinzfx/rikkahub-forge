@@ -45,6 +45,44 @@ class McpInputSchemaJsonTest {
     }
 
     @Test
+    fun `obj schema preserves dialect definitions and nested references`() {
+        val schema = InputSchema.Obj(
+            properties = buildJsonObject {
+                put("edits", buildJsonObject {
+                    put("type", "array")
+                    put("items", buildJsonObject { put("\$ref", "#/\$defs/EditSpec") })
+                })
+            },
+            required = listOf("edits"),
+            schema = "https://json-schema.org/draft/2020-12/schema",
+            defs = buildJsonObject {
+                put("EditSpec", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("mode", buildJsonObject { put("type", "string") })
+                    })
+                })
+            },
+        )
+
+        val json = inputSchemaJson(schema)!!
+        assertEquals(
+            "https://json-schema.org/draft/2020-12/schema",
+            json["\$schema"]?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "#/\$defs/EditSpec",
+            json["properties"]!!.jsonObject["edits"]!!.jsonObject["items"]!!
+                .jsonObject["\$ref"]?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            "object",
+            json["\$defs"]!!.jsonObject["EditSpec"]!!.jsonObject["type"]
+                ?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
     fun `obj schema with null required omits the required key`() {
         val schema = InputSchema.Obj(
             properties = buildJsonObject {
