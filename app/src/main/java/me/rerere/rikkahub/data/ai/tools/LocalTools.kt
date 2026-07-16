@@ -974,6 +974,7 @@ class LocalTools(
         }
         if (options.contains(LocalToolOption.ConversationRecall)) {
             tools.add(me.rerere.rikkahub.data.ai.tools.local.searchConversationsTool(conversationRepo))
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.readConversationTool(conversationRepo))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.openConversationTool(context, conversationRepo))
         }
         // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.
