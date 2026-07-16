@@ -13,6 +13,12 @@ import me.rerere.rikkahub.R
 val base = Typography()
 val Typography = Typography()
 
+/**
+ * Applies the selected UI font to the complete Material type scale, including expressive styles.
+ * Call sites that explicitly request a monospace/code font still override this family.
+ */
+fun typographyForFontFamily(fontFamily: FontFamily): Typography = Typography(fontFamily = fontFamily)
+
 // Set of Material typography styles to start with
 //val Typography = Typography(
 //    displayLargeEmphasized = base.displayLargeEmphasized.copy(
