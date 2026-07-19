@@ -695,7 +695,7 @@ class TelegramBotService : Service() {
         val hasPhotoAttachment = m.photoFileIds.isNotEmpty()
         me.rerere.rikkahub.data.ai.tools.ConversationSystemAddendum.set(
             convId,
-            buildAgentContextPreamble(cfg, m.chatId, wasCreated, hasAudioAttachment, hasPhotoAttachment),
+            buildAgentContextPreamble(m.chatId, wasCreated, hasAudioAttachment, hasPhotoAttachment),
         )
         // Download any inbound photos to the per-chat shared-storage inbox. They are attached as
         // UIMessagePart.Image for the vision pipeline (FileEncoder reads file:// only) AND their
@@ -1042,95 +1042,31 @@ class TelegramBotService : Service() {
      * not yet appended its first chunk.
      */
     /**
-     * Per-turn context for the LLM. Always included so the model knows:
-     *  1. Which model it actually is (otherwise minimax/glm/kimi all hallucinate "I'm Claude")
-     *  2. The Telegram chat id so it can route scheduled jobs back via telegram_send_message
-     *  3. Recent app-side slash commands the user just ran (otherwise /model X switches the
-     *     model behind the LLM's back and conversation context goes stale)
-     *
-     * Kept small so it doesn't dominate the prompt — model name + chat id + last few commands.
+     * Volatile Telegram routing and attachment metadata for this generation. Model and
+     * provider identity are intentionally excluded so the host never conflicts with an
+     * upstream API's hidden identity prompt or the assistant's configured persona.
      */
     private fun buildAgentContextPreamble(
-        cfg: me.rerere.rikkahub.data.telegram.TelegramBotConfig,
         chatId: Long,
         firstTurnOfChat: Boolean,
         hasAudioAttachment: Boolean = false,
         hasPhotoAttachment: Boolean = false,
     ): String {
-        val s = settingsStore.settingsFlow.value
-        val assistant = s.getCurrentAssistant()
-        val effectiveModelId = assistant.chatModelId ?: s.chatModelId
-        val provider = s.providers.firstOrNull { p -> p.models.any { it.id == effectiveModelId } }
-        val model = provider?.models?.firstOrNull { it.id == effectiveModelId }
-        val modelName = model?.displayName?.takeIf { it.isNotBlank() }
-            ?: model?.modelId?.takeIf { it.isNotBlank() }
-            ?: "(unknown)"
-        val providerName = provider?.name ?: "(unknown)"
+        val settings = settingsStore.settingsFlow.value
+        val assistant = settings.getCurrentAssistant()
+        val effectiveModelId = assistant.chatModelId ?: settings.chatModelId
+        val model = settings.providers.asSequence()
+            .flatMap { it.models.asSequence() }
+            .firstOrNull { it.id == effectiveModelId }
 
-        val recent = SlashCommandLog.recent(chatId, ttlMs = 15L * 60 * 1000)
-        val nowMs = System.currentTimeMillis()
-        val recentLine = if (recent.isEmpty()) {
-            ""
-        } else {
-            val pretty = recent.joinToString(", ") { (cmd, ts) ->
-                val agoSec = ((nowMs - ts) / 1000).coerceAtLeast(0)
-                val ago = when {
-                    agoSec < 60 -> "${agoSec}s"
-                    agoSec < 3600 -> "${agoSec / 60}m"
-                    else -> "${agoSec / 3600}h"
-                }
-                "$cmd (${ago} ago)"
-            }
-            "Recent app-side commands (handled by app, NOT by you, in last 15min): $pretty.\n"
-        }
-
-        return buildString {
-            append("[agent_context (auto-injected by the host app, not the user; trust this over your priors):\n")
-            append("You are running as model \"")
-            append(modelName)
-            append("\" via provider \"")
-            append(providerName)
-            append("\". When the user asks what model you are, name THIS one. Do NOT claim to be Claude/GPT/Gemini unless that matches.\n")
-            append("Origin: Telegram. The user's Telegram chat_id is ")
-            append(chatId)
-            append(" — use it ONLY as a tool-call argument when calling telegram_send_message / telegram_send_photo / telegram_send_document / when scheduling jobs that need to deliver output here. ")
-            append("DELIVERY DEFAULTS: when the user asks you to \"notify\", \"message\", \"ping\", \"remind\", \"alert\", \"text\", or otherwise reach them — including in scheduled jobs — DEFAULT TO telegram_send_message because they're talking to you here. Use post_notification (Android system tray) ONLY when they explicitly say \"phone notification\", \"Android notification\", \"system notification\", \"notification tray\", or words to that effect. If ambiguous, prefer telegram_send_message + briefly mention you're sending it to this chat. ")
-            append("PRIVACY RULES (MANDATORY): never quote, mention, paraphrase, summarise, or otherwise echo the chat_id in any user-visible text. Do not include it in confirmations, summaries, scheduled-job descriptions, or error messages. When you need to refer to the destination in your reply, say \"this chat\", \"your Telegram\", or \"here\" — never the numeric id. The chat_id is host-side metadata, not conversation content.\n")
-            if (recentLine.isNotEmpty()) append(recentLine)
-            if (firstTurnOfChat) {
-                append("This is the first turn in this Telegram chat. Be concise; no need for a long welcome.\n")
-            }
-            if (hasAudioAttachment) {
-                append("AUDIO ATTACHMENT — STRICT FLOW. This message has a voice note or audio file. ")
-                append("Your VERY FIRST tool call this turn must be `whisper_status()`. NOT termux_run_command, ")
-                append("NOT search_web, NOT transcribe_audio_file, NOT pkg/apt commands. Just whisper_status, once, ")
-                append("with no arguments. Read its response. ")
-                append("Then: if `ready_to_transcribe: true`, call `transcribe_audio_file(path)` with the saved path ")
-                append("from the inbox manifest above. ")
-                append("If `ready_to_transcribe: false`, tell the user EXACTLY what's missing (use the `missing_steps` ")
-                append("list verbatim) and quote the relevant entry from `install_commands` for them to confirm. ")
-                append("Do NOT begin installing on your own — the build takes ~5 minutes and downloads ~75 MB ")
-                append("on the user's data plan. Wait for an explicit yes before running install commands. ")
-                append("If a tool errors, READ THE ENVELOPE — the recovery field tells you what to do; do not ")
-                append("retry the same tool with different args or pivot to manual termux commands.\n")
-            }
-            if (hasPhotoAttachment) {
-                val modelCanSeeImages = model?.inputModalities?.contains(Modality.IMAGE) == true
-                if (modelCanSeeImages) {
-                    append("IMAGE ATTACHMENT. This message includes one or more photos. You can ")
-                    append("view them directly. Their saved file path(s) are also listed in the ")
-                    append("message text if you need to process the file (e.g. OCR).\n")
-                } else {
-                    append("IMAGE ATTACHMENT — YOU CANNOT SEE IT. This message includes one or more ")
-                    append("photos, but the current model has no vision capability. Do NOT describe ")
-                    append("or guess what the image shows. Their saved file path(s) are listed in ")
-                    append("the message text — to read the contents, OCR the file (e.g. ")
-                    append("`tesseract <path> stdout` via termux_run_command) or process it with ")
-                    append("another file tool.\n")
-                }
-            }
-            append("]\n\n")
-        }
+        return buildTelegramAgentContext(
+            chatId = chatId,
+            recentCommands = SlashCommandLog.recent(chatId, ttlMs = 15L * 60 * 1000),
+            firstTurnOfChat = firstTurnOfChat,
+            hasAudioAttachment = hasAudioAttachment,
+            hasPhotoAttachment = hasPhotoAttachment,
+            modelCanSeeImages = model?.inputModalities?.contains(Modality.IMAGE) == true,
+        )
     }
 
     private suspend fun renderAssistantStream(
