@@ -183,7 +183,7 @@ class McpManager(
                     arguments = args,
                 ),
             ),
-            options = RequestOptions(timeout = ToolRuntimeLimits.turnBudgetMs.milliseconds),
+            options = RequestOptions(timeout = ToolRuntimeLimits.toolCallTimeoutMs.milliseconds),
         )
         return result.content.map {
             when(it) {

@@ -41,10 +41,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Compile debug Kotlin
+      - name: Compile debug Kotlin and run tool-timeout tests
         run: |
           chmod +x gradlew
-          ./gradlew compileDebugKotlin --no-daemon --stacktrace
+          ./gradlew compileDebugKotlin :app:testDebugUnitTest \
+            --tests 'me.rerere.rikkahub.data.ai.GenerationHandlerToolCallTimeoutTest' \
+            --tests 'me.rerere.rikkahub.data.preferences.TermuxDefaultsTest' \
+            --tests 'me.rerere.rikkahub.data.preferences.TermuxRuntimeWiringTest' \
+            --no-daemon --stacktrace
 
       - name: Upload build report on failure
         if: failure()

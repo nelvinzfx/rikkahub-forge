@@ -23,7 +23,7 @@ A fork of [RikkaHub](https://github.com/rikkahub/rikkahub) focused on tool-call 
 
 ## What's different from upstream
 
-This fork doesn't add new tools or change agent behavior. The changes are UI/build focused.
+This fork keeps upstream compatibility while refining agent reliability, tool-call UX, and build hardening.
 
 ### Tool-call display
 
@@ -47,6 +47,7 @@ This fork doesn't add new tools or change agent behavior. The changes are UI/bui
 
 ### Bug fixes
 
+- **Independent tool-call timeouts** — every tool invocation gets a fresh timeout instead of sharing one turn-wide wall clock with model inference and earlier tools. The default is 30 minutes, configurable from 1 to 120 minutes under Settings → Termux, and applies to local and MCP tools.
 - **Parallel conversation data loss** — `ensureHydrated` no longer overwrites a session's live in-memory state with a stale DB snapshot while a generation is in flight. This caused turns to revert/disappear when switching between two conversations that were both generating.
 - **Thick dots at tree row boundaries** — caused by `StrokeCap.Round` overlap; fixed with butt caps.
 - **Thick vertical bar artifact** — brace curve radius was larger than half the row height, causing the bend's vertical leg to render past row bounds and overlap neighbouring rows. Now clamped to available height.

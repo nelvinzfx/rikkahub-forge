@@ -15,12 +15,12 @@ object TermuxDefaults {
     /** Hard ceiling: 10 min (600 s). Same as BrowserToolDefaults' per-tool max. */
     const val MAX_COMMAND_TIMEOUT_MS     = 600_000L  // 10 min
 
-    // --- Per-turn wall-clock budget (app-wide) ---------------------------------------------
-    // Default is 10 min matching the constant that was in GenerationHandler.kt.
-    /** Default per-turn wall-clock budget in ms. */
-    const val DEFAULT_TURN_BUDGET_MS = 10L * 60L * 1_000L  // 10 min
-    const val MIN_TURN_BUDGET_MS     =  1L * 60L * 1_000L  //  1 min
-    const val MAX_TURN_BUDGET_MS     = 60L * 60L * 1_000L  // 60 min
+    // --- Per-tool call timeout (app-wide) -------------------------------------------------
+    // Each invocation gets this full timeout. Model inference and earlier tool calls do not
+    // consume it, so a long multi-step generation cannot starve a later call before it starts.
+    const val DEFAULT_TOOL_CALL_TIMEOUT_MS =  30L * 60L * 1_000L  //  30 min
+    const val MIN_TOOL_CALL_TIMEOUT_MS     =   1L * 60L * 1_000L  //   1 min
+    const val MAX_TOOL_CALL_TIMEOUT_MS     = 120L * 60L * 1_000L  // 120 min
 
     // --- Verify smoke-test timeout ---------------------------------------------------------
     const val DEFAULT_VERIFY_TIMEOUT_MS =  8_000L   //  8 s
@@ -52,8 +52,14 @@ object TermuxDefaults {
     fun clampCommandTimeoutMs(ms: Long): Long =
         ms.coerceIn(MIN_COMMAND_TIMEOUT_MS, MAX_COMMAND_TIMEOUT_MS)
 
-    fun clampTurnBudgetMs(ms: Long): Long =
-        ms.coerceIn(MIN_TURN_BUDGET_MS, MAX_TURN_BUDGET_MS)
+    fun clampToolCallTimeoutMs(ms: Long): Long =
+        ms.coerceIn(MIN_TOOL_CALL_TIMEOUT_MS, MAX_TOOL_CALL_TIMEOUT_MS)
+
+    /** Resolve the renamed setting while preserving an explicitly saved legacy value. */
+    fun resolveToolCallTimeoutMs(configuredMs: Long?, legacyTurnBudgetMs: Long?): Long =
+        clampToolCallTimeoutMs(
+            configuredMs ?: legacyTurnBudgetMs ?: DEFAULT_TOOL_CALL_TIMEOUT_MS
+        )
 
     fun clampVerifyTimeoutMs(ms: Long): Long =
         ms.coerceIn(MIN_VERIFY_TIMEOUT_MS, MAX_VERIFY_TIMEOUT_MS)

@@ -6,15 +6,14 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Verifies that [TermuxRuntime] is the single source of truth for non-suspend read sites
- * (TermuxTool, GenerationHandler). Setting a value via the @Volatile field must be visible
- * immediately to all subsequent reads in the same process.
+ * Verifies that [TermuxRuntime] and ToolRuntimeLimits expose process-wide values to
+ * non-suspend tool call sites. An @Volatile write must be visible to subsequent reads.
  *
  * Full end-to-end wiring (TermuxPreferences.init -> TermuxRuntime -> tool call) requires a
  * DataStore + coroutine scheduler, which needs an Android runtime or Robolectric — beyond the
  * scope of a plain JVM unit test. Instead, we pin the invariant that the field mutation itself
- * is visible: if the @Volatile write+read round-trip is correct, the init {} collector in
- * TermuxPreferences and the runtime read in TermuxTool compose correctly.
+ * is visible: if the @Volatile write+read round-trip is correct, the preference collectors
+ * and the runtime reads in local, generation, and MCP call paths compose correctly.
  */
 class TermuxRuntimeWiringTest {
 
@@ -79,13 +78,16 @@ class TermuxRuntimeWiringTest {
     }
 
     @Test
-    fun toolRuntimeLimits_turnBudget_writeIsVisibleImmediately() {
-        val prev = me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.turnBudgetMs
+    fun toolRuntimeLimits_toolCallTimeout_writeIsVisibleImmediately() {
+        val prev = me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.toolCallTimeoutMs
         try {
-            me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.turnBudgetMs = 5L * 60_000L
-            assertEquals(5L * 60_000L, me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.turnBudgetMs)
+            me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.toolCallTimeoutMs = 45L * 60_000L
+            assertEquals(
+                45L * 60_000L,
+                me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.toolCallTimeoutMs,
+            )
         } finally {
-            me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.turnBudgetMs = prev
+            me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.toolCallTimeoutMs = prev
         }
     }
 

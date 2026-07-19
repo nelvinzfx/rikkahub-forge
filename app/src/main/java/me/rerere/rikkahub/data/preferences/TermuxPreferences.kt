@@ -21,9 +21,9 @@ import me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits
 private val Context.termuxDataStore by preferencesDataStore(name = "termux_prefs")
 
 /**
- * DataStore-backed settings store for Termux-specific knobs, plus the app-wide per-turn
- * wall-clock budget (surfaced here because GitHub issue #5 requested it alongside the
- * Termux timeouts). Mirrors [me.rerere.rikkahub.browser.BrowserPreferences] in shape.
+ * DataStore-backed settings store for Termux-specific knobs, plus the app-wide per-tool
+ * call timeout. The global setting remains here because GitHub issue #5 introduced it
+ * alongside the Termux timeouts. Mirrors [me.rerere.rikkahub.browser.BrowserPreferences].
  *
  * The [init] block pushes persisted values into the runtime holders ([TermuxRuntime] and
  * [ToolRuntimeLimits]) immediately on construction so all non-suspend callers (TermuxTool,
@@ -36,9 +36,10 @@ class TermuxPreferences(private val context: Context) {
 
     private val store = context.termuxDataStore
 
-    private val commandTimeoutKey = longPreferencesKey("command_timeout_ms")
-    private val turnBudgetKey     = longPreferencesKey("turn_budget_ms")
-    private val verifyTimeoutKey  = longPreferencesKey("verify_timeout_ms")
+    private val commandTimeoutKey  = longPreferencesKey("command_timeout_ms")
+    private val toolCallTimeoutKey = longPreferencesKey("tool_call_timeout_ms")
+    private val legacyTurnBudgetKey = longPreferencesKey("turn_budget_ms")
+    private val verifyTimeoutKey   = longPreferencesKey("verify_timeout_ms")
     private val workingDirKey     = stringPreferencesKey("working_dir")
     private val maxStdoutKey      = intPreferencesKey("max_stdout_bytes")
     private val maxStderrKey      = intPreferencesKey("max_stderr_bytes")
@@ -60,7 +61,7 @@ class TermuxPreferences(private val context: Context) {
         TermuxRuntime.maxStdoutBytes     = initial.maxStdoutBytes
         TermuxRuntime.maxStderrBytes     = initial.maxStderrBytes
         TermuxRuntime.aptWrapEnabled     = initial.aptWrapEnabled
-        ToolRuntimeLimits.turnBudgetMs   = initial.turnBudgetMs
+        ToolRuntimeLimits.toolCallTimeoutMs = initial.toolCallTimeoutMs
 
         // Async collectors keep the holders live on subsequent user edits. This scope is
         // intentionally NOT stored as a field — it is process-lived and we want it to stay
@@ -74,9 +75,9 @@ class TermuxPreferences(private val context: Context) {
                 .collect {}
         }
         scope.launch {
-            turnBudgetFlow()
+            toolCallTimeoutFlow()
                 .distinctUntilChanged()
-                .onEach { ToolRuntimeLimits.turnBudgetMs = it }
+                .onEach { ToolRuntimeLimits.toolCallTimeoutMs = it }
                 .collect {}
         }
         scope.launch {
@@ -119,9 +120,10 @@ class TermuxPreferences(private val context: Context) {
         )
     }
 
-    fun turnBudgetFlow(): Flow<Long> = store.data.map { prefs ->
-        TermuxDefaults.clampTurnBudgetMs(
-            prefs[turnBudgetKey] ?: TermuxDefaults.DEFAULT_TURN_BUDGET_MS
+    fun toolCallTimeoutFlow(): Flow<Long> = store.data.map { prefs ->
+        TermuxDefaults.resolveToolCallTimeoutMs(
+            configuredMs = prefs[toolCallTimeoutKey],
+            legacyTurnBudgetMs = prefs[legacyTurnBudgetKey],
         )
     }
 
@@ -159,8 +161,11 @@ class TermuxPreferences(private val context: Context) {
         store.edit { it[commandTimeoutKey] = TermuxDefaults.clampCommandTimeoutMs(ms) }
     }
 
-    suspend fun setTurnBudgetMs(ms: Long) {
-        store.edit { it[turnBudgetKey] = TermuxDefaults.clampTurnBudgetMs(ms) }
+    suspend fun setToolCallTimeoutMs(ms: Long) {
+        store.edit { prefs ->
+            prefs[toolCallTimeoutKey] = TermuxDefaults.clampToolCallTimeoutMs(ms)
+            prefs.remove(legacyTurnBudgetKey)
+        }
     }
 
     suspend fun setVerifyTimeoutMs(ms: Long) {
@@ -191,7 +196,10 @@ class TermuxPreferences(private val context: Context) {
         val prefs = store.data.first()
         return TermuxRuntimeConfig(
             commandTimeoutMs   = TermuxDefaults.clampCommandTimeoutMs(prefs[commandTimeoutKey] ?: TermuxDefaults.DEFAULT_COMMAND_TIMEOUT_MS),
-            turnBudgetMs       = TermuxDefaults.clampTurnBudgetMs(prefs[turnBudgetKey]         ?: TermuxDefaults.DEFAULT_TURN_BUDGET_MS),
+            toolCallTimeoutMs  = TermuxDefaults.resolveToolCallTimeoutMs(
+                configuredMs = prefs[toolCallTimeoutKey],
+                legacyTurnBudgetMs = prefs[legacyTurnBudgetKey],
+            ),
             verifyTimeoutMs    = TermuxDefaults.clampVerifyTimeoutMs(prefs[verifyTimeoutKey]    ?: TermuxDefaults.DEFAULT_VERIFY_TIMEOUT_MS),
             defaultWorkingDir  = TermuxDefaults.clampWorkingDir(prefs[workingDirKey]            ?: TermuxDefaults.DEFAULT_WORKING_DIR),
             maxStdoutBytes     = TermuxDefaults.clampMaxStdout(prefs[maxStdoutKey]              ?: TermuxDefaults.DEFAULT_MAX_STDOUT),
@@ -210,7 +218,7 @@ class TermuxPreferences(private val context: Context) {
  */
 data class TermuxRuntimeConfig(
     val commandTimeoutMs: Long,
-    val turnBudgetMs: Long,
+    val toolCallTimeoutMs: Long,
     val verifyTimeoutMs: Long,
     val defaultWorkingDir: String,
     val maxStdoutBytes: Int,

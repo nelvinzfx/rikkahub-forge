@@ -41,29 +41,45 @@ class TermuxDefaultsTest {
             TermuxDefaults.clampCommandTimeoutMs(TermuxDefaults.MAX_COMMAND_TIMEOUT_MS))
     }
 
-    // --- clampTurnBudgetMs ----------------------------------------------------------------
+    // --- clampToolCallTimeoutMs -----------------------------------------------------------
 
     @Test
-    fun turnBudget_belowFloor_snapsToMin() {
-        assertEquals(TermuxDefaults.MIN_TURN_BUDGET_MS,
-            TermuxDefaults.clampTurnBudgetMs(0L))
-        assertEquals(TermuxDefaults.MIN_TURN_BUDGET_MS,
-            TermuxDefaults.clampTurnBudgetMs(TermuxDefaults.MIN_TURN_BUDGET_MS - 1L))
+    fun toolCallTimeout_belowFloor_snapsToMin() {
+        assertEquals(TermuxDefaults.MIN_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.clampToolCallTimeoutMs(0L))
+        assertEquals(TermuxDefaults.MIN_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.clampToolCallTimeoutMs(TermuxDefaults.MIN_TOOL_CALL_TIMEOUT_MS - 1L))
     }
 
     @Test
-    fun turnBudget_aboveCeiling_snapsToMax() {
-        assertEquals(TermuxDefaults.MAX_TURN_BUDGET_MS,
-            TermuxDefaults.clampTurnBudgetMs(Long.MAX_VALUE))
-        assertEquals(TermuxDefaults.MAX_TURN_BUDGET_MS,
-            TermuxDefaults.clampTurnBudgetMs(TermuxDefaults.MAX_TURN_BUDGET_MS + 1L))
+    fun toolCallTimeout_aboveCeiling_snapsToMax() {
+        assertEquals(TermuxDefaults.MAX_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.clampToolCallTimeoutMs(Long.MAX_VALUE))
+        assertEquals(TermuxDefaults.MAX_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.clampToolCallTimeoutMs(TermuxDefaults.MAX_TOOL_CALL_TIMEOUT_MS + 1L))
     }
 
     @Test
-    fun turnBudget_inRange_passesThrough() {
-        assertEquals(TermuxDefaults.DEFAULT_TURN_BUDGET_MS,
-            TermuxDefaults.clampTurnBudgetMs(TermuxDefaults.DEFAULT_TURN_BUDGET_MS))
-        assertEquals(5L * 60_000L, TermuxDefaults.clampTurnBudgetMs(5L * 60_000L))
+    fun toolCallTimeout_inRange_passesThrough() {
+        assertEquals(TermuxDefaults.DEFAULT_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.clampToolCallTimeoutMs(TermuxDefaults.DEFAULT_TOOL_CALL_TIMEOUT_MS))
+        assertEquals(5L * 60_000L, TermuxDefaults.clampToolCallTimeoutMs(5L * 60_000L))
+    }
+
+    @Test
+    fun toolCallTimeout_resolver_prefersNewKey_thenLegacy_thenDefault() {
+        assertEquals(
+            45L * 60_000L,
+            TermuxDefaults.resolveToolCallTimeoutMs(45L * 60_000L, 10L * 60_000L),
+        )
+        assertEquals(
+            10L * 60_000L,
+            TermuxDefaults.resolveToolCallTimeoutMs(null, 10L * 60_000L),
+        )
+        assertEquals(
+            TermuxDefaults.DEFAULT_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.resolveToolCallTimeoutMs(null, null),
+        )
     }
 
     // --- clampVerifyTimeoutMs -------------------------------------------------------------
@@ -148,8 +164,8 @@ class TermuxDefaultsTest {
     fun defaults_areWithinTheirOwnBounds() {
         assertEquals(TermuxDefaults.DEFAULT_COMMAND_TIMEOUT_MS,
             TermuxDefaults.clampCommandTimeoutMs(TermuxDefaults.DEFAULT_COMMAND_TIMEOUT_MS))
-        assertEquals(TermuxDefaults.DEFAULT_TURN_BUDGET_MS,
-            TermuxDefaults.clampTurnBudgetMs(TermuxDefaults.DEFAULT_TURN_BUDGET_MS))
+        assertEquals(TermuxDefaults.DEFAULT_TOOL_CALL_TIMEOUT_MS,
+            TermuxDefaults.clampToolCallTimeoutMs(TermuxDefaults.DEFAULT_TOOL_CALL_TIMEOUT_MS))
         assertEquals(TermuxDefaults.DEFAULT_VERIFY_TIMEOUT_MS,
             TermuxDefaults.clampVerifyTimeoutMs(TermuxDefaults.DEFAULT_VERIFY_TIMEOUT_MS))
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDOUT,
@@ -159,10 +175,9 @@ class TermuxDefaultsTest {
     }
 
     @Test
-    fun turnBudget_defaultIs10Minutes() {
-        // Pin that the default matches the original GenerationHandler constant (10 min),
-        // not the spec's 5 min — per the task override instruction.
-        assertEquals(10L * 60L * 1_000L, TermuxDefaults.DEFAULT_TURN_BUDGET_MS)
+    fun toolCallTimeout_defaultIs30Minutes_andMaxIs120Minutes() {
+        assertEquals(30L * 60L * 1_000L, TermuxDefaults.DEFAULT_TOOL_CALL_TIMEOUT_MS)
+        assertEquals(120L * 60L * 1_000L, TermuxDefaults.MAX_TOOL_CALL_TIMEOUT_MS)
     }
 
     @Test

@@ -54,6 +54,7 @@ import java.io.File
 import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
+import me.rerere.rikkahub.data.ai.limits.ToolCallTimeoutBudget
 import me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
 import me.rerere.rikkahub.data.datastore.Settings
@@ -154,9 +155,9 @@ private const val TAG_GH_LOOP = "GenHandlerLoop"
  */
 private const val LOOP_GUARD_REPEAT_THRESHOLD = 3
 
-// The per-turn wall-clock budget was hardcoded here (most recently 10 min). It now lives in
-// ToolRuntimeLimits.turnBudgetMs (default 10 min), user-configurable via Settings -> Termux;
-// every read site below uses that holder directly.
+// Tool execution is bounded per invocation by ToolRuntimeLimits.toolCallTimeoutMs. The
+// generation loop itself is bounded by maxSteps and the loop guards below; model inference and
+// earlier calls must not consume a later tool's timeout before that tool starts.
 
 /**
  * Max number of times the loop guard can trip in a single turn before we force-end the
@@ -373,20 +374,12 @@ class GenerationHandler(
             if (newParts == msg.parts) msg else msg.copy(parts = newParts)
         }
 
-        val turnStartMs = android.os.SystemClock.elapsedRealtime()
+        val toolCallTimeoutBudget = ToolCallTimeoutBudget {
+            ToolRuntimeLimits.toolCallTimeoutMs
+        }
         var loopGuardTripCount = 0
 
         for (stepIndex in 0 until maxSteps) {
-            // Wall-clock cap: any single user turn that has been running longer than the
-            // budget is force-ended, regardless of whether the model wants more steps.
-            // This is the second line of defence after maxSteps; without it a model that
-            // discovers many distinct tool calls (each within the loop guard) can still
-            // run for hours.
-            val elapsedMs = android.os.SystemClock.elapsedRealtime() - turnStartMs
-            if (elapsedMs > ToolRuntimeLimits.turnBudgetMs) {
-                Log.w(TAG, "generateText: wall-clock cap (${ToolRuntimeLimits.turnBudgetMs}ms) hit at step #$stepIndex; force-ending turn")
-                break
-            }
             // Repeated loop-guard trips mean the model is flailing: it bumps into the
             // guard, picks a different tool, that one also gets guarded, and so on. After
             // N trips we just stop — the model is not going to recover, and every extra
@@ -817,33 +810,30 @@ class GenerationHandler(
                                     emit(GenerationChunk.Messages(messages))
                                 }
                             }
-                            // Hard-cap individual tool execution at the remaining wall-clock
-                            // budget so a single tool with its OWN long timeout (camera 5min,
-                            // ssh_exec timeout_seconds=300) can't carry the turn past the
-                            // global ${ToolRuntimeLimits.turnBudgetMs}ms cap. If the budget is
-                            // already blown when we start the tool, return a structured
-                            // wall-clock envelope instead of even attempting.
-                            val remainingMs = ToolRuntimeLimits.turnBudgetMs -
-                                (android.os.SystemClock.elapsedRealtime() - turnStartMs)
-                            val result = if (remainingMs <= 0L) {
-                                Log.w(TAG, "generateText: ${toolDef.name} skipped — wall-clock budget already exceeded")
-                                listOf(UIMessagePart.Text(json.encodeToString(buildJsonObject {
-                                    put("error", JsonPrimitive("tool_cancelled_wall_clock"))
-                                    put("detail", JsonPrimitive("turn budget exceeded before tool started"))
-                                })))
-                            } else {
-                                withTimeoutOrNull(remainingMs) { toolDef.execute(args) }
-                                    ?: run {
-                                        Log.w(TAG, "generateText: ${toolDef.name} cancelled — wall-clock budget exhausted mid-execution")
-                                        listOf(UIMessagePart.Text(json.encodeToString(buildJsonObject {
-                                            put("error", JsonPrimitive("tool_cancelled_wall_clock"))
-                                            put(
-                                                "detail",
-                                                JsonPrimitive("tool execution exceeded the ${ToolRuntimeLimits.turnBudgetMs / 1000}s turn budget")
+                            // Every invocation gets the complete configured timeout. Do not
+                            // subtract model inference, approval waits, deep sleep, or prior tool
+                            // calls: doing so caused later calls to be rejected before execution.
+                            val timeoutMs = toolCallTimeoutBudget.nextTimeoutMs()
+                            val result = withTimeoutOrNull(timeoutMs) { toolDef.execute(args) }
+                                ?: run {
+                                    Log.w(TAG, "generateText: ${toolDef.name} exceeded its ${timeoutMs}ms per-call timeout")
+                                    listOf(UIMessagePart.Text(json.encodeToString(buildJsonObject {
+                                        put("error", JsonPrimitive("tool_timed_out"))
+                                        put(
+                                            "detail",
+                                            JsonPrimitive("tool execution exceeded the ${timeoutMs / 1000}s per-call timeout")
+                                        )
+                                        put("timeout_ms", JsonPrimitive(timeoutMs))
+                                        put(
+                                            "recovery",
+                                            JsonPrimitive(
+                                                "The tool started but did not complete before its independent timeout. " +
+                                                    "Verify the target state before retrying because a remote side effect " +
+                                                    "may have completed while its response was lost."
                                             )
-                                        })))
-                                    }
-                            }
+                                        )
+                                    })))
+                                }
                             // Upstream tool-output truncation: when the workspace shell is
                             // available, oversized text output is spilled to /tool_outputs/
                             // and replaced with a preview + read/grep instructions so the
