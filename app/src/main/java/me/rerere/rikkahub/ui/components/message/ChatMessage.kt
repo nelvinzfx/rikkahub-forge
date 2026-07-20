@@ -25,10 +25,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -88,6 +90,7 @@ import me.rerere.rikkahub.ui.components.ui.ChainOfThought
 import me.rerere.rikkahub.ui.components.ui.Favicon
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.modifier.shimmer
+import me.rerere.rikkahub.ui.components.ui.autoContrastColor
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
@@ -281,8 +284,8 @@ private fun MessagePartsBlock(
     // 消息输出HapticFeedback
     val hapticFeedback = LocalHapticFeedback.current
     val settings = LocalSettings.current
-    // Custom-theme chat overrides (null = follow the color scheme)
-    val chatTheme = settings.customThemes.firstOrNull { it.id == settings.themeId }
+    // Chat color overrides (null = theme default / auto-contrast)
+    val chatColors = settings.chatColors
     val partsState by rememberUpdatedState(parts)
 
     val handleClickCitation: (String) -> Unit = remember {
@@ -394,19 +397,24 @@ private fun MessagePartsBlock(
                                 Surface(
                                     modifier = Modifier.animateContentSize(),
                                     shape = RoundedCornerShape(16.dp),
-                                    color = (chatTheme?.userBubbleArgb?.let { Color(it.toInt()) }
+                                    color = (chatColors.userBubbleArgb?.let { Color(it.toInt()) }
                                         ?: MaterialTheme.colorScheme.primaryContainer).copy(alpha = settings.displaySetting.bubbleOpacity),
                                     onClick = { onUserMessageClick?.invoke() },
                                 ) {
-                                    Column(modifier = Modifier.padding(8.dp)) {
-                                        MarkdownBlock(
-                                            content = part.text.replaceRegexes(
-                                                assistant = assistant,
-                                                scope = AssistantAffectScope.USER,
-                                                visual = true,
-                                            ),
-                                            onClickCitation = handleClickCitation
-                                        )
+                                    val userTextColor = chatColors.userBubbleTextArgb?.let { Color(it.toInt()) }
+                                        ?: chatColors.userBubbleArgb?.let { autoContrastColor(it.toInt()) }
+                                        ?: LocalContentColor.current
+                                    CompositionLocalProvider(LocalContentColor provides userTextColor) {
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            MarkdownBlock(
+                                                content = part.text.replaceRegexes(
+                                                    assistant = assistant,
+                                                    scope = AssistantAffectScope.USER,
+                                                    visual = true,
+                                                ),
+                                                onClickCitation = handleClickCitation
+                                            )
+                                        }
                                     }
                                 }
                             } else {
@@ -414,18 +422,23 @@ private fun MessagePartsBlock(
                                     Surface(
                                         modifier = Modifier.animateContentSize(),
                                         shape = RoundedCornerShape(16.dp),
-                                        color = (chatTheme?.assistantBubbleArgb?.let { Color(it.toInt()) }
+                                        color = (chatColors.assistantBubbleArgb?.let { Color(it.toInt()) }
                                             ?: MaterialTheme.colorScheme.surfaceContainerHigh).copy(alpha = settings.displaySetting.bubbleOpacity),
                                     ) {
-                                        Column(modifier = Modifier.padding(8.dp)) {
-                                            MarkdownBlock(
-                                                content = part.text.replaceRegexes(
-                                                    assistant = assistant,
-                                                    scope = AssistantAffectScope.ASSISTANT,
-                                                    visual = true,
-                                                ),
-                                                onClickCitation = handleClickCitation,
-                                            )
+                                        val assistantTextColor = chatColors.assistantBubbleTextArgb?.let { Color(it.toInt()) }
+                                            ?: chatColors.assistantBubbleArgb?.let { autoContrastColor(it.toInt()) }
+                                            ?: LocalContentColor.current
+                                        CompositionLocalProvider(LocalContentColor provides assistantTextColor) {
+                                            Column(modifier = Modifier.padding(8.dp)) {
+                                                MarkdownBlock(
+                                                    content = part.text.replaceRegexes(
+                                                        assistant = assistant,
+                                                        scope = AssistantAffectScope.ASSISTANT,
+                                                        visual = true,
+                                                    ),
+                                                    onClickCitation = handleClickCitation,
+                                                )
+                                            }
                                         }
                                     }
                                 } else {

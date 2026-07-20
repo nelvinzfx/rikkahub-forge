@@ -625,6 +625,7 @@ data class Settings(
     val dynamicColor: Boolean = true,
     val themeId: String = PresetThemes[0].id,
     val customThemes: List<CustomTheme> = emptyList(),
+    val chatColors: ChatColorConfig = ChatColorConfig(),
     val developerMode: Boolean = false,
     val displaySetting: DisplaySetting = DisplaySetting(),
     val enableWebSearch: Boolean = false,
@@ -765,6 +766,17 @@ data class DisplaySetting(
     // tables are excluded — they always render with an outline. The tool-param pill
     // stays outline-only regardless.
     val enableOutlineBlocks: Boolean = true,
+)
+
+@Serializable
+data class ChatColorConfig(
+    // Chat-surface color overrides; null = theme default. Text colors additionally
+    // fall back to an auto-contrast of the matching bubble when only the bubble is set.
+    val backgroundArgb: Long? = null,
+    val userBubbleArgb: Long? = null,
+    val userBubbleTextArgb: Long? = null,
+    val assistantBubbleArgb: Long? = null,
+    val assistantBubbleTextArgb: Long? = null,
 )
 
 @Serializable

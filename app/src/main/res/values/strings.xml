@@ -867,6 +867,11 @@
   <string name="setting_theme_page_chat_background_color">Chat Background</string>
   <string name="setting_theme_page_user_bubble_color">User Bubble</string>
   <string name="setting_theme_page_assistant_bubble_color">Assistant Bubble</string>
+  <string name="setting_theme_page_user_bubble_text_color">User Bubble Text</string>
+  <string name="setting_theme_page_assistant_bubble_text_color">Assistant Bubble Text</string>
+  <string name="setting_chat_colors_title">Chat Colors</string>
+  <string name="setting_chat_colors_desc">Background, bubble and text colors for chat</string>
+  <string name="setting_chat_colors_reset">Reset</string>
   <string name="setting_theme_page_secondary_color">Secondary Color</string>
   <string name="setting_theme_page_tertiary_color">Tertiary Color</string>
   <string name="setting_theme_page_preview">Preview</string>

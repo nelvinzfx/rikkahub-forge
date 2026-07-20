@@ -118,6 +118,7 @@ import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesThemePage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesNotificationPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesGeneralPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesUIPage
+import me.rerere.rikkahub.ui.pages.setting.SettingChatColorsPage
 import me.rerere.rikkahub.ui.pages.setting.SettingThemePage
 import me.rerere.rikkahub.ui.pages.setting.SettingDonatePage
 import me.rerere.rikkahub.ui.pages.setting.SettingFilesPage
@@ -451,6 +452,10 @@ class RouteActivity : ComponentActivity() {
                                 SettingThemePage()
                             }
 
+                            entry<Screen.SettingChatColors> {
+                                SettingChatColorsPage()
+                            }
+
                             entry<Screen.SettingPreferences> {
                                 SettingPreferencesPage()
                             }
@@ -732,6 +737,9 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingTheme : Screen
+
+    @Serializable
+    data object SettingChatColors : Screen
 
     @Serializable
     data object SettingPreferences : Screen
