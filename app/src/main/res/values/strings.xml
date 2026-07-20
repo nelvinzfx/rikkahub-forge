@@ -1129,7 +1129,7 @@
   <string name="setting_model_page_prompt_compress">Context Compression</string>
   <string name="setting_display_page_bubble_opacity_title">Bubble Opacity</string>
   <string name="setting_display_page_outline_blocks_title">Outline Blocks</string>
-  <string name="setting_display_page_outline_blocks_desc">Show a thin outline around reasoning, tool and code blocks. Off: no outline, no fill</string>
+  <string name="setting_display_page_outline_blocks_desc">Show a thin outline around reasoning and tool blocks. Off: no outline, no fill. Code blocks and tables always have an outline</string>
   <string name="setting_provider_page_include_history_reasoning">Include History Reasoning</string>
 
   <!-- fork (agent) strings preserved from merge -->

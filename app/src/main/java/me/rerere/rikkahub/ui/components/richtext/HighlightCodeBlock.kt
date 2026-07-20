@@ -108,7 +108,6 @@ fun HighlightCodeBlock(
     val navController = LocalNavController.current
     val context = LocalContext.current
     val settings = LocalSettings.current
-    val outlineBlocks = settings.displaySetting.enableOutlineBlocks
     val normalizedLanguage = remember(language) { language.lowercase() }
     val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
@@ -139,7 +138,7 @@ fun HighlightCodeBlock(
 
     Column(
         modifier = modifier
-            .then(if (outlineBlocks) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large) else Modifier)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
             .clip(MaterialTheme.shapes.large),
     ) {
         Box(
@@ -162,9 +161,7 @@ fun HighlightCodeBlock(
                 },
             )
         }
-        if (outlineBlocks) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Column(
             modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
         ) {
