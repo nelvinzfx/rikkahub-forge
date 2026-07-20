@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.ui.components.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -60,6 +61,7 @@ private val LocalCardColor = staticCompositionLocalOf { Color.White }
  *
  * @param modifier 外层卡片的修饰符
  * @param cardColors 卡片配色
+ * @param border 卡片描边；为 `null` 时不描边
  * @param steps 需要渲染的步骤数据列表
  * @param collapsedVisibleCount 折叠时保留可见的尾部步骤数
  * @param collapsedAdaptiveWidth 是否在折叠态下使用内容自适应宽度
@@ -71,6 +73,7 @@ fun <T> ChainOfThought(
     cardColors: CardColors = CardDefaults.cardColors(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ),
+    border: BorderStroke? = null,
     steps: List<T>,
     collapsedVisibleCount: Int = 2,
     collapsedAdaptiveWidth: Boolean = false,
@@ -93,6 +96,7 @@ fun <T> ChainOfThought(
             modifier = modifier,
             colors = cardColors,
             shape = RoundedCornerShape(16.dp),
+            border = border,
         ) {
             Column(
                 modifier = Modifier
