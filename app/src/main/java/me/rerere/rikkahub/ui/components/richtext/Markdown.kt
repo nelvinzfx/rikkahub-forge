@@ -901,12 +901,10 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
             .padding(vertical = 8.dp)
             .clip(MaterialTheme.shapes.large)
             .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), MaterialTheme.shapes.large)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -958,6 +956,7 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
                 )
             }
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         DataTable(
             headers = headers,
             rows = rowComposables,
