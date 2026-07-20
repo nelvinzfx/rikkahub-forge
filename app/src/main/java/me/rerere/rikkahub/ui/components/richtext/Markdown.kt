@@ -3,6 +3,7 @@ package me.rerere.rikkahub.ui.components.richtext
 import android.content.ClipData
 import android.content.Intent
 import android.util.Log
+import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -234,6 +235,14 @@ private fun parseMarkdown(content: String): MarkdownParseResult {
     return MarkdownParseResult(preprocessed, astTree, astTree.containsHtml())
 }
 
+// Bounded process-wide cache: re-entering the composition (scrolling back to an
+// off-screen message) must never re-parse markdown that was parsed once. The output
+// of parseMarkdown is a pure function of the raw content, so content is a safe key.
+private val markdownParseCache = LruCache<String, MarkdownParseResult>(100)
+
+private fun parseMarkdownCached(content: String): MarkdownParseResult =
+    markdownParseCache.get(content) ?: parseMarkdown(content).also { markdownParseCache.put(content, it) }
+
 @Composable
 fun MarkdownBlock(
     content: String,
@@ -241,7 +250,7 @@ fun MarkdownBlock(
     style: TextStyle = LocalTextStyle.current,
     onClickCitation: (String) -> Unit = {}
 ) {
-    var (data, setData) = remember { mutableStateOf(parseMarkdown(content)) }
+    var (data, setData) = remember { mutableStateOf(parseMarkdownCached(content)) }
 
     // 监听内容变化，重新解析AST树
     // 这里在后台线程解析AST树, 防止频繁更新的时候掉帧
@@ -249,7 +258,7 @@ fun MarkdownBlock(
     LaunchedEffect(Unit) {
         snapshotFlow { updatedContent }
             .distinctUntilChanged()
-            .mapLatest { parseMarkdown(it) }
+            .mapLatest { parseMarkdownCached(it) }
             .catch { exception -> Log.e(TAG, "MarkdownBlock: failed to parse markdown", exception) }
             .flowOn(Dispatchers.Default)
             .collect { setData(it) }
