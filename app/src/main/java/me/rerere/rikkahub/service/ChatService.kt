@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -1192,7 +1195,7 @@ class ChatService(
                         )
                     }
                 },
-            ).onCompletion {
+            ).conflateLatest(STREAM_UPDATE_WINDOW_MS).onCompletion {
                 // 取消 Live Update 通知
                 cancelLiveUpdateNotification(conversationId)
 
@@ -2055,5 +2058,41 @@ class ChatService(
             val updatedConversation = currentConversation.copy(messageNodes = updatedNodes)
             saveConversation(conversationId, updatedConversation)
         }
+    }
+}
+
+/**
+ * Maximum rate at which streaming generation chunks are forwarded to the conversation
+ * StateFlow. Models emit deltas far faster than the UI can usefully render: every
+ * emission recomposes the chat list and re-parses markdown, so intermediate snapshots
+ * are conflated away. The first chunk passes immediately (time-to-first-token
+ * perception), then at most one per window, with the newest pending snapshot always
+ * delivered (trailing edge). Upstream completion propagates only after the buffer has
+ * drained, preserving the ordering the collector's onCompletion fallback relies on.
+ */
+private const val STREAM_UPDATE_WINDOW_MS = 75L
+
+internal fun <T> Flow<T>.conflateLatest(windowMs: Long): Flow<T> = channelFlow {
+    val channel = Channel<T>(Channel.CONFLATED)
+    launch {
+        try {
+            collect { channel.trySend(it) }
+        } finally {
+            channel.close()
+        }
+    }
+    var lastEmitAt = 0L
+    for (item in channel) {
+        var latest = item
+        if (lastEmitAt != 0L) {
+            val waitMs = lastEmitAt + windowMs - System.currentTimeMillis()
+            if (waitMs > 0) {
+                delay(waitMs)
+                // Pick up whatever accumulated during the wait so we emit the newest.
+                channel.tryReceive().getOrNull()?.let { latest = it }
+            }
+        }
+        send(latest)
+        lastEmitAt = System.currentTimeMillis()
     }
 }

@@ -49,6 +49,7 @@ jobs:
             --tests 'me.rerere.rikkahub.data.preferences.TermuxDefaultsTest' \
             --tests 'me.rerere.rikkahub.data.preferences.TermuxRuntimeWiringTest' \
             --tests 'me.rerere.rikkahub.service.TelegramAgentContextTest' \
+            --tests 'me.rerere.rikkahub.service.ConflateLatestTest' \
             --no-daemon --stacktrace
 
       - name: Upload build report on failure
