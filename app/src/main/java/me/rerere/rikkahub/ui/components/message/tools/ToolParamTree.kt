@@ -154,7 +154,7 @@ fun ToolParamTree(
  * the key plus a single-line scalar (containers collapse to "{…}"/"[…]").
  */
 private fun firstEntryPreview(element: JsonElement): Pair<String, String> {
-    val entry: Pair<String, JsonElement>? = when (element) {
+    val entry = when (element) {
         is JsonObject -> element.entries
             .firstOrNull { !isEmptyValue(it.value) }
             ?.let { it.key to it.value }
