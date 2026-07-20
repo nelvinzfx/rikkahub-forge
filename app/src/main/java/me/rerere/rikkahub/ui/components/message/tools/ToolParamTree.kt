@@ -347,6 +347,7 @@ private fun TreeNode(
                 ancestorHasMore = ancestorHasMore,
                 lineColor = lineColor,
                 rowHeight = rowHeight,
+                branchY = rowHeight / 2f,
                 modifier = Modifier.fillMaxWidth().then(copyModifier),
                 verticalAlignment = Alignment.Top,
             ) {
@@ -382,6 +383,7 @@ private fun TreeRow(
     lineColor: Color,
     rowHeight: Float,
     modifier: Modifier = Modifier,
+    branchY: Float? = null,
     verticalAlignment: Alignment.Vertical = Alignment.CenterVertically,
     content: @Composable () -> Unit,
 ) {
@@ -405,7 +407,9 @@ private fun TreeRow(
         // --- This node's connector ---
         val spineX = (depth + 1) * INDENT_PX
         val contentX = spineX + BRANCH_PX
-        val centerY = size.height / 2f
+        // Multi-line rows pass branchY so the connector attaches at the FIRST line
+        // instead of the row's vertical middle.
+        val centerY = branchY ?: size.height / 2f
 
         // Curve radius: how far up the vertical the bend starts AND how far right it
         // reaches before settling horizontal. Bigger = rounder. MUST be clamped to the
