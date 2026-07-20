@@ -91,7 +91,6 @@ interface ToolUIRenderer {
         )
         ToolParamTree(
             element = context.arguments,
-            loading = context.loading,
         )
     }
 
@@ -119,7 +118,6 @@ interface ToolUIRenderer {
                         if (parsed != null) {
                             ToolParamTree(
                                 element = parsed,
-                                loading = false,
                             )
                         } else {
                             HighlightCodeBlock(
