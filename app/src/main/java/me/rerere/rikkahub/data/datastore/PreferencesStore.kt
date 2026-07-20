@@ -761,8 +761,8 @@ data class DisplaySetting(
     // search and directly navigable by ID — hidden, not inaccessible.
     val hideSubAgentChats: Boolean = true,
     // Outline style for chat structure blocks (reasoning/tool chain-of-thought card and
-    // markdown code blocks): true = transparent fill + thin outline, false = filled
-    // containers. The tool-param pill stays outline-only regardless.
+    // markdown code blocks): true = thin outline, no fill; false = no outline and no
+    // fill (fully bare). The tool-param pill stays outline-only regardless.
     val enableOutlineBlocks: Boolean = true,
 )
 

@@ -338,14 +338,10 @@ private fun MessagePartsBlock(
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         forceExpanded = hasPendingApproval,
-                        // Outline vs filled is a display setting; the tool-param pill
-                        // stays outline-only regardless.
+                        // Outline on = transparent + thin stroke; off = fully bare
+                        // (no stroke, no fill). Tool-param pill stays outline-only.
                         cardColors = CardDefaults.cardColors(
-                            containerColor = if (settings.displaySetting.enableOutlineBlocks) {
-                                Color.Transparent
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity)
-                            },
+                            containerColor = Color.Transparent,
                         ),
                         border = if (settings.displaySetting.enableOutlineBlocks) {
                             BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)

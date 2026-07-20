@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -140,14 +139,12 @@ fun HighlightCodeBlock(
 
     Column(
         modifier = modifier
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
-            .clip(MaterialTheme.shapes.large)
-            .then(if (outlineBlocks) Modifier else Modifier.background(MaterialTheme.colorScheme.surfaceContainer)),
+            .then(if (outlineBlocks) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large) else Modifier)
+            .clip(MaterialTheme.shapes.large),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (outlineBlocks) Modifier else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             HighlightCodeActions(
