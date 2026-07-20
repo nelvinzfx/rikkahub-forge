@@ -17,6 +17,12 @@ data class CustomTheme(
     val primaryColorArgb: Long = 0xFF6750A4,
     val secondaryColorArgb: Long? = null,
     val tertiaryColorArgb: Long? = null,
+    // Chat-surface overrides: null = follow the generated color scheme. Raw ARGB longs;
+    // their own alpha is honored, and DisplaySetting.bubbleOpacity still multiplies on
+    // top for bubbles.
+    val chatBackgroundArgb: Long? = null,
+    val userBubbleArgb: Long? = null,
+    val assistantBubbleArgb: Long? = null,
 ) {
     fun generateColorScheme(dark: Boolean): ColorScheme {
         val sourceHct = Hct.fromInt(primaryColorArgb.toInt())

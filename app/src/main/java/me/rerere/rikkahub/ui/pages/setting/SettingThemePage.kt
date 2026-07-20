@@ -464,6 +464,51 @@ private fun CustomThemeEditSheet(
                     }
                 )
 
+                Text(
+                    text = stringResource(R.string.setting_theme_page_chat_background_color),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                ColorPickerRow(
+                    color = if (currentTheme.chatBackgroundArgb != null) {
+                        Color(currentTheme.chatBackgroundArgb!!.toInt())
+                    } else {
+                        Color(currentTheme.generateColorScheme(false).background.toArgb())
+                    },
+                    onColorChange = {
+                        currentTheme = currentTheme.copy(chatBackgroundArgb = it.toArgb().toLong() and 0xFFFFFFFFL)
+                    }
+                )
+
+                Text(
+                    text = stringResource(R.string.setting_theme_page_user_bubble_color),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                ColorPickerRow(
+                    color = if (currentTheme.userBubbleArgb != null) {
+                        Color(currentTheme.userBubbleArgb!!.toInt())
+                    } else {
+                        Color(currentTheme.generateColorScheme(false).primaryContainer.toArgb())
+                    },
+                    onColorChange = {
+                        currentTheme = currentTheme.copy(userBubbleArgb = it.toArgb().toLong() and 0xFFFFFFFFL)
+                    }
+                )
+
+                Text(
+                    text = stringResource(R.string.setting_theme_page_assistant_bubble_color),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                ColorPickerRow(
+                    color = if (currentTheme.assistantBubbleArgb != null) {
+                        Color(currentTheme.assistantBubbleArgb!!.toInt())
+                    } else {
+                        Color(currentTheme.generateColorScheme(false).surfaceContainerHigh.toArgb())
+                    },
+                    onColorChange = {
+                        currentTheme = currentTheme.copy(assistantBubbleArgb = it.toArgb().toLong() and 0xFFFFFFFFL)
+                    }
+                )
+
                 ThemePreview(currentTheme)
             }
 
@@ -618,27 +663,85 @@ private fun ColorPickerRow(
             value = hslCode,
             onValueChange = { value ->
                 hslCode = value
-                val parsedHsl = parseHslCode(value)
-                hslCodeError = parsedHsl == null
-                if (parsedHsl != null) {
-                    hue = parsedHsl[0]
-                    saturation = parsedHsl[1]
-                    lightness = parsedHsl[2]
-                    onColorChange(Color(ColorUtils.HSLToColor(parsedHsl)))
+                val parsedArgb = parseColorCode(value)
+                hslCodeError = parsedArgb == null
+                if (parsedArgb != null) {
+                    ColorUtils.colorToHSL(parsedArgb, hsl)
+                    hue = hsl[0]
+                    saturation = hsl[1]
+                    lightness = hsl[2]
+                    onColorChange(Color(parsedArgb))
                 }
             },
-            label = { Text("HSL") },
-            placeholder = { Text("hsl(267 36% 48%)") },
+            label = { Text("Color") },
+            placeholder = { Text("#AARRGGBB, rgba(…), hsl(…)") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             isError = hslCodeError,
             supportingText = if (hslCodeError) {
-                { Text("Use hsl(267 36% 48%)") }
+                { Text("Try #FF6750A4, rgba(103,80,164,0.5) or hsl(267 36% 48%)") }
             } else {
                 null
             },
         )
     }
+}
+
+/**
+ * Parses a textual color into an ARGB Int. Accepts:
+ *  - hex: #RGB, #ARGB, #RRGGBB, #AARRGGBB
+ *  - functional rgb/rgba: rgb(103, 80, 164) / rgba(103, 80, 164, 0.5) — alpha 0..1
+ *    (fraction) or 0..255
+ *  - functional hsl: hsl(267 36% 48%) via [parseHslCode]
+ * Returns null when the input matches none of these.
+ */
+private fun parseColorCode(value: String): Int? {
+    val v = value.trim()
+    if (v.startsWith("#")) return parseHexColor(v)
+    val lower = v.lowercase()
+    if (lower.startsWith("rgb")) return parseRgbFunction(lower)
+    if (lower.startsWith("hsl")) return parseHslCode(v)?.let { ColorUtils.HSLToColor(it) }
+    return null
+}
+
+private fun parseHexColor(v: String): Int? {
+    val hex = v.removePrefix("#")
+    if (hex.any { it !in '0'..'9' && it !in 'a'..'f' && it !in 'A'..'F' }) return null
+    return runCatching {
+        when (hex.length) {
+            3 -> {
+                val r = hex[0].toString().repeat(2).toInt(16)
+                val g = hex[1].toString().repeat(2).toInt(16)
+                val b = hex[2].toString().repeat(2).toInt(16)
+                (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+            4 -> {
+                val a = hex[0].toString().repeat(2).toInt(16)
+                val r = hex[1].toString().repeat(2).toInt(16)
+                val g = hex[2].toString().repeat(2).toInt(16)
+                val b = hex[3].toString().repeat(2).toInt(16)
+                (a shl 24) or (r shl 16) or (g shl 8) or b
+            }
+            6 -> (0xFF shl 24) or hex.toLong(16).toInt()
+            8 -> hex.toLong(16).toInt()
+            else -> null
+        }
+    }.getOrNull()
+}
+
+private fun parseRgbFunction(v: String): Int? {
+    val nums = hslNumberRegex.findAll(v).mapNotNull { it.value.toFloatOrNull() }.toList()
+    if (nums.size !in 3..4) return null
+    val r = nums[0].coerceIn(0f, 255f).toInt()
+    val g = nums[1].coerceIn(0f, 255f).toInt()
+    val b = nums[2].coerceIn(0f, 255f).toInt()
+    val a = if (nums.size == 4) {
+        val raw = nums[3]
+        (if (raw <= 1f) raw * 255f else raw).toInt().coerceIn(0, 255)
+    } else {
+        0xFF
+    }
+    return (a shl 24) or (r shl 16) or (g shl 8) or b
 }
 
 private val hslNumberRegex = Regex("""[-+]?\d*\.?\d+""")

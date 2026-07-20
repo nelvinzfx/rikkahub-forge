@@ -373,7 +373,9 @@ private fun ChatPageContent(
     TTSAutoPlay(vm = vm, setting = setting, conversation = conversation)
 
     Surface(
-        color = MaterialTheme.colorScheme.background,
+        color = setting.customThemes.firstOrNull { it.id == setting.themeId }
+            ?.chatBackgroundArgb?.let { Color(it.toInt()) }
+            ?: MaterialTheme.colorScheme.background,
         modifier = Modifier.fillMaxSize()
     ) {
         AssistantBackground(setting = setting, modifier = Modifier.hazeSource(hazeState))
