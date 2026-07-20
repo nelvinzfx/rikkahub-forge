@@ -215,6 +215,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             Log.i(TAG, "streamText: $it")
         }
 
+        val toolCallIds = StreamedToolCallIdResolver()
+
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -228,16 +230,24 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
 
                 val dataJson = json.parseToJsonElement(data).jsonObject
-                val deltaMessage = parseMessage(buildJsonArray {
-                    val contentBlockObj = dataJson["content_block"]?.jsonObject
-                    val deltaObj = dataJson["delta"]?.jsonObject
-                    if (contentBlockObj != null) {
-                        add(contentBlockObj)
-                    }
-                    if (deltaObj != null) {
-                        add(deltaObj)
-                    }
-                })
+                val streamIndex = dataJson["index"]?.jsonPrimitive?.intOrNull
+                val deltaMessage = parseMessage(
+                    content = buildJsonArray {
+                        val contentBlockObj = dataJson["content_block"]?.jsonObject
+                        val deltaObj = dataJson["delta"]?.jsonObject
+                        if (contentBlockObj != null) {
+                            add(contentBlockObj)
+                        }
+                        if (deltaObj != null) {
+                            add(deltaObj)
+                        }
+                    },
+                    streamedToolCallIds = toolCallIds,
+                    streamIndex = streamIndex,
+                )
+                if (type == "content_block_stop") {
+                    toolCallIds.remove(streamIndex)
+                }
                 val tokenUsage = parseTokenUsage(dataJson)
                 val messageChunk = MessageChunk(
                     id = id ?: "",
@@ -552,7 +562,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun parseMessage(content: JsonArray): UIMessage {
+    private fun parseMessage(
+        content: JsonArray,
+        streamedToolCallIds: StreamedToolCallIdResolver? = null,
+        streamIndex: Int? = null,
+    ): UIMessage {
         val parts = mutableListOf<UIMessagePart>()
 
         content.forEach { contentBlock ->
@@ -589,7 +603,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
 
                 "tool_use" -> {
-                    val id = block["id"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val wireId = block["id"]?.jsonPrimitive?.contentOrNull
+                    val id = streamedToolCallIds?.resolve(streamIndex, wireId) ?: wireId.orEmpty()
                     val name = block["name"]?.jsonPrimitive?.contentOrNull ?: ""
                     val input = block["input"]?.jsonObject ?: JsonObject(emptyMap())
                     parts.add(
@@ -606,7 +621,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val input = block["partial_json"]?.jsonPrimitive?.contentOrNull
                     parts.add(
                         UIMessagePart.Tool(
-                            toolCallId = "",
+                            toolCallId = streamedToolCallIds?.resolve(streamIndex, null).orEmpty(),
                             toolName = "",
                             input = input ?: "",
                             output = emptyList()

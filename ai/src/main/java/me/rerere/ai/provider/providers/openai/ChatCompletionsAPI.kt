@@ -33,6 +33,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.PartGroup
 import me.rerere.ai.provider.providers.groupPartsByToolBoundary
+import me.rerere.ai.provider.providers.StreamedToolCallIdResolver
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
@@ -151,6 +152,8 @@ class ChatCompletionsAPI(
         // just for debugging response body
         // println(client.newCall(request).await().body.string())
 
+        val toolCallIds = StreamedToolCallIdResolver()
+
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -190,7 +193,7 @@ class ChatCompletionsAPI(
                                 add(
                                     UIMessageChoice(
                                         index = 0,
-                                        delta = parseMessage(message),
+                                        delta = parseMessage(message, toolCallIds),
                                         message = null,
                                         finishReason = finishReason,
                                     )
@@ -791,7 +794,10 @@ class ChatCompletionsAPI(
         })
     }
 
-    private fun parseMessage(jsonObject: JsonObject): UIMessage {
+    private fun parseMessage(
+        jsonObject: JsonObject,
+        streamedToolCallIds: StreamedToolCallIdResolver? = null,
+    ): UIMessage {
         val role = MessageRole.valueOf(
             jsonObject["role"]?.jsonPrimitive?.contentOrNull?.uppercase() ?: "ASSISTANT"
         )
@@ -840,14 +846,17 @@ class ChatCompletionsAPI(
                         Log.w(TAG, "skipping unsupported tool call type: $type")
                         return@forEach
                     }
-                    val toolCallId = toolCalls.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                    val index = toolCalls.jsonObject["index"]?.jsonPrimitive?.intOrNull
+                    val wireToolCallId = toolCalls.jsonObject["id"]?.jsonPrimitive?.contentOrNull
+                    val toolCallId = streamedToolCallIds?.resolve(index, wireToolCallId)
+                        ?: wireToolCallId.orEmpty()
                     val toolName =
                         toolCalls.jsonObject["function"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
                     val arguments =
                         toolCalls.jsonObject["function"]?.jsonObject?.get("arguments")?.jsonPrimitive?.contentOrNull
                     add(
                         UIMessagePart.Tool(
-                            toolCallId = toolCallId ?: "",
+                            toolCallId = toolCallId,
                             toolName = toolName ?: "",
                             input = arguments ?: "",
                             output = emptyList()
