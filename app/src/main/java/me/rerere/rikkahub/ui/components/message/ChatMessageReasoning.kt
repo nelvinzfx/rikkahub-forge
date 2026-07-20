@@ -97,7 +97,9 @@ private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<Rea
         if (loading) {
             if (!state.expandState.expanded && settings.displaySetting.showThinkingContent)
                 state.expandState = ReasoningCardState.Preview
-            scrollState.animateScrollTo(scrollState.maxValue)
+            // Snap instead of animate: this effect re-fires on every streamed token,
+            // and restarting a smooth scroll animation per token is pure main-thread cost.
+            scrollState.scrollTo(scrollState.maxValue)
         } else {
             if (state.expandState.expanded) {
                 state.expandState = if (settings.displaySetting.autoCloseThinking)
@@ -167,16 +169,29 @@ private fun ReasoningContent(
                 }
             }
     ) {
+        val displayText = reasoning.reasoning.replaceRegexes(
+            assistant = assistant,
+            scope = AssistantAffectScope.ASSISTANT,
+            visual = true,
+        )
         val reasoningContent = @Composable {
-            MarkdownBlock(
-                content = reasoning.reasoning.replaceRegexes(
-                    assistant = assistant,
-                    scope = AssistantAffectScope.ASSISTANT,
-                    visual = true,
-                ),
-                style = reasoningTextStyle,
-                modifier = Modifier.fillMaxSize(),
-            )
+            // Plain text while streaming: re-parsing a multi-thousand-token markdown AST
+            // (plus syntax highlighting) on every token is the biggest render cost in the
+            // chat UI, and thinking text needs no formatting fidelity mid-stream. Markdown
+            // and SelectionContainer swap in once the reasoning is finished.
+            if (loading) {
+                Text(
+                    text = displayText,
+                    style = reasoningTextStyle,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                MarkdownBlock(
+                    content = displayText,
+                    style = reasoningTextStyle,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         // 流式生成期间不启用 SelectionContainer，避免 selectable 列表并发修改导致的
         // ConcurrentModificationException（详见 ChatMessage.kt 文本块同样处理）。
