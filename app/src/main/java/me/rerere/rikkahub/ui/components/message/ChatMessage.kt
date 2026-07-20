@@ -277,12 +277,12 @@ private fun MessagePartsBlock(
 ) {
     val context = LocalContext.current
     val contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
-    // Custom-theme chat overrides (null = follow the color scheme)
-    val chatTheme = settings.customThemes.firstOrNull { it.id == settings.themeId }
 
     // 消息输出HapticFeedback
     val hapticFeedback = LocalHapticFeedback.current
     val settings = LocalSettings.current
+    // Custom-theme chat overrides (null = follow the color scheme)
+    val chatTheme = settings.customThemes.firstOrNull { it.id == settings.themeId }
     val partsState by rememberUpdatedState(parts)
 
     val handleClickCitation: (String) -> Unit = remember {
