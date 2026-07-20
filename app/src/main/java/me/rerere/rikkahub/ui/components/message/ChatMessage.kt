@@ -338,12 +338,20 @@ private fun MessagePartsBlock(
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         forceExpanded = hasPendingApproval,
-                        // Transparent fill + thin outline, matching the tool-param pill:
-                        // the block reads as structure, not as a filled card.
+                        // Outline vs filled is a display setting; the tool-param pill
+                        // stays outline-only regardless.
                         cardColors = CardDefaults.cardColors(
-                            containerColor = Color.Transparent,
+                            containerColor = if (settings.displaySetting.enableOutlineBlocks) {
+                                Color.Transparent
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = settings.displaySetting.bubbleOpacity)
+                            },
                         ),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        border = if (settings.displaySetting.enableOutlineBlocks) {
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        } else {
+                            null
+                        },
                     ) { step ->
                         when (step) {
                             is ThinkingStep.ReasoningStep -> {

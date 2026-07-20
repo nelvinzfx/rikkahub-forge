@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -108,6 +109,7 @@ fun HighlightCodeBlock(
     val navController = LocalNavController.current
     val context = LocalContext.current
     val settings = LocalSettings.current
+    val outlineBlocks = settings.displaySetting.enableOutlineBlocks
     val normalizedLanguage = remember(language) { language.lowercase() }
     val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
@@ -139,11 +141,13 @@ fun HighlightCodeBlock(
     Column(
         modifier = modifier
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.large)
-            .clip(MaterialTheme.shapes.large),
+            .clip(MaterialTheme.shapes.large)
+            .then(if (outlineBlocks) Modifier else Modifier.background(MaterialTheme.colorScheme.surfaceContainer)),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .then(if (outlineBlocks) Modifier else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             HighlightCodeActions(
@@ -161,7 +165,9 @@ fun HighlightCodeBlock(
                 },
             )
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (outlineBlocks) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
         Column(
             modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
         ) {

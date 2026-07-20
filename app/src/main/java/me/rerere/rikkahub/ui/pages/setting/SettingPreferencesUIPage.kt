@@ -173,6 +173,18 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                         }
                     )
                     item(
+                        headlineContent = { Text(stringResource(R.string.setting_display_page_outline_blocks_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_display_page_outline_blocks_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.enableOutlineBlocks,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(enableOutlineBlocks = it))
+                                }
+                            )
+                        },
+                    )
+                    item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_chat_list_model_icon_title)) },
                         supportingContent = { Text(stringResource(R.string.setting_display_page_chat_list_model_icon_desc)) },
                         trailingContent = {

@@ -760,6 +760,10 @@ data class DisplaySetting(
     // orchestrator workers don't flood the drawer. Sub-agents are still findable via
     // search and directly navigable by ID — hidden, not inaccessible.
     val hideSubAgentChats: Boolean = true,
+    // Outline style for chat structure blocks (reasoning/tool chain-of-thought card and
+    // markdown code blocks): true = transparent fill + thin outline, false = filled
+    // containers. The tool-param pill stays outline-only regardless.
+    val enableOutlineBlocks: Boolean = true,
 )
 
 @Serializable
