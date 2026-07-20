@@ -3,7 +3,7 @@ package me.rerere.rikkahub.ui.components.message.tools
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +51,7 @@ import kotlinx.serialization.json.contentOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowRight01
+import me.rerere.hugeicons.stroke.McpServer
 import me.rerere.rikkahub.ui.context.LocalToaster
 
 // Layout constants — wider indent for better curve visibility
@@ -80,30 +81,97 @@ private val valStyle = SpanStyle(
 )
 
 /**
- * Tree-style JSON display with smooth curved connectors drawn via Canvas.
- * Lines are continuous (no gaps) with rounded bezier transitions.
+ * Pill-style collapsible JSON tree.
+ *
+ * Collapsed: a single rounded-outline pill — MCP icon, a dim [label] ("Ran"/
+ * "Result"), the first entry's key in a brighter tone and its value ellipsized
+ * to one line. Click to expand into the full connector tree, click again to
+ * collapse. Outline stroke only, no container fill.
  * Skips empty objects/arrays/blank values.
  */
 @Composable
 fun ToolParamTree(
     element: JsonElement,
+    label: String,
     modifier: Modifier = Modifier,
 ) {
     if (element is JsonObject && element.isEmpty()) return
     if (element is JsonArray && element.isEmpty()) return
 
+    var expanded by remember { mutableStateOf(false) }
+
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val brightKeyColor = MaterialTheme.colorScheme.onSurface
+    val shape = if (expanded) RoundedCornerShape(12.dp) else RoundedCornerShape(percent = 50)
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f))
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .heightIn(max = MAX_TREE_HEIGHT.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(0.dp),
+            .clip(shape)
+            .border(1.dp, borderColor, shape)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        TreeChildren(element, depth = 0, ancestorHasMore = emptyList())
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = HugeIcons.McpServer,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = labelColor,
+            )
+            val (previewKey, previewValue) = remember(element) { firstEntryPreview(element) }
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = labelColor)) { append("$label ") }
+                    withStyle(SpanStyle(color = brightKeyColor)) { append(previewKey) }
+                    withStyle(SpanStyle(color = labelColor)) { append(": $previewValue") }
+                },
+                fontFamily = treeFont,
+                fontSize = treeFontSize.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .heightIn(max = MAX_TREE_HEIGHT.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                TreeChildren(element, depth = 0, ancestorHasMore = emptyList())
+            }
+        }
     }
+}
+
+/**
+ * First non-empty entry of [element] rendered as the pill's one-line preview:
+ * the key plus a single-line scalar (containers collapse to "{…}"/"[…]").
+ */
+private fun firstEntryPreview(element: JsonElement): Pair<String, String> {
+    val entry: Pair<String, JsonElement>? = when (element) {
+        is JsonObject -> element.entries
+            .firstOrNull { !isEmptyValue(it.value) }
+            ?.let { it.key to it.value }
+        is JsonArray -> {
+            val idx = element.indexOfFirst { !isEmptyValue(it) }
+            if (idx >= 0) "[$idx]" to element[idx] else null
+        }
+        else -> null
+    } ?: return "" to ""
+    val valueText = when (val v = entry.second) {
+        is JsonPrimitive -> v.contentOrNull.orEmpty()
+            .trimEnd('\n', '\r')
+            .lineSequence().firstOrNull().orEmpty()
+        is JsonObject -> "{…}"
+        is JsonArray -> "[…]"
+    }
+    return entry.first to valueText
 }
 
 @Composable

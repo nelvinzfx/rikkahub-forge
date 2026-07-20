@@ -84,13 +84,9 @@ interface ToolUIRenderer {
     /** Inline parameters tree, shown when step is expanded */
     @Composable
     fun InlineParams(context: ToolUIContext) {
-        Text(
-            text = stringResource(R.string.chat_message_tool_call_label, context.tool.toolName),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         ToolParamTree(
             element = context.arguments,
+            label = stringResource(R.string.tool_tree_ran),
         )
     }
 
@@ -101,11 +97,6 @@ interface ToolUIRenderer {
     /** Inline raw JSON result, shown as tree-style like params */
     @Composable
     fun InlineResult(context: ToolUIContext) {
-        Text(
-            text = stringResource(R.string.chat_message_tool_call_result),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             context.tool.output.fastForEach { part ->
                 when (part) {
@@ -118,6 +109,7 @@ interface ToolUIRenderer {
                         if (parsed != null) {
                             ToolParamTree(
                                 element = parsed,
+                                label = stringResource(R.string.tool_tree_result),
                             )
                         } else {
                             HighlightCodeBlock(

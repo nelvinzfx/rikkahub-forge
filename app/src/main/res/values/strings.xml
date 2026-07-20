@@ -244,6 +244,8 @@
   <string name="chat_message_tool_call_generic">Called tool %1$s</string>
   <string name="chat_message_tool_call_label">Called tool %1$s</string>
   <string name="chat_message_tool_call_result">Call result</string>
+  <string name="tool_tree_ran">Ran</string>
+  <string name="tool_tree_result">Result</string>
   <string name="chat_message_tool_view_details">View details</string>
   <string name="chat_message_tool_call_title">Tool Call</string>
   <string name="chat_message_tool_clipboard_read">Read clipboard</string>
