@@ -106,6 +106,26 @@ fun ContextCompactionDialog(
                         )
                     }
 
+                    var contextWindowText by remember(assistant.autoCompactionContextWindow) {
+                        mutableStateOf(assistant.autoCompactionContextWindow.toString())
+                    }
+                    OutlinedTextField(
+                        value = contextWindowText,
+                        onValueChange = { input ->
+                            contextWindowText = input.filter(Char::isDigit)
+                            contextWindowText.toIntOrNull()?.takeIf { it > 0 }?.let {
+                                onUpdateAssistant(assistant.copy(autoCompactionContextWindow = it))
+                            }
+                        },
+                        label = { Text(stringResource(R.string.chat_page_compaction_context_window)) },
+                        supportingText = {
+                            Text(stringResource(R.string.chat_page_compaction_context_window_desc))
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+
                     var reserveText by remember(assistant.autoCompactionReserveTokens) {
                         mutableStateOf(assistant.autoCompactionReserveTokens.toString())
                     }

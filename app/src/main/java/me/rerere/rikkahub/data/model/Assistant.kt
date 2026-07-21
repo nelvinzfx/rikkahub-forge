@@ -89,9 +89,9 @@ data class Assistant(
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
     // Context compaction. Post-turn is the primary trigger; pre-request, tool-loop, and
     // one-shot overflow recovery are safety nets. Manual and auto use the same persistent
-    // checkpoint engine. Legacy contextWindow/triggerPercent/keepRecentMessages fields are
-    // retained only for stored-data compatibility (contextWindow is a fallback for custom
-    // models whose capability metadata has no context length).
+    // checkpoint engine. autoCompactionContextWindow is the user-configurable budget
+    // override (0 = use model metadata). triggerPercent/keepRecentMessages remain only
+    // for stored-data compatibility.
     val autoCompactionEnabled: Boolean = false,
     val autoCompactionContextWindow: Int = 200_000,
     val autoCompactionTriggerPercent: Int = 80,

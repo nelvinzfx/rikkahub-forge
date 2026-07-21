@@ -285,6 +285,8 @@
   <string name="chat_page_compaction_title">Context Compaction</string>
   <string name="chat_page_compaction_desc">Compaction preserves the full visible transcript while replacing older provider context with a structured checkpoint.</string>
   <string name="chat_page_compaction_usage">Effective context: %1$d / %2$d tokens</string>
+  <string name="chat_page_compaction_context_window">Context Window (tokens)</string>
+  <string name="chat_page_compaction_context_window_desc">Used for the compaction threshold and gauge; set this to the model or gateway limit.</string>
   <string name="chat_page_compact_now">Compact now</string>
   <string name="chat_message_compaction_checkpoint">Context checkpoint</string>
   <string name="chat_page_conversation_system_prompt">Conversation System Prompt</string>

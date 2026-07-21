@@ -905,8 +905,8 @@ private fun TopBar(
     val usedTokens = remember(conversation) { computeContextUsage(conversation) }
     ContextWindowGauge(
         usedTokens = usedTokens,
-        contextLength = gaugeModel?.contextLength
-            ?: conversationAssistant.autoCompactionContextWindow.takeIf { it > 0 }
+        contextLength = conversationAssistant.autoCompactionContextWindow.takeIf { it > 0 }
+            ?: gaugeModel?.contextLength
             ?: DEFAULT_CONTEXT_LENGTH,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     )

@@ -11,6 +11,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +40,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
@@ -61,9 +65,13 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
-import me.rerere.rikkahub.data.ai.COMPACTION_SUMMARY_MAX_TOKENS
+import me.rerere.rikkahub.data.ai.COMPACTION_TIMEOUT_MS
+import me.rerere.rikkahub.data.ai.buildCompactionFinalizationPrompt
 import me.rerere.rikkahub.data.ai.buildCompactionPrompt
 import me.rerere.rikkahub.data.ai.chunkCompactionInput
+import me.rerere.rikkahub.data.ai.compactionInputTokenBudget
+import me.rerere.rikkahub.data.ai.extractCompactionSummary
+import me.rerere.rikkahub.data.ai.reasoningDraft
 import me.rerere.rikkahub.data.ai.serializeForCompaction
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.tools.LocalTools
@@ -128,8 +136,9 @@ internal fun backgroundTextGenerationParams(
 )
 
 internal fun resolvedContextWindow(model: Model, assistant: Assistant): Int =
-    model.contextLength?.takeIf { it > 0 }
-        ?: assistant.autoCompactionContextWindow.coerceAtLeast(1)
+    assistant.autoCompactionContextWindow.takeIf { it > 0 }
+        ?: model.contextLength?.takeIf { it > 0 }
+        ?: 200_000
 
 internal fun isContextOverflowError(error: Throwable): Boolean =
     generateSequence(error) { it.cause }.any { cause ->
@@ -1673,32 +1682,73 @@ class ChatService(
             }
             val handler = providerManager.getProviderByType(provider)
             val serialized = serializeForCompaction(newMessages)
-            val inputBudget = ((compressionModel.contextLength ?: contextWindow) -
-                COMPACTION_SUMMARY_MAX_TOKENS - 4_096).coerceIn(1_000, 32_000)
-            val chunks = chunkCompactionInput(serialized, inputBudget)
+            val compressionWindow = compressionModel.contextLength?.takeIf { it > 0 }
+                ?: contextWindow
+            val chunks = chunkCompactionInput(
+                serialized,
+                compactionInputTokenBudget(compressionWindow),
+            )
             if (chunks.isEmpty()) throw IllegalStateException("Nothing to compact")
+
+            suspend fun summarize(chunk: String, previousSummary: String?): String {
+                val result = handler.generateText(
+                    providerSetting = provider,
+                    messages = listOf(UIMessage.user(buildCompactionPrompt(
+                        conversationChunk = chunk,
+                        previousSummary = previousSummary,
+                        additionalInstructions = additionalInstructions,
+                        locale = Locale.getDefault().displayName,
+                    ))),
+                    // A 4K output cap let reasoning consume the whole budget and return no
+                    // final Text. Leave output uncapped and explicitly request reasoning OFF.
+                    params = backgroundTextGenerationParams(
+                        model = compressionModel,
+                        reasoningLevel = ReasoningLevel.OFF,
+                        maxTokens = null,
+                    ),
+                )
+                val message = result.choices.firstOrNull()?.message
+                extractCompactionSummary(message)?.let { return it }
+
+                val draft = reasoningDraft(message)
+                    ?: throw IllegalStateException("Compaction model returned neither text nor a reasoning draft")
+                val finalized = handler.generateText(
+                    providerSetting = provider,
+                    messages = listOf(UIMessage.user(buildCompactionFinalizationPrompt(
+                        draft = draft,
+                        locale = Locale.getDefault().displayName,
+                    ))),
+                    params = backgroundTextGenerationParams(
+                        model = compressionModel,
+                        reasoningLevel = ReasoningLevel.OFF,
+                        maxTokens = null,
+                    ),
+                )
+                return extractCompactionSummary(finalized.choices.firstOrNull()?.message)
+                    ?: throw IllegalStateException("Compaction model returned an empty final checkpoint")
+            }
 
             setCompacting(conversationId, true)
             try {
-                var summary = previous?.annotation?.summary
-                for (chunk in chunks) {
-                    val prompt = buildCompactionPrompt(
-                        conversationChunk = chunk,
-                        previousSummary = summary,
-                        additionalInstructions = additionalInstructions,
-                        locale = Locale.getDefault().displayName,
-                    )
-                    val result = handler.generateText(
-                        providerSetting = provider,
-                        messages = listOf(UIMessage.user(prompt)),
-                        params = backgroundTextGenerationParams(
-                            model = compressionModel,
-                            maxTokens = COMPACTION_SUMMARY_MAX_TOKENS,
-                        ),
-                    )
-                    summary = result.choices.firstOrNull()?.message?.toText()?.trim()
-                        ?.takeIf { it.isNotBlank() }
-                        ?: throw IllegalStateException("Compaction model returned an empty summary")
+                val summary = withTimeout(COMPACTION_TIMEOUT_MS) {
+                    val oldSummary = previous?.annotation?.summary
+                    val partials = if (chunks.size == 1) {
+                        listOf(summarize(chunks.single(), oldSummary))
+                    } else {
+                        // Map large-context chunks concurrently, then merge once. This
+                        // replaces the old O(n) serial chain that could take over 10 min.
+                        coroutineScope {
+                            chunks.map { chunk -> async { summarize(chunk, null) } }.awaitAll()
+                        }
+                    }
+                    if (partials.size == 1) {
+                        partials.single()
+                    } else {
+                        summarize(
+                            chunk = partials.joinToString("\n\n--- PARTIAL CHECKPOINT ---\n\n"),
+                            previousSummary = oldSummary,
+                        )
+                    }
                 }
                 val tokensBefore = me.rerere.rikkahub.costguards.TokenBudgetTracker
                     .projectedContextTokens(conversation)
@@ -1706,7 +1756,7 @@ class ChatService(
                     conversationId,
                     conversation.withCompactionCheckpoint(
                         boundaryIndex = boundaryIndex,
-                        summary = summary!!,
+                        summary = summary,
                         tokensBefore = tokensBefore,
                     ),
                 )

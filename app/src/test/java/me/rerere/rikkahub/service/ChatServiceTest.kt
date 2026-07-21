@@ -40,10 +40,12 @@ class ChatServiceTest {
     }
 
     @Test
-    fun `model metadata context length wins over legacy assistant fallback`() {
-        val assistant = Assistant(autoCompactionContextWindow = 410_000)
-        assertEquals(200_000, resolvedContextWindow(Model(contextLength = 200_000), assistant))
-        assertEquals(410_000, resolvedContextWindow(Model(contextLength = null), assistant))
+    fun `configured compaction context window overrides model metadata`() {
+        val configured = Assistant(autoCompactionContextWindow = 410_000)
+        val automatic = Assistant(autoCompactionContextWindow = 0)
+        assertEquals(410_000, resolvedContextWindow(Model(contextLength = 200_000), configured))
+        assertEquals(200_000, resolvedContextWindow(Model(contextLength = 200_000), automatic))
+        assertEquals(200_000, resolvedContextWindow(Model(contextLength = null), automatic))
     }
 
     @Test

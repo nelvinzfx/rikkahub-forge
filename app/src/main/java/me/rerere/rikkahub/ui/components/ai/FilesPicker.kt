@@ -326,7 +326,9 @@ internal fun FilesPicker(
         )
         ContextCompactionDialog(
             assistant = assistant,
-            contextLength = model?.contextLength ?: assistant.autoCompactionContextWindow,
+            contextLength = assistant.autoCompactionContextWindow.takeIf { it > 0 }
+                ?: model?.contextLength
+                ?: 200_000,
             usedTokens = TokenBudgetTracker.projectedContextTokens(conversation),
             onUpdateAssistant = onUpdateAssistant,
             onDismiss = {

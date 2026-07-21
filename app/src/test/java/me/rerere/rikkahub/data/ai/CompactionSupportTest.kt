@@ -50,6 +50,37 @@ class CompactionSupportTest {
     }
 
     @Test
+    fun `large context uses its real budget instead of legacy 32k chunks`() {
+        assertEquals(389_520, compactionInputTokenBudget(410_000))
+        val serialized = "x".repeat(700_000)
+        assertEquals(1, chunkCompactionInput(serialized, compactionInputTokenBudget(410_000)).size)
+    }
+
+    @Test
+    fun `summary extraction prefers final text and accepts structured reasoning fallback`() {
+        val withText = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning("draft"),
+                UIMessagePart.Text("## Goal\nfinal\n## Critical Context\nkept"),
+            ),
+        )
+        assertTrue(extractCompactionSummary(withText)!!.contains("final"))
+
+        val reasoningOnly = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Reasoning(
+                "## Goal\nfallback\n## Critical Context\nkept"
+            )),
+        )
+        assertTrue(extractCompactionSummary(reasoningOnly)!!.contains("fallback"))
+        assertEquals(null, extractCompactionSummary(UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Reasoning("unstructured scratch")),
+        )))
+    }
+
+    @Test
     fun `chunking keeps all nonblank content within conservative bounds`() {
         val input = (1..500).joinToString("\n\n") { "paragraph-$it ${"x".repeat(20)}" }
         val chunks = chunkCompactionInput(input, inputTokenBudget = 1_000)
