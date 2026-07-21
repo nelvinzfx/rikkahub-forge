@@ -86,6 +86,23 @@ object TokenBudgetTracker {
         return measuredTokens + messages.drop(suffixStart).sumOf(::estimateMessageTokens)
     }
 
+    /**
+     * Start index of the trailing "recent" window to keep verbatim when at most
+     * [keepRecentTokens] tokens of messages may be kept. Walks backward from the newest
+     * message; the newest message is always kept even if it alone exceeds the budget
+     * (a pending user turn must survive compaction). Returns 0 when everything fits.
+     */
+    fun recentCutIndex(messages: List<UIMessage>, keepRecentTokens: Long): Int {
+        if (messages.isEmpty()) return 0
+        var accumulated = 0L
+        for (i in messages.lastIndex downTo 0) {
+            val next = accumulated + estimateMessageTokens(messages[i])
+            if (next > keepRecentTokens && i < messages.lastIndex) return i + 1
+            accumulated = next
+        }
+        return 0
+    }
+
     private fun estimateMessageTokens(message: UIMessage): Long =
         message.parts.sumOf(::estimatePartTokens) + 4L
 

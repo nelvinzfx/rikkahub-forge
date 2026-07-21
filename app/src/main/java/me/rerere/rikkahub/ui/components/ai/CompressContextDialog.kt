@@ -14,7 +14,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -201,17 +200,41 @@ fun CompressContextDialog(
                             modifier = Modifier.fillMaxWidth(),
                         )
 
-                        Text(
-                            text = stringResource(R.string.chat_page_compress_auto_trigger, assistant.autoCompactionTriggerPercent),
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                        Slider(
-                            value = assistant.autoCompactionTriggerPercent.toFloat(),
-                            onValueChange = {
-                                onUpdateAssistant(assistant.copy(autoCompactionTriggerPercent = it.toInt().coerceIn(50, 95)))
+                        var reserveText by remember(assistant.autoCompactionReserveTokens) {
+                            mutableStateOf(assistant.autoCompactionReserveTokens.toString())
+                        }
+                        OutlinedTextField(
+                            value = reserveText,
+                            onValueChange = { input ->
+                                reserveText = input.filter { it.isDigit() }
+                                reserveText.toIntOrNull()?.let { value ->
+                                    if (value > 0) {
+                                        onUpdateAssistant(assistant.copy(autoCompactionReserveTokens = value))
+                                    }
+                                }
                             },
-                            valueRange = 50f..95f,
-                            steps = 8,
+                            label = { Text(stringResource(R.string.chat_page_compress_auto_reserve_tokens)) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        var keepRecentText by remember(assistant.autoCompactionKeepRecentTokens) {
+                            mutableStateOf(assistant.autoCompactionKeepRecentTokens.toString())
+                        }
+                        OutlinedTextField(
+                            value = keepRecentText,
+                            onValueChange = { input ->
+                                keepRecentText = input.filter { it.isDigit() }
+                                keepRecentText.toIntOrNull()?.let { value ->
+                                    if (value >= 0) {
+                                        onUpdateAssistant(assistant.copy(autoCompactionKeepRecentTokens = value))
+                                    }
+                                }
+                            },
+                            label = { Text(stringResource(R.string.chat_page_compress_auto_keep_recent_tokens)) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }

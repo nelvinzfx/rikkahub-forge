@@ -125,8 +125,8 @@ internal fun shouldAutoCompactBeforeGeneration(
     enabled: Boolean,
     usedTokens: Long,
     contextWindow: Int,
-    triggerPercent: Int,
-): Boolean = answer && enabled && usedTokens >= contextWindow.toLong() * triggerPercent / 100
+    reserveTokens: Int,
+): Boolean = answer && enabled && usedTokens >= contextWindow.toLong() - reserveTokens
 
 /**
  * Apply [conversation] to [session]'s state only while the session is NOT generating.
@@ -547,43 +547,13 @@ class ChatService(
                 )
                 saveConversation(conversationId, afterUserSave)
 
-                // Gate this turn before any router or LLM work starts. The just-persisted user
-                // message is kept verbatim while every completed prior turn is summarized.
-                val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
-                    .projectedContextTokens(afterUserSave)
-                if (shouldAutoCompactBeforeGeneration(
-                        answer = answer,
-                        enabled = assistant.autoCompactionEnabled,
-                        usedTokens = usedTokens,
-                        contextWindow = assistant.autoCompactionContextWindow,
-                        triggerPercent = assistant.autoCompactionTriggerPercent,
-                    )
-                ) {
-                    Log.d(TAG, "auto-compaction: gating generation ($usedTokens tokens)")
-                    setCompacting(conversationId, true)
-                    val compactionResult = try {
-                        compressConversation(
-                            conversationId = conversationId,
-                            conversation = afterUserSave,
-                            additionalPrompt = "",
-                            targetTokens = assistant.autoCompactionContextWindow,
-                            keepRecentMessages = 1,
-                        )
-                    } finally {
-                        setCompacting(conversationId, false)
-                    }
-                    if (compactionResult.isFailure) {
-                        val error = compactionResult.exceptionOrNull()!!
-                        Log.w(TAG, "auto-compaction: pre-generation compaction failed", error)
-                        addError(
-                            error,
-                            conversationId,
-                            title = context.getString(R.string.error_title_compress_conversation),
-                        )
-                        return@launch
-                    }
-                    afterUserSave = session.state.value
+                // Gate this turn before any router or LLM work starts (pi-style budget:
+                // compact once context hits contextWindow - reserveTokens, keeping the
+                // newest keepRecentTokens of messages verbatim, then continue the turn).
+                if (!ensureWithinTokenBudget(conversationId, answer, afterUserSave, assistant)) {
+                    return@launch
                 }
+                afterUserSave = session.state.value
 
                 // Phase 16 — fast-path router. If the assistant has it enabled and the user's
                 // message matches a deterministic intent, run the matching tool and inject the
@@ -771,6 +741,14 @@ class ChatService(
                         messageNodes = conversation.messageNodes.subList(0, indexAt + 1)
                     )
                     saveConversation(conversationId, newConversation)
+                    // Regeneration is a generation entry without a fresh user message —
+                    // the budget gate must run here too (compaction then continues the turn).
+                    val settings = settingsStore.settingsFlow.first()
+                    val assistant = settings.assistants.find { it.id == newConversation.assistantId }
+                        ?: settings.getCurrentAssistant()
+                    if (!ensureWithinTokenBudget(conversationId, true, session.state.value, assistant)) {
+                        return@launch
+                    }
                     handleMessageComplete(conversationId)
                 } else {
                     if (regenerateAssistantMsg) {
@@ -1477,6 +1455,59 @@ class ChatService(
     }
 
     // ---- 压缩对话历史 ----
+
+    /**
+     * Pi-style token-budget gate shared by every answered-generation entry point. When
+     * the projected context of [conversation] reaches contextWindow - reserveTokens, the
+     * completed history is compacted while the newest keepRecentTokens of messages stay
+     * verbatim; the turn then continues immediately. Returns false ONLY when compaction
+     * ran and failed — the caller must abort the turn. After a successful run the caller
+     * must re-read the session state before proceeding.
+     */
+    private suspend fun ensureWithinTokenBudget(
+        conversationId: Uuid,
+        answer: Boolean,
+        conversation: Conversation,
+        assistant: Assistant,
+    ): Boolean {
+        val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
+            .projectedContextTokens(conversation)
+        if (!shouldAutoCompactBeforeGeneration(
+                answer = answer,
+                enabled = assistant.autoCompactionEnabled,
+                usedTokens = usedTokens,
+                contextWindow = assistant.autoCompactionContextWindow,
+                reserveTokens = assistant.autoCompactionReserveTokens,
+            )
+        ) {
+            return true
+        }
+        Log.d(TAG, "auto-compaction: gating generation ($usedTokens tokens)")
+        val allMessages = conversation.currentMessages
+        val keepCount = allMessages.size - me.rerere.rikkahub.costguards.TokenBudgetTracker
+            .recentCutIndex(allMessages, assistant.autoCompactionKeepRecentTokens.toLong())
+        setCompacting(conversationId, true)
+        val compactionResult = try {
+            compressConversation(
+                conversationId = conversationId,
+                conversation = conversation,
+                additionalPrompt = "",
+                targetTokens = assistant.autoCompactionContextWindow,
+                keepRecentMessages = keepCount,
+            )
+        } finally {
+            setCompacting(conversationId, false)
+        }
+        compactionResult.onFailure { error ->
+            Log.w(TAG, "auto-compaction: pre-generation compaction failed", error)
+            addError(
+                error,
+                conversationId,
+                title = context.getString(R.string.error_title_compress_conversation),
+            )
+        }
+        return compactionResult.isSuccess
+    }
 
     suspend fun compressConversation(
         conversationId: Uuid,

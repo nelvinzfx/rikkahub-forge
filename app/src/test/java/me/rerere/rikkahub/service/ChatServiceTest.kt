@@ -31,9 +31,9 @@ class ChatServiceTest {
 
     @Test
     fun `auto compaction gates generation only when an answered turn reaches threshold`() {
-        assertTrue(shouldAutoCompactBeforeGeneration(true, true, 80_000, 100_000, 80))
-        assertFalse(shouldAutoCompactBeforeGeneration(true, true, 79_999, 100_000, 80))
-        assertFalse(shouldAutoCompactBeforeGeneration(false, true, 80_000, 100_000, 80))
+        assertTrue(shouldAutoCompactBeforeGeneration(true, true, 83_616, 100_000, 16_384))
+        assertFalse(shouldAutoCompactBeforeGeneration(true, true, 83_615, 100_000, 16_384))
+        assertFalse(shouldAutoCompactBeforeGeneration(false, true, 83_616, 100_000, 16_384))
         assertFalse(shouldAutoCompactBeforeGeneration(true, false, 80_000, 100_000, 80))
     }
 }

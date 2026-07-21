@@ -87,13 +87,17 @@ data class Assistant(
     val fastPathRouterEnabled: Boolean = false,
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
-    // Phase 31 — auto-compaction. Before generating an answered user turn, the engine
-    // checks whether estimated context usage has reached contextWindow * triggerPercent / 100.
-    // If so, it compresses completed prior turns and preserves the pending user message.
+    // Phase 31 — auto-compaction, pi-style budgeting. Before generating, the engine
+    // estimates context usage; once it reaches contextWindow - autoCompactionReserveTokens
+    // it compacts history, keeping the newest autoCompactionKeepRecentTokens of messages
+    // verbatim and summarising everything older. The pending turn continues right after.
+    // triggerPercent/keepRecentMessages are legacy: kept for stored-data compat, unused.
     val autoCompactionEnabled: Boolean = false,
     val autoCompactionContextWindow: Int = 200_000,
     val autoCompactionTriggerPercent: Int = 80,
     val autoCompactionKeepRecentMessages: Int = 32,
+    val autoCompactionReserveTokens: Int = 16_384,
+    val autoCompactionKeepRecentTokens: Int = 20_000,
 )
 
 @Serializable
