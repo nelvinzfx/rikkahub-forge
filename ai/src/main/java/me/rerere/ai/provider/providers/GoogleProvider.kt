@@ -294,7 +294,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
                     sendLosslesslyFromCallback(messageChunk, eventSource::cancel)
                 } catch (e: Exception) {
-                    if (!isActive) return
                     Log.w(TAG, "onEvent: failed to parse $data", e)
                     eventSource.cancel()
                     close(e)
