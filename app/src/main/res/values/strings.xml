@@ -269,6 +269,14 @@
   <string name="chat_page_clear_all_errors">Clear all</string>
   <string name="chat_page_compress_additional_prompt">Additional Instructions (Optional)</string>
   <string name="chat_page_compress_additional_prompt_hint">Specify what to preserve or focus on</string>
+  <!-- Unused compatibility keys retained until translated resource packs are migrated. -->
+  <string name="chat_page_compress_context">Context Compaction</string>
+  <string name="chat_page_compress_context_desc">Legacy compatibility resource</string>
+  <string name="chat_page_compress_context_title">Context Compaction</string>
+  <string name="chat_page_compress_keep_recent">Legacy compatibility resource</string>
+  <string name="chat_page_compress_not_enough_messages">Nothing to compact</string>
+  <string name="chat_page_compress_target_tokens">Legacy compatibility resource</string>
+  <string name="chat_page_compress_warning">Legacy compatibility resource</string>
   <string name="chat_page_compress_auto_title">Auto-Compaction</string>
   <string name="chat_page_compress_auto_desc">Automatically compact after a turn reaches the model context budget, with pre-request and overflow recovery safeguards.</string>
   <string name="chat_page_compress_auto_reserve_tokens">Reserve Tokens (response buffer)</string>
