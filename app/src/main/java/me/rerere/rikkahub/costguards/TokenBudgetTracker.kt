@@ -4,6 +4,7 @@ import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.effectiveMessages
 
 /**
  * Phase 15 — pure-function token aggregator over a [Conversation]. Walks the currently-
@@ -75,16 +76,19 @@ object TokenBudgetTracker {
      * request, so use only the latest measured message, then estimate messages appended
      * after it. Summing every usage double-counts earlier context.
      */
-    fun projectedContextTokens(conversation: Conversation): Long {
-        val messages = conversation.currentMessages
+    fun projectedContextTokens(conversation: Conversation): Long =
+        projectedContextTokens(conversation.effectiveMessages())
+
+    fun projectedContextTokens(messages: List<UIMessage>): Long {
         val measuredIndex = messages.indexOfLast { it.usage != null }
-        val measuredTokens = messages.getOrNull(measuredIndex)?.usage?.let { usage ->
-            (usage.totalTokens.takeIf { it > 0 }
-                ?: (usage.promptTokens + usage.completionTokens)).toLong()
-        } ?: 0L
+        val measuredTokens = messages.getOrNull(measuredIndex)?.usage?.let(::usageTokens) ?: 0L
         val suffixStart = if (measuredIndex >= 0) measuredIndex + 1 else 0
         return measuredTokens + messages.drop(suffixStart).sumOf(::estimateMessageTokens)
     }
+
+    private fun usageTokens(usage: TokenUsage): Long =
+        (usage.totalTokens.takeIf { it > 0 }
+            ?: (usage.promptTokens + usage.completionTokens)).toLong()
 
     /**
      * Start index of the trailing "recent" window to keep verbatim when at most
@@ -102,6 +106,17 @@ object TokenBudgetTracker {
         }
         return 0
     }
+
+    /** Like [recentCutIndex], but moves the cut backward to a user-turn boundary. */
+    fun recentTurnCutIndex(messages: List<UIMessage>, keepRecentTokens: Long): Int {
+        val raw = recentCutIndex(messages, keepRecentTokens)
+        if (raw <= 0) return 0
+        return (raw downTo 0).firstOrNull { messages[it].role == me.rerere.ai.core.MessageRole.USER }
+            ?: 0
+    }
+
+    fun estimateMessagesTokens(messages: List<UIMessage>): Long =
+        messages.sumOf(::estimateMessageTokens)
 
     private fun estimateMessageTokens(message: UIMessage): Long =
         message.parts.sumOf(::estimatePartTokens) + 4L

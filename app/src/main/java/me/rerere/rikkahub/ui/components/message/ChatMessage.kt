@@ -661,6 +661,13 @@ private fun MessagePartsBlock(
                                         )
                                     }
                                 }
+
+                                is UIMessageAnnotation.Compaction -> {
+                                    Text(
+                                        text = stringResource(R.string.chat_message_compaction_checkpoint),
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                             }
                         }
                     }
@@ -671,7 +678,11 @@ private fun MessagePartsBlock(
                     expand = !expand
                 }
             ) {
-                Text(stringResource(R.string.citations_count, annotations.size))
+                val hasCompaction = annotations.any { it is UIMessageAnnotation.Compaction }
+                Text(
+                    if (hasCompaction) stringResource(R.string.chat_message_compaction_checkpoint)
+                    else stringResource(R.string.citations_count, annotations.size)
+                )
             }
         }
     }

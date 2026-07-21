@@ -69,9 +69,10 @@ import me.rerere.hugeicons.stroke.Video01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.ai.mcp.McpManager
+import me.rerere.rikkahub.costguards.TokenBudgetTracker
 import me.rerere.rikkahub.data.datastore.Settings
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
@@ -94,7 +95,7 @@ internal fun FilesPicker(
     assistant: Assistant,
     state: ChatInputState,
     mcpManager: McpManager,
-    onCompressContext: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job,
+    onCompactNow: (additionalInstructions: String) -> Job,
     onUpdateAssistant: (Assistant) -> Unit,
     onUpdateConversation: (Conversation) -> Unit,
     orchestratorMode: OrchestratorMode,
@@ -111,7 +112,11 @@ internal fun FilesPicker(
     onPickFile: () -> Unit,
 ) {
     val settings = LocalSettings.current
-    val provider = settings.getCurrentChatModel()?.findProvider(providers = settings.providers)
+    val activeModel = settings.findModelById(
+        conversation.chatModelId,
+        fallback = assistant.chatModelId ?: settings.chatModelId,
+    )
+    val provider = activeModel?.findProvider(providers = settings.providers)
     val navController = LocalNavController.current
     val workspaceRepository: WorkspaceRepository = koinInject()
     val workspaces by workspaceRepository.listFlow().collectAsState(initial = emptyList())
@@ -236,16 +241,16 @@ internal fun FilesPicker(
                 },
         )
 
-        // Compress History Button
+        // Context compaction
         ListItem(
             leadingContent = {
                 Icon(
                     imageVector = HugeIcons.Package01,
-                    contentDescription = stringResource(R.string.chat_page_compress_context),
+                    contentDescription = stringResource(R.string.chat_page_compaction_title),
                 )
             },
             headlineContent = {
-                Text(stringResource(R.string.chat_page_compress_context))
+                Text(stringResource(R.string.chat_page_compaction_title))
             },
             trailingContent = {
                 if (conversation.messageNodes.isNotEmpty()) {
@@ -313,17 +318,22 @@ internal fun FilesPicker(
             onDismiss = { onShowInjectionSheetChange(false) })
     }
 
-    // Compress Context Dialog
+    // One compaction dialog for auto settings and the shared manual engine.
     if (showCompressDialog) {
-        CompressContextDialog(
+        val model = settings.findModelById(
+            conversation.chatModelId,
+            fallback = assistant.chatModelId ?: settings.chatModelId,
+        )
+        ContextCompactionDialog(
             assistant = assistant,
+            contextLength = model?.contextLength ?: assistant.autoCompactionContextWindow,
+            usedTokens = TokenBudgetTracker.projectedContextTokens(conversation),
             onUpdateAssistant = onUpdateAssistant,
             onDismiss = {
                 onShowCompressDialogChange(false)
                 onDismiss()
-            }, onConfirm = { additionalPrompt, targetTokens, keepRecentMessages ->
-                onCompressContext(additionalPrompt, targetTokens, keepRecentMessages)
-            }
+            },
+            onCompactNow = onCompactNow,
         )
     }
 }

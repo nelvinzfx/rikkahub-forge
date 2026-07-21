@@ -13,9 +13,6 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +61,10 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
+import me.rerere.rikkahub.data.ai.COMPACTION_SUMMARY_MAX_TOKENS
+import me.rerere.rikkahub.data.ai.buildCompactionPrompt
+import me.rerere.rikkahub.data.ai.chunkCompactionInput
+import me.rerere.rikkahub.data.ai.serializeForCompaction
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.tools.LocalTools
 import me.rerere.rikkahub.data.ai.tools.buildMentionedSkillsPrompt
@@ -90,6 +91,10 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.model.effectiveMessages
+import me.rerere.rikkahub.data.model.latestCompaction
+import me.rerere.rikkahub.data.model.updateEffectiveMessages
+import me.rerere.rikkahub.data.model.withCompactionCheckpoint
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.toMessageNode
@@ -113,12 +118,31 @@ private const val STOP_JOIN_GRACE_MS = 1_500L
 internal fun backgroundTextGenerationParams(
     model: Model,
     reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
+    maxTokens: Int? = null,
 ): TextGenerationParams = TextGenerationParams(
     model = model,
     reasoningLevel = reasoningLevel,
+    maxTokens = maxTokens,
     customHeaders = model.customHeaders,
     customBody = model.customBodies,
 )
+
+internal fun resolvedContextWindow(model: Model, assistant: Assistant): Int =
+    model.contextLength?.takeIf { it > 0 }
+        ?: assistant.autoCompactionContextWindow.coerceAtLeast(1)
+
+internal fun isContextOverflowError(error: Throwable): Boolean =
+    generateSequence(error) { it.cause }.any { cause ->
+        val text = cause.message.orEmpty().lowercase(Locale.ROOT)
+        listOf(
+            "context_length_exceeded",
+            "maximum context length",
+            "context window",
+            "input is too long",
+            "too many tokens",
+            "token limit exceeded",
+        ).any(text::contains)
+    }
 
 internal fun shouldAutoCompactBeforeGeneration(
     answer: Boolean,
@@ -126,7 +150,7 @@ internal fun shouldAutoCompactBeforeGeneration(
     usedTokens: Long,
     contextWindow: Int,
     reserveTokens: Int,
-): Boolean = answer && enabled && usedTokens >= contextWindow.toLong() - reserveTokens
+): Boolean = answer && enabled && usedTokens > contextWindow.toLong() - reserveTokens
 
 /**
  * Apply [conversation] to [session]'s state only while the session is NOT generating.
@@ -214,6 +238,7 @@ class ChatService(
     private val _compactingConversations = MutableStateFlow<Set<Uuid>>(emptySet())
     val compactingConversations: StateFlow<Set<Uuid>> = _compactingConversations.asStateFlow()
     private val compactingSet = ConcurrentHashMap.newKeySet<Uuid>()
+    private val compactionMutexes = ConcurrentHashMap<Uuid, Mutex>()
     private fun setCompacting(conversationId: Uuid, compacting: Boolean) {
         if (compacting) {
             compactingSet.add(conversationId)
@@ -314,6 +339,7 @@ class ChatService(
         sessions.values.forEach { it.cleanup() }
         sessions.clear()
         sessionMutexes.clear()
+        compactionMutexes.clear()
     }.onFailure {
         // Don't let a teardown hiccup escape, but don't swallow it silently either —
         // a failure here can leave the lifecycle observer registered (slow leak).
@@ -354,6 +380,7 @@ class ChatService(
             // sessions where many conversations cycle in and out of memory.
             sessionMutexes.remove(conversationId)
             _sessionsVersion.value++
+            compactionMutexes.remove(conversationId)
             Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})")
         }
     }
@@ -369,6 +396,7 @@ class ChatService(
         session.cleanup()
         sessionMutexes.remove(conversationId)
         _sessionsVersion.value++
+        compactionMutexes.remove(conversationId)
         Log.i(TAG, "dropSession: $conversationId (remaining: ${sessions.size})")
     }
 
@@ -906,23 +934,6 @@ class ChatService(
 
     // ---- 处理消息补全 ----
 
-    /**
-     * After a MANUAL compression the conversation can end on a user message (always when
-     * keep=0, or when a turn was pending). Pi-style behaviour: continue that pending
-     * turn immediately through the normal generation path. No-op when the tail is not a
-     * user message or a generation is already running.
-     */
-    fun continueAfterCompression(conversationId: Uuid) {
-        val session = getOrCreateSession(conversationId)
-        if (session.isGenerating) return
-        val tail = session.state.value.currentMessages.lastOrNull() ?: return
-        if (tail.role != MessageRole.USER) return
-        val job = appScope.launch {
-            handleMessageComplete(conversationId)
-        }
-        session.setJob(job)
-    }
-
     private suspend fun handleMessageComplete(
         conversationId: Uuid,
         messageRange: ClosedRange<Int>? = null,
@@ -991,12 +1002,10 @@ class ChatService(
             // check invalid messages
             checkInvalidMessages(conversationId)
             val conversation = getConversationFlow(conversationId).value
-            val generationMessages = conversation.currentMessages.let {
-                if (messageRange != null) {
-                    it.subList(messageRange.start, messageRange.endInclusive + 1)
-                } else {
-                    it
-                }
+            val generationMessages = if (messageRange != null) {
+                conversation.currentMessages.subList(messageRange.start, messageRange.endInclusive + 1)
+            } else {
+                conversation.effectiveMessages()
             }
             val allSkills = if (assistant.enabledSkills.isEmpty()) {
                 emptyList()
@@ -1076,6 +1085,37 @@ class ChatService(
                             me.rerere.rikkahub.data.ai.tools.ToolApprovalAllowList
                                 .isAllowedForChat(conversationId, toolName) ||
                             toolApprovalPreferences.current().contains(toolName)
+                    }
+                },
+                onBeforeProviderRequest = { loopMessages ->
+                    if (!assistant.autoCompactionEnabled || messageRange != null) {
+                        loopMessages
+                    } else {
+                        val used = me.rerere.rikkahub.costguards.TokenBudgetTracker
+                            .projectedContextTokens(loopMessages)
+                        val window = resolvedContextWindow(model, assistant)
+                        if (used > window.toLong() - assistant.autoCompactionReserveTokens) {
+                            // Persist only when the loop actually needs compaction. Normal
+                            // provider steps stay in memory and keep the hot path DB-free.
+                            val latest = getConversationFlow(conversationId).value
+                                .updateEffectiveMessages(loopMessages)
+                            saveConversation(conversationId, latest)
+                            compactConversation(conversationId).getOrThrow()
+                            getConversationFlow(conversationId).value.effectiveMessages()
+                        } else loopMessages
+                    }
+                },
+                recoverContextOverflow = { error, loopMessages ->
+                    if (!assistant.autoCompactionEnabled || messageRange != null ||
+                        !isContextOverflowError(error)) {
+                        null
+                    } else {
+                        val latest = getConversationFlow(conversationId).value
+                            .updateEffectiveMessages(loopMessages)
+                        saveConversation(conversationId, latest)
+                        compactConversation(conversationId).getOrNull()?.let {
+                            getConversationFlow(conversationId).value.effectiveMessages()
+                        }
                     }
                 },
                 messages = generationMessages,
@@ -1210,8 +1250,12 @@ class ChatService(
             }.collect { chunk ->
                 when (chunk) {
                     is GenerationChunk.Messages -> {
-                        val updatedConversation = getConversationFlow(conversationId).value
-                            .updateCurrentMessages(chunk.messages)
+                        val current = getConversationFlow(conversationId).value
+                        val updatedConversation = if (messageRange == null) {
+                            current.updateEffectiveMessages(chunk.messages)
+                        } else {
+                            current.updateCurrentMessages(chunk.messages)
+                        }
                         updateConversation(conversationId, updatedConversation)
 
                         // Persist immediately when a tool transitions to "execution
@@ -1263,11 +1307,30 @@ class ChatService(
             val finalConversation = getConversationFlow(conversationId).value
             saveConversation(conversationId, finalConversation)
 
+            // Primary Pi-style trigger: compact immediately after a completed turn while
+            // provider usage is fresh. Pre-request gates still protect large user/tool turns.
+            if (assistant.autoCompactionEnabled && messageRange == null) {
+                val used = me.rerere.rikkahub.costguards.TokenBudgetTracker
+                    .projectedContextTokens(finalConversation)
+                val window = resolvedContextWindow(model, assistant)
+                if (used > window.toLong() - assistant.autoCompactionReserveTokens) {
+                    compactConversation(conversationId).onFailure { error ->
+                        Log.w(TAG, "auto-compaction: post-turn compaction failed", error)
+                        addError(
+                            error,
+                            conversationId,
+                            title = context.getString(R.string.error_title_compress_conversation),
+                        )
+                    }
+                }
+            }
+
+            val afterCompaction = getConversationFlow(conversationId).value
             launchWithConversationReference(conversationId) {
-                generateTitle(conversationId, finalConversation)
+                generateTitle(conversationId, afterCompaction)
             }
             launchWithConversationReference(conversationId) {
-                generateSuggestion(conversationId, finalConversation)
+                generateSuggestion(conversationId, afterCompaction)
             }
         }
     }
@@ -1471,15 +1534,21 @@ class ChatService(
         }
     }
 
-    // ---- 压缩对话历史 ----
+    // ---- Context compaction ----
+
+    private fun resolveConversationModel(
+        settings: me.rerere.rikkahub.data.datastore.Settings,
+        conversation: Conversation,
+        assistant: Assistant,
+    ): Model = settings.findModelById(
+        conversation.chatModelId,
+        fallback = assistant.chatModelId ?: settings.chatModelId,
+    ) ?: throw IllegalStateException("No chat model selected for compaction")
 
     /**
-     * Pi-style token-budget gate shared by every answered-generation entry point. When
-     * the projected context of [conversation] reaches contextWindow - reserveTokens, the
-     * completed history is compacted while the newest keepRecentTokens of messages stay
-     * verbatim; the turn then continues immediately. Returns false ONLY when compaction
-     * ran and failed — the caller must abort the turn. After a successful run the caller
-     * must re-read the session state before proceeding.
+     * Pre-provider budget gate. The current model metadata is the source of truth for the
+     * context window; the legacy assistant context value is only a fallback for custom
+     * models that do not expose capability metadata.
      */
     private suspend fun ensureWithinTokenBudget(
         conversationId: Uuid,
@@ -1487,35 +1556,22 @@ class ChatService(
         conversation: Conversation,
         assistant: Assistant,
     ): Boolean {
+        val settings = settingsStore.settingsFlow.first()
+        val model = resolveConversationModel(settings, conversation, assistant)
         val usedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
             .projectedContextTokens(conversation)
         if (!shouldAutoCompactBeforeGeneration(
                 answer = answer,
                 enabled = assistant.autoCompactionEnabled,
                 usedTokens = usedTokens,
-                contextWindow = assistant.autoCompactionContextWindow,
+                contextWindow = resolvedContextWindow(model, assistant),
                 reserveTokens = assistant.autoCompactionReserveTokens,
             )
-        ) {
-            return true
-        }
-        Log.d(TAG, "auto-compaction: gating generation ($usedTokens tokens)")
-        val allMessages = conversation.currentMessages
-        val keepCount = allMessages.size - me.rerere.rikkahub.costguards.TokenBudgetTracker
-            .recentCutIndex(allMessages, assistant.autoCompactionKeepRecentTokens.toLong())
-        setCompacting(conversationId, true)
-        val compactionResult = try {
-            compressConversation(
-                conversationId = conversationId,
-                conversation = conversation,
-                additionalPrompt = "",
-                targetTokens = assistant.autoCompactionContextWindow,
-                keepRecentMessages = keepCount,
-            )
-        } finally {
-            setCompacting(conversationId, false)
-        }
-        compactionResult.onFailure { error ->
+        ) return true
+
+        Log.d(TAG, "auto-compaction: pre-generation gate at $usedTokens tokens")
+        val result = compactConversation(conversationId)
+        result.onFailure { error ->
             Log.w(TAG, "auto-compaction: pre-generation compaction failed", error)
             addError(
                 error,
@@ -1523,98 +1579,141 @@ class ChatService(
                 title = context.getString(R.string.error_title_compress_conversation),
             )
         }
-        return compactionResult.isSuccess
+        return result.isSuccess
     }
 
-    suspend fun compressConversation(
+    /** Manual compaction never starts or continues an assistant turn. */
+    suspend fun compactConversationNow(
         conversationId: Uuid,
-        conversation: Conversation,
-        additionalPrompt: String,
-        targetTokens: Int,
-        keepRecentMessages: Int = 32
+        additionalInstructions: String = "",
+    ): Result<Unit> {
+        val session = getOrCreateSession(conversationId)
+        if (session.isGenerating) {
+            return Result.failure(IllegalStateException("Wait for the current turn to finish before compacting manually"))
+        }
+        return compactConversation(conversationId, additionalInstructions, force = true)
+    }
+
+    /**
+     * One compaction engine for manual, pre-turn, post-turn, tool-loop, and overflow paths.
+     * It preserves the full transcript and stores a checkpoint annotation at the cut
+     * boundary. Provider requests use summary + recent suffix; UI/search/export keep the
+     * original history. Repeated compactions incrementally merge the previous summary.
+     */
+    suspend fun compactConversation(
+        conversationId: Uuid,
+        additionalInstructions: String = "",
+        force: Boolean = false,
     ): Result<Unit> = runCatching {
-        val settings = settingsStore.settingsFlow.first()
-        val model = settings.findModelById(settings.compressModelId)
-            ?: settings.getCurrentChatModel()
-            ?: throw IllegalStateException("No model available for compression")
-        val provider = model.findProvider(settings.providers)
-            ?: throw IllegalStateException("Provider not found")
-        // Same defence as handleLlmTurn — refuse to compress against a disabled provider.
-        if (!provider.enabled) {
-            throw IllegalStateException(
-                "Provider '${provider.name}' is disabled — cannot compress. " +
-                    "Re-enable it in Settings → Providers, or set a different compression model."
+        compactionMutexes.computeIfAbsent(conversationId) { Mutex() }.withLock {
+            ensureHydrated(conversationId, allowWhileGenerating = true)
+            val conversation = getConversationFlow(conversationId).value
+            val settings = settingsStore.settingsFlow.first()
+            val assistant = settings.getAssistantById(conversation.assistantId)
+                ?: settings.getCurrentAssistant()
+            val chatModel = resolveConversationModel(settings, conversation, assistant)
+            val contextWindow = resolvedContextWindow(chatModel, assistant)
+            val effective = conversation.effectiveMessages()
+            val rawCut = me.rerere.rikkahub.costguards.TokenBudgetTracker.recentCutIndex(
+                effective,
+                assistant.autoCompactionKeepRecentTokens.toLong(),
             )
-        }
-
-        val providerHandler = providerManager.getProviderByType(provider)
-
-        val maxMessagesPerChunk = 256
-        val allMessages = conversation.currentMessages
-
-        // Split messages into those to compress and those to keep
-        val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
-
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
-            messagesToCompress = allMessages.dropLast(keepRecentMessages)
-            messagesToKeep = allMessages.takeLast(keepRecentMessages)
-        } else if (keepRecentMessages > 0) {
-            // Not enough messages to compress while keeping recent ones
-            throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-        } else {
-            messagesToCompress = allMessages
-            messagesToKeep = emptyList()
-        }
-
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
-            val left = splitMessages(messages.subList(0, mid))
-            val right = splitMessages(messages.subList(mid, messages.size))
-            return left + right
-        }
-
-        suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
-            val prompt = settings.compressPrompt.applyPlaceholders(
-                "content" to contentToCompress,
-                "target_tokens" to targetTokens.toString(),
-                "additional_context" to if (additionalPrompt.isNotBlank()) {
-                    "Additional instructions from user: $additionalPrompt"
-                } else "",
-                "locale" to Locale.getDefault().displayName
+            val turnCut = me.rerere.rikkahub.costguards.TokenBudgetTracker.recentTurnCutIndex(
+                effective,
+                assistant.autoCompactionKeepRecentTokens.toLong(),
             )
-
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(prompt)),
-                params = backgroundTextGenerationParams(model),
-            )
-
-            return result.choices[0].message?.toText()?.trim()
-                ?: throw IllegalStateException("Failed to generate compressed summary")
-        }
-
-        val compressedSummaries = coroutineScope {
-            splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk) } }
-                .awaitAll()
-        }
-
-        // Create new conversation with compressed history as multiple user messages + kept messages
-        val newMessageNodes = buildList {
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
+            // A single oversized turn may have no earlier user boundary. Keep the raw
+            // message boundary in that edge case; the checkpoint summary supplies the
+            // missing prefix context to the retained suffix.
+            val previous = conversation.latestCompaction()
+            val tail = effective.lastOrNull()
+            val tailIsCompletedAssistant = tail?.role == MessageRole.ASSISTANT &&
+                tail.getTools().none { !it.isExecuted }
+            val rawCandidate = turnCut.takeIf { it > 0 }
+                ?: rawCut.takeIf { it > 0 }
+                ?: 0
+            val retainedTokens = me.rerere.rikkahub.costguards.TokenBudgetTracker
+                .estimateMessagesTokens(effective.drop(rawCandidate))
+            val completedOversizedTurn = rawCandidate > 0 &&
+                retainedTokens > assistant.autoCompactionKeepRecentTokens &&
+                tailIsCompletedAssistant
+            val forcedCut = when {
+                completedOversizedTurn -> effective.size
+                force && rawCut == 0 && tailIsCompletedAssistant -> effective.size
+                force && rawCut == 0 -> effective.indexOfLast { it.role == MessageRole.USER }
+                else -> 0
             }
-            addAll(messagesToKeep.map { it.toMessageNode() })
-        }
-        val newConversation = conversation.copy(
-            messageNodes = newMessageNodes,
-            chatSuggestions = emptyList(),
-        )
+            val cutIndex = forcedCut.takeIf { it > 0 } ?: rawCandidate
 
-        saveConversation(conversationId, newConversation)
+            val minimumCut = if (previous == null) 0 else 1 // index 0 is old synthetic summary
+            if (cutIndex <= minimumCut) {
+                throw IllegalStateException("No completed history is old enough to compact")
+            }
+
+            val newMessages = if (previous == null) {
+                effective.take(cutIndex)
+            } else {
+                effective.subList(1, cutIndex)
+            }
+            if (newMessages.isEmpty()) {
+                throw IllegalStateException("No new messages are available for compaction")
+            }
+
+            val boundaryIndex = if (previous == null) {
+                cutIndex - 1
+            } else {
+                previous.nodeIndex + cutIndex - 1
+            }
+            val compressionModel = settings.findModelById(settings.compressModelId)
+                ?: chatModel
+            val provider = compressionModel.findProvider(settings.providers)
+                ?: throw IllegalStateException("Compression provider not found")
+            if (!provider.enabled) {
+                throw IllegalStateException("Provider '${provider.name}' is disabled — cannot compact")
+            }
+            val handler = providerManager.getProviderByType(provider)
+            val serialized = serializeForCompaction(newMessages)
+            val inputBudget = ((compressionModel.contextLength ?: contextWindow) -
+                COMPACTION_SUMMARY_MAX_TOKENS - 4_096).coerceIn(1_000, 32_000)
+            val chunks = chunkCompactionInput(serialized, inputBudget)
+            if (chunks.isEmpty()) throw IllegalStateException("Nothing to compact")
+
+            setCompacting(conversationId, true)
+            try {
+                var summary = previous?.annotation?.summary
+                for (chunk in chunks) {
+                    val prompt = buildCompactionPrompt(
+                        conversationChunk = chunk,
+                        previousSummary = summary,
+                        additionalInstructions = additionalInstructions,
+                        locale = Locale.getDefault().displayName,
+                    )
+                    val result = handler.generateText(
+                        providerSetting = provider,
+                        messages = listOf(UIMessage.user(prompt)),
+                        params = backgroundTextGenerationParams(
+                            model = compressionModel,
+                            maxTokens = COMPACTION_SUMMARY_MAX_TOKENS,
+                        ),
+                    )
+                    summary = result.choices.firstOrNull()?.message?.toText()?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException("Compaction model returned an empty summary")
+                }
+                val tokensBefore = me.rerere.rikkahub.costguards.TokenBudgetTracker
+                    .projectedContextTokens(conversation)
+                saveConversation(
+                    conversationId,
+                    conversation.withCompactionCheckpoint(
+                        boundaryIndex = boundaryIndex,
+                        summary = summary!!,
+                        tokensBefore = tokensBefore,
+                    ),
+                )
+            } finally {
+                setCompacting(conversationId, false)
+            }
+        }
     }
 
     // ---- 通知 ----

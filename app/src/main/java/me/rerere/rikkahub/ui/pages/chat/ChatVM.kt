@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -31,7 +32,9 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.datastore.getAssistantById
+import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
@@ -163,9 +166,14 @@ class ChatVM(
         it.enableWebSearch
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    // 当前模型
-    val currentChatModel = settings.map { settings ->
-        settings.getCurrentChatModel()
+    // Model resolved from this conversation, including its per-chat override.
+    val currentChatModel = combine(settings, conversation) { settings, conversation ->
+        val assistant = settings.getAssistantById(conversation.assistantId)
+            ?: settings.getCurrentAssistant()
+        settings.findModelById(
+            conversation.chatModelId,
+            fallback = assistant.chatModelId ?: settings.chatModelId,
+        )
     }.stateIn(viewModelScope, SharingStarted.Lazily, null)
 
     // 错误状态
@@ -248,21 +256,13 @@ class ChatVM(
         }
     }
 
-    fun handleCompressContext(additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int): Job {
-        return viewModelScope.launch {
-            chatService.compressConversation(
+    fun handleCompactNow(additionalInstructions: String): Job = viewModelScope.launch {
+        chatService.compactConversationNow(_conversationId, additionalInstructions).onFailure {
+            chatService.addError(
+                it,
                 _conversationId,
-                conversation.value,
-                additionalPrompt,
-                targetTokens,
-                keepRecentMessages
-            ).onSuccess {
-                // Manual compression can leave the tail at a user message (always when
-                // keep=0, or when a turn was pending) — continue that turn like pi does.
-                chatService.continueAfterCompression(_conversationId)
-            }.onFailure {
-                chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
-            }
+                title = context.getString(R.string.error_title_compress_conversation),
+            )
         }
     }
 

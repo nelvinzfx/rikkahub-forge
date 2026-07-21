@@ -123,6 +123,17 @@ class TokenBudgetTrackerTest {
         assertEquals(158L, TokenBudgetTracker.projectedContextTokens(conv))
     }
 
+    @Test fun `recent turn cut moves backward to user boundary`() {
+        val messages = listOf(
+            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("u1"))),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("a".repeat(300)))),
+            UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("u2"))),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("b".repeat(300)))),
+        )
+
+        assertEquals(2, TokenBudgetTracker.recentTurnCutIndex(messages, 120))
+    }
+
     @Test fun `classify NO_BUDGET when both caps null`() {
         val totals = TokenBudgetTracker.Totals(0, 0, 0, 0, 0)
         assertEquals(TokenBudgetTracker.BudgetStatus.NO_BUDGET,

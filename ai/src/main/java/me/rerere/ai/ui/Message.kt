@@ -807,6 +807,19 @@ sealed class UIMessageAnnotation {
         val title: String,
         val url: String
     ) : UIMessageAnnotation()
+
+    /**
+     * Persistent context checkpoint. It is attached to the selected message at the
+     * compaction boundary; the visible transcript stays intact while provider requests
+     * replace the prefix through that boundary with [summary].
+     */
+    @Serializable
+    @SerialName("compaction")
+    data class Compaction(
+        val summary: String,
+        val tokensBefore: Long,
+        val createdAtEpochMillis: Long,
+    ) : UIMessageAnnotation()
 }
 
 @Serializable

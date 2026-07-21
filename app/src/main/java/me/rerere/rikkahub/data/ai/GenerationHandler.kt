@@ -332,6 +332,12 @@ class GenerationHandler(
         // closure that reads ToolApprovalAllowList + ToolApprovalPreferences. Default
         // returns false so callers that don't care still get vanilla approval gating.
         isToolAutoApproved: suspend (toolName: String) -> Boolean = { false },
+        // Called before EVERY provider request (including post-tool loop requests). It may
+        // persist/compact the transcript and return a replacement effective context.
+        onBeforeProviderRequest: suspend (List<UIMessage>) -> List<UIMessage> = { it },
+        // Return a compacted replacement context to retry a provider overflow once, or null
+        // when the throwable is unrelated / recovery is unavailable.
+        recoverContextOverflow: suspend (Throwable, List<UIMessage>) -> List<UIMessage>? = { _, _ -> null },
         // Optional per-call addendum appended to the system prompt. Used by surfaces that
         // need the model to know runtime context (e.g. "you're talking via Telegram, the
         // chat_id is 12345") without polluting the user message body — without this the
@@ -433,78 +439,84 @@ class GenerationHandler(
 
             // Skip generation if we have approved/denied tool calls to handle
             if (pendingTools.isEmpty()) {
-                try {
-                    generateInternal(
-                        assistant = assistant,
-                        settings = settings,
-                        systemAddendum = systemAddendum,
-                        messages = messages,
-                        onUpdateMessages = {
-                            messages = it.transforms(
-                                transformers = outputTransformers,
-                                context = context,
-                                model = model,
-                                assistant = assistant,
-                                settings = settings
-                            )
-                            emit(
-                                GenerationChunk.Messages(
-                                    messages.visualTransforms(
-                                        transformers = outputTransformers,
-                                        context = context,
-                                        model = model,
-                                        assistant = assistant,
-                                        settings = settings
+                var overflowRetried = false
+                while (true) {
+                    messages = onBeforeProviderRequest(messages)
+                    try {
+                        generateInternal(
+                            assistant = assistant,
+                            settings = settings,
+                            systemAddendum = systemAddendum,
+                            messages = messages,
+                            onUpdateMessages = {
+                                messages = it.transforms(
+                                    transformers = outputTransformers,
+                                    context = context,
+                                    model = model,
+                                    assistant = assistant,
+                                    settings = settings,
+                                )
+                                emit(
+                                    GenerationChunk.Messages(
+                                        messages.visualTransforms(
+                                            transformers = outputTransformers,
+                                            context = context,
+                                            model = model,
+                                            assistant = assistant,
+                                            settings = settings,
+                                        )
                                     )
                                 )
-                            )
-                        },
-                        transformers = inputTransformers,
-                        model = model,
-                        providerImpl = providerImpl,
-                        provider = provider,
-                        tools = toolsInternal,
-                        memories = memories ?: emptyList(),
-                        stream = assistant.streamOutput,
-                        processingStatus = processingStatus,
-                        conversationSystemPrompt = conversationSystemPrompt,
-                        conversationModeInjectionIds = conversationModeInjectionIds,
-                        conversationLorebookIds = conversationLorebookIds,
-                        workspaceCwd = workspaceCwd,
-                        suppressMemory = suppressMemory,
-                        suppressAssistantPrompt = suppressAssistantPrompt,
-                        suppressRecentChats = suppressRecentChats,
-                        enforceSubAgentPromptRules = enforceSubAgentPromptRules,
-                        orchestratorMode = orchestratorMode,
-                        reasoningLevelOverride = reasoningLevelOverride,
-                    )
-                } catch (t: Throwable) {
-                    // CancellationException is honoured verbatim — stopGeneration has its
-                    // own cancelToolByUser path that marks tools cancelled. We only need
-                    // to handle non-cancel failures here.
-                    if (t !is CancellationException) {
-                        // Server 5xx, JSON parse failure, OOM during chunk-merge, etc. Without
-                        // this transition, any tool already at Auto/Pending in the just-built
-                        // assistant message is stranded — the next user turn replays the
-                        // conversation with tool parts in an in-between state and downstream
-                        // filtering misbehaves. We mark them Denied with a generation_failed
-                        // envelope so the shape is deterministic on replay.
-                        val lastMsg = messages.lastOrNull()
-                        if (lastMsg != null) {
-                            val newParts = lastMsg.parts.map { part ->
-                                if (part is UIMessagePart.Tool &&
-                                    (part.approvalState is ToolApprovalState.Auto ||
-                                        part.approvalState is ToolApprovalState.Pending)) {
-                                    part.copy(approvalState = ToolApprovalState.Denied(
-                                        "generation_failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}"
-                                    ))
-                                } else part
+                            },
+                            transformers = inputTransformers,
+                            model = model,
+                            providerImpl = providerImpl,
+                            provider = provider,
+                            tools = toolsInternal,
+                            memories = memories ?: emptyList(),
+                            stream = assistant.streamOutput,
+                            processingStatus = processingStatus,
+                            conversationSystemPrompt = conversationSystemPrompt,
+                            conversationModeInjectionIds = conversationModeInjectionIds,
+                            conversationLorebookIds = conversationLorebookIds,
+                            workspaceCwd = workspaceCwd,
+                            suppressMemory = suppressMemory,
+                            suppressAssistantPrompt = suppressAssistantPrompt,
+                            suppressRecentChats = suppressRecentChats,
+                            enforceSubAgentPromptRules = enforceSubAgentPromptRules,
+                            orchestratorMode = orchestratorMode,
+                            reasoningLevelOverride = reasoningLevelOverride,
+                        )
+                        break
+                    } catch (t: Throwable) {
+                        if (t !is CancellationException && !overflowRetried) {
+                            val recovered = recoverContextOverflow(t, messages)
+                            if (recovered != null) {
+                                messages = recovered
+                                overflowRetried = true
+                                continue
                             }
-                            messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
-                            emit(GenerationChunk.Messages(messages))
                         }
+                        // Preserve cancellation and put half-built tool calls in a
+                        // deterministic terminal state for replay after other failures.
+                        if (t !is CancellationException) {
+                            val lastMsg = messages.lastOrNull()
+                            if (lastMsg != null) {
+                                val newParts = lastMsg.parts.map { part ->
+                                    if (part is UIMessagePart.Tool &&
+                                        (part.approvalState is ToolApprovalState.Auto ||
+                                            part.approvalState is ToolApprovalState.Pending)) {
+                                        part.copy(approvalState = ToolApprovalState.Denied(
+                                            "generation_failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}"
+                                        ))
+                                    } else part
+                                }
+                                messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
+                                emit(GenerationChunk.Messages(messages))
+                            }
+                        }
+                        throw t
                     }
-                    throw t
                 }
                 messages = messages.visualTransforms(
                     transformers = outputTransformers,
@@ -893,14 +905,16 @@ class GenerationHandler(
                 break
             }
 
-            // Update last message with executed tools (NOT create TOOL message)
+            // Update last message with executed tools (NOT create TOOL message).
+            // Provider usage predates these outputs, so clear it: the next budget gate
+            // must estimate the changed message including potentially large tool results.
             val lastMessage = messages.last()
             val updatedParts = lastMessage.parts.map { part ->
                 if (part is UIMessagePart.Tool) {
                     executedTools.find { it.toolCallId == part.toolCallId } ?: part
                 } else part
             }
-            messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
+            messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts, usage = null)
             emit(
                 GenerationChunk.Messages(
                     messages.transforms(

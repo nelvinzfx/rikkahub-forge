@@ -87,11 +87,11 @@ data class Assistant(
     val fastPathRouterEnabled: Boolean = false,
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
-    // Phase 31 — auto-compaction, pi-style budgeting. Before generating, the engine
-    // estimates context usage; once it reaches contextWindow - autoCompactionReserveTokens
-    // it compacts history, keeping the newest autoCompactionKeepRecentTokens of messages
-    // verbatim and summarising everything older. The pending turn continues right after.
-    // triggerPercent/keepRecentMessages are legacy: kept for stored-data compat, unused.
+    // Context compaction. Post-turn is the primary trigger; pre-request, tool-loop, and
+    // one-shot overflow recovery are safety nets. Manual and auto use the same persistent
+    // checkpoint engine. Legacy contextWindow/triggerPercent/keepRecentMessages fields are
+    // retained only for stored-data compatibility (contextWindow is a fallback for custom
+    // models whose capability metadata has no context length).
     val autoCompactionEnabled: Boolean = false,
     val autoCompactionContextWindow: Int = 200_000,
     val autoCompactionTriggerPercent: Int = 80,
