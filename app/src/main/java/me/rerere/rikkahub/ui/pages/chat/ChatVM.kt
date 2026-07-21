@@ -256,7 +256,11 @@ class ChatVM(
                 additionalPrompt,
                 targetTokens,
                 keepRecentMessages
-            ).onFailure {
+            ).onSuccess {
+                // Manual compression can leave the tail at a user message (always when
+                // keep=0, or when a turn was pending) — continue that turn like pi does.
+                chatService.continueAfterCompression(_conversationId)
+            }.onFailure {
                 chatService.addError(it, title = context.getString(R.string.error_title_compress_conversation))
             }
         }

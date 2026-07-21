@@ -906,6 +906,23 @@ class ChatService(
 
     // ---- 处理消息补全 ----
 
+    /**
+     * After a MANUAL compression the conversation can end on a user message (always when
+     * keep=0, or when a turn was pending). Pi-style behaviour: continue that pending
+     * turn immediately through the normal generation path. No-op when the tail is not a
+     * user message or a generation is already running.
+     */
+    fun continueAfterCompression(conversationId: Uuid) {
+        val session = getOrCreateSession(conversationId)
+        if (session.isGenerating) return
+        val tail = session.state.value.currentMessages.lastOrNull() ?: return
+        if (tail.role != MessageRole.USER) return
+        val job = appScope.launch {
+            handleMessageComplete(conversationId)
+        }
+        session.setJob(job)
+    }
+
     private suspend fun handleMessageComplete(
         conversationId: Uuid,
         messageRange: ClosedRange<Int>? = null,
