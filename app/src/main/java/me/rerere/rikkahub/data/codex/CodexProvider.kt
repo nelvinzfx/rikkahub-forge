@@ -27,6 +27,7 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.providers.sendLosslesslyFromCallback
 import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
@@ -220,14 +221,15 @@ class CodexProvider(
                 val eventType = payload["type"]?.jsonPrimitive?.contentOrNull ?: type
                 if (eventType in FINAL_RESPONSE_EVENTS) {
                     parseTokenUsage(payload)?.let { usage ->
-                        trySend(
+                        sendLosslesslyFromCallback(
                             MessageChunk(
                                 id = payload["response"]?.jsonObject
                                     ?.get("id")?.jsonPrimitive?.contentOrNull.orEmpty(),
                                 model = params.model.modelId,
                                 choices = emptyList(),
                                 usage = usage,
-                            )
+                            ),
+                            eventSource::cancel,
                         )
                     }
                     if (eventType == "response.failed") {
@@ -246,9 +248,14 @@ class CodexProvider(
                 }
                 runCatching { responseApi.parseResponseDelta(payload) }
                     .onSuccess { chunk ->
-                        if (chunk != null) trySend(chunk)
+                        if (chunk != null) {
+                            sendLosslesslyFromCallback(chunk, eventSource::cancel)
+                        }
                     }
-                    .onFailure { close(it) }
+                    .onFailure {
+                        eventSource.cancel()
+                        close(it)
+                    }
                 if (eventType == "error") {
                     close(
                         IllegalStateException(

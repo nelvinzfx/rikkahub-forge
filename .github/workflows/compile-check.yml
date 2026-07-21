@@ -58,6 +58,7 @@ jobs:
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \
+            --tests 'me.rerere.ai.provider.providers.LosslessCallbackFlowTest' \
             --no-daemon --stacktrace
 
       - name: Upload build report on failure

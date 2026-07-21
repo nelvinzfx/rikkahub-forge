@@ -33,6 +33,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.PartGroup
 import me.rerere.ai.provider.providers.groupPartsByToolBoundary
+import me.rerere.ai.provider.providers.sendLosslesslyFromCallback
 import me.rerere.ai.provider.providers.StreamedToolCallIdResolver
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.MessageChunk
@@ -208,7 +209,7 @@ class ChatCompletionsAPI(
                             choices = choiceList,
                             usage = usage
                         )
-                        trySend(messageChunk)
+                        sendLosslesslyFromCallback(messageChunk, eventSource::cancel)
                     }
             }
 

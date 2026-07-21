@@ -267,16 +267,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     "message_stop" -> {
                         Log.d(TAG, "Stream ended")
                         close()
+                        return
                     }
 
                     "error" -> {
                         val eventData = json.parseToJsonElement(data).jsonObject
                         val error = eventData["error"]?.parseErrorDetail()
                         close(error)
+                        return
                     }
                 }
 
-                trySend(messageChunk)
+                sendLosslesslyFromCallback(messageChunk, eventSource::cancel)
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {

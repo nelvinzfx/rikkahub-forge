@@ -255,7 +255,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     val reason =
                         jsonData["promptFeedback"]?.jsonObject?.get("blockReason")?.jsonPrimitiveOrNull?.contentOrNull
                     if (reason != null) {
+                        eventSource.cancel()
                         close(RuntimeException("Prompt feedback: $reason"))
+                        return
                     }
                     val candidates = jsonData["candidates"]?.jsonArray ?: return
                     if (candidates.isEmpty()) return
@@ -290,9 +292,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         usage = usage
                     )
 
-                    trySend(messageChunk)
+                    sendLosslesslyFromCallback(messageChunk, eventSource::cancel)
                 } catch (e: Exception) {
+                    if (!isActive) return
                     Log.w(TAG, "onEvent: failed to parse $data", e)
+                    eventSource.cancel()
+                    close(e)
                 }
             }
 
