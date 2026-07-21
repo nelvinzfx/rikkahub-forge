@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,13 +28,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
 
 @Composable
 fun CompressContextDialog(
+    assistant: Assistant,
+    onUpdateAssistant: (Assistant) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int) -> Job
 ) {
@@ -145,6 +153,68 @@ fun CompressContextDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
+
+                    // --- Auto-compaction (moved here from the assistant request page:
+                    // one home for everything context-compression) ---
+                    HorizontalDivider()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.chat_page_compress_auto_title),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            Text(
+                                text = stringResource(R.string.chat_page_compress_auto_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = assistant.autoCompactionEnabled,
+                            onCheckedChange = {
+                                onUpdateAssistant(assistant.copy(autoCompactionEnabled = it))
+                            }
+                        )
+                    }
+
+                    if (assistant.autoCompactionEnabled) {
+                        var contextWindowText by remember(assistant.autoCompactionContextWindow) {
+                            mutableStateOf(assistant.autoCompactionContextWindow.toString())
+                        }
+                        OutlinedTextField(
+                            value = contextWindowText,
+                            onValueChange = { input ->
+                                contextWindowText = input.filter { it.isDigit() }
+                                contextWindowText.toIntOrNull()?.let { value ->
+                                    if (value > 0) {
+                                        onUpdateAssistant(assistant.copy(autoCompactionContextWindow = value))
+                                    }
+                                }
+                            },
+                            label = { Text(stringResource(R.string.chat_page_compress_auto_context_window)) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        Text(
+                            text = stringResource(R.string.chat_page_compress_auto_trigger, assistant.autoCompactionTriggerPercent),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Slider(
+                            value = assistant.autoCompactionTriggerPercent.toFloat(),
+                            onValueChange = {
+                                onUpdateAssistant(assistant.copy(autoCompactionTriggerPercent = it.toInt().coerceIn(50, 95)))
+                            },
+                            valueRange = 50f..95f,
+                            steps = 8,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         },
