@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.data.ai
 
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -10,6 +11,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CompactionSupportTest {
+    @Test
+    fun `compaction keeps high reasoning for summary quality`() {
+        assertEquals(ReasoningLevel.HIGH, COMPACTION_REASONING_LEVEL)
+    }
+
     @Test
     fun `serializer preserves reasoning tool arguments and tool results`() {
         val messages = listOf(

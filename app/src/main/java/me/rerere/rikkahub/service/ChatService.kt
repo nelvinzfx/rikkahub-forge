@@ -66,6 +66,7 @@ import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.COMPACTION_TIMEOUT_MS
+import me.rerere.rikkahub.data.ai.COMPACTION_REASONING_LEVEL
 import me.rerere.rikkahub.data.ai.buildCompactionFinalizationPrompt
 import me.rerere.rikkahub.data.ai.buildCompactionPrompt
 import me.rerere.rikkahub.data.ai.chunkCompactionInput
@@ -1699,11 +1700,12 @@ class ChatService(
                         additionalInstructions = additionalInstructions,
                         locale = Locale.getDefault().displayName,
                     ))),
-                    // A 4K output cap let reasoning consume the whole budget and return no
-                    // final Text. Leave output uncapped and explicitly request reasoning OFF.
+                    // The 4K output cap caused the empty-final regression, not reasoning.
+                    // Keep Pi-style HIGH reasoning for summary quality and leave total
+                    // output uncapped so reasoning cannot starve final checkpoint text.
                     params = backgroundTextGenerationParams(
                         model = compressionModel,
-                        reasoningLevel = ReasoningLevel.OFF,
+                        reasoningLevel = COMPACTION_REASONING_LEVEL,
                         maxTokens = null,
                     ),
                 )

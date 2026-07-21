@@ -1,11 +1,13 @@
 package me.rerere.rikkahub.data.ai
 
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 
 internal const val COMPACTION_SUMMARY_TARGET_TOKENS = 4_000
 internal const val COMPACTION_RESPONSE_RESERVE_TOKENS = 16_384
 internal const val COMPACTION_TIMEOUT_MS = 180_000L
+internal val COMPACTION_REASONING_LEVEL = ReasoningLevel.HIGH
 
 internal fun serializeForCompaction(messages: List<UIMessage>): String =
     messages.joinToString("\n\n") { message ->
