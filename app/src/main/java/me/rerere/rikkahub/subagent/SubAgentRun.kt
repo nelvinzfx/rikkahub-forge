@@ -97,6 +97,17 @@ object SubAgentDefaults {
     """.trimIndent()
 }
 
+/**
+ * Terminal-outcome gate for a finished sub-agent generation. Extracted as a pure function
+ * so the "never SUCCEEDED with an empty result" contract is unit-testable without the
+ * Android-laden engine. SUCCEEDED requires harvestable final text; a blank harvest means
+ * the turn died without a deliverable (typically max_steps_exhausted_after_tool after the
+ * reserved wrap-up also produced nothing) and must go FAILED instead.
+ */
+internal object SubAgentTerminalOutcome {
+    fun canSucceed(finalText: String): Boolean = finalText.isNotBlank()
+}
+
 @Serializable
 data class SubAgentRequest(
     val task: String,

@@ -55,6 +55,12 @@ jobs:
             --tests 'me.rerere.rikkahub.data.ai.CompactionSupportTest' \
             --tests 'me.rerere.rikkahub.costguards.TokenBudgetTrackerTest' \
             --tests 'me.rerere.rikkahub.data.ai.ParallelToolCallStreamingAssemblyTest' \
+            --tests 'me.rerere.rikkahub.data.ai.GenerationStepBudgetTest' \
+            --tests 'me.rerere.rikkahub.data.ai.LoopGuardTest' \
+            --tests 'me.rerere.rikkahub.subagent.SubAgentStepBudgetTest' \
+            --tests 'me.rerere.rikkahub.subagent.SubAgentRequestValidationTest' \
+            --tests 'me.rerere.rikkahub.subagent.SubAgentCompletionWaitTest' \
+            --tests 'me.rerere.rikkahub.subagent.SubAgentRegistryTest' \
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \

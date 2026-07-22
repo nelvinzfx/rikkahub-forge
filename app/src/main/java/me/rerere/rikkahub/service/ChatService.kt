@@ -542,6 +542,13 @@ class ChatService(
         answer: Boolean = true,
         orchestratorOverride: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
         reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
+        // Per-dispatch generation-step budget. Null = the default
+        // (DEFAULT_MAX_GENERATION_STEPS). Sub-agent runs pass their request's maxTrips
+        // plus reserveFinalWrapUp=true so an exhausted worker still gets one no-tools
+        // turn to write its final summary. Transient per-call values — never persisted
+        // into the Conversation.
+        generationMaxSteps: Int? = null,
+        reserveFinalWrapUp: Boolean = false,
     ) {
         if (content.isEmptyInputMessage()) return
 
@@ -610,7 +617,7 @@ class ChatService(
 
                 // 开始补全 — only if router didn't handle the turn
                 if (answer && !routedHandled) {
-                    handleMessageComplete(conversationId, orchestratorMode = turnOrchestratorMode, reasoningLevelOverride = reasoningLevelOverride)
+                    handleMessageComplete(conversationId, orchestratorMode = turnOrchestratorMode, reasoningLevelOverride = reasoningLevelOverride, generationMaxSteps = generationMaxSteps, reserveFinalWrapUp = reserveFinalWrapUp)
                 }
 
                 _generationDoneFlow.emit(conversationId)
@@ -949,6 +956,8 @@ class ChatService(
         messageRange: ClosedRange<Int>? = null,
         orchestratorMode: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
         reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
+        generationMaxSteps: Int? = null,
+        reserveFinalWrapUp: Boolean = false,
     ) {
         val settings = settingsStore.settingsFlow.first()
         // Resolve the assistant from this conversation's own assistantId — the global
@@ -1056,6 +1065,8 @@ class ChatService(
             generationHandler.generateText(
                 settings = settings,
                 model = model,
+                maxSteps = generationMaxSteps ?: me.rerere.rikkahub.data.ai.DEFAULT_MAX_GENERATION_STEPS,
+                reserveFinalWrapUp = reserveFinalWrapUp,
                 processingStatus = session.processingStatus,
                 // Combine the surface runtime context with any skills explicitly activated
                 // by @mention in the latest user turn. Both are rebuilt per generation and

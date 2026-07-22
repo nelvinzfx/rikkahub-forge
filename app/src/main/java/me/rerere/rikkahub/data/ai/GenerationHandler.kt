@@ -306,6 +306,87 @@ internal fun buildOrchestratorPreamble(
     else -> ORCHESTRATOR_PREAMBLE
 }
 
+/**
+ * Default budget of NORMAL tool-capable provider turns for one generation call. Kept at
+ * the historical 32 so ordinary chat behaviour is unchanged; sub-agent runs override it
+ * with their request's maxTrips. Raising the default would only delay silent exhaustion,
+ * not fix it — the reserved wrap-up below is the actual fix.
+ */
+internal const val DEFAULT_MAX_GENERATION_STEPS = 32
+
+/** Stable machine-readable reason for step-budget exhaustion with no final text. */
+internal const val REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL = "max_steps_exhausted_after_tool"
+
+/**
+ * Thrown when the normal step budget was exhausted right after a tool execution AND the
+ * reserved no-tools wrap-up turn failed to produce any text. Carries the stable
+ * [REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL] reason so callers (SubAgentEngine, UI error
+ * surfaces) can distinguish real exhaustion from ordinary success or other failures.
+ */
+class GenerationStepExhaustedException(
+    val reason: String = REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL,
+) : Exception(
+    "$reason: the normal tool-call budget was exhausted and the reserved final " +
+        "wrap-up turn produced no text"
+)
+
+/**
+ * Why the normal generation loop exited. The pre-fix code inferred "success" from simply
+ * falling out of the for-loop, which made "budget consumed right after a tool execution"
+ * indistinguishable from "model finished" — the Kimi K3 silent-stop defect. Every break
+ * site now classifies itself explicitly.
+ */
+internal enum class GenerationLoopExit {
+    /** Provider turn finished with final text and no unexecuted tools. */
+    COMPLETED_WITHOUT_TOOLS,
+
+    /** Last message has tools waiting on user approval (or still Pending). */
+    WAITING_FOR_APPROVAL,
+
+    /** A tool-processing pass produced zero results (all tools were pending). */
+    NO_EXECUTED_TOOL_RESULTS,
+
+    /** Loop guard tripped MAX_LOOP_GUARD_TRIPS_PER_TURN times; turn force-ended. */
+    LOOP_GUARD_EXHAUSTED,
+
+    /** The for-loop's last allowed iteration ended right after executing tools — the
+     * model never got the follow-up turn that would have written the final answer. */
+    STEP_BUDGET_EXHAUSTED_AFTER_TOOL,
+}
+
+internal enum class WrapUpOutcome {
+    SUCCESS_WITH_TEXT,
+    EXHAUSTED_NO_TEXT,
+}
+
+/**
+ * Pure decision points for the reserved final wrap-up turn, extracted so the exhaustion
+ * contract is unit-testable without an Android Context.
+ */
+internal object FinalWrapUpPolicy {
+    /**
+     * The wrap-up runs ONLY when the normal budget was consumed immediately after a tool
+     * execution and the caller opted in. Never after normal completion, approval pauses,
+     * loop-guard force-ends, empty tool passes — and never after cancellation/provider
+     * errors, which propagate as exceptions before this is even consulted.
+     */
+    fun shouldRun(exit: GenerationLoopExit?, reserveFinalWrapUp: Boolean): Boolean =
+        reserveFinalWrapUp && exit == GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL
+
+    /** The wrap-up turn succeeds iff it produced non-blank text. */
+    fun outcomeFor(finalText: String): WrapUpOutcome =
+        if (finalText.isBlank()) WrapUpOutcome.EXHAUSTED_NO_TEXT else WrapUpOutcome.SUCCESS_WITH_TEXT
+}
+
+/**
+ * Transient per-call system addendum for the reserved wrap-up turn. NOT persisted into
+ * conversation history and not a fake user message — it rides the existing volatile
+ * system-prompt section for exactly one provider request.
+ */
+internal val RESERVED_WRAP_UP_ADDENDUM = """
+RUNTIME NOTICE — TOOL BUDGET EXHAUSTED: your normal tool-call budget for this turn is now exhausted. No tools are available for this final response, and any tool call you attempt will be rejected. Using only the evidence already gathered in this conversation, return the best final answer or a concise summary of what you did and found. Plain text only — this final message is the entire response the caller will see.
+""".trim()
+
 class GenerationHandler(
     private val context: Context,
     private val providerManager: ProviderManager,
@@ -324,7 +405,13 @@ class GenerationHandler(
         assistant: Assistant,
         memories: List<AssistantMemory>? = null,
         tools: List<Tool> = emptyList(),
-        maxSteps: Int = 32,
+        // NORMAL tool-capable provider-turn budget. Sub-agent callers pass their
+        // request's maxTrips here; ordinary chat keeps the default.
+        maxSteps: Int = DEFAULT_MAX_GENERATION_STEPS,
+        // When true and the normal budget is consumed immediately after a tool execution,
+        // run ONE extra provider turn with tools disabled so the model can write its
+        // final answer instead of the turn silently ending on a tool result.
+        reserveFinalWrapUp: Boolean = false,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         // Returns true when the user has pre-approved [toolName] for this turn (e.g.
         // "Allow for this chat" or "Always Allow" granted earlier). When true, the loop
@@ -385,6 +472,119 @@ class GenerationHandler(
         }
         var loopGuardTripCount = 0
 
+        // Why the normal loop exited. Classified explicitly at every break site — the old
+        // code inferred success from simply falling out of the for-loop, which made
+        // "budget consumed right after a tool execution" indistinguishable from "model
+        // finished" (the Kimi silent-stop defect). Cancellation and provider errors
+        // propagate as exceptions and never set this.
+        var loopExit: GenerationLoopExit? = null
+
+        // One provider turn with a single context-overflow retry + the standard post-turn
+        // finalisation (visual transforms, onGenerationFinish, finishedAt, emit). Shared
+        // by the normal loop and the reserved no-tools wrap-up turn so the wrap-up goes
+        // through the exact same compaction hook, transformers, and streaming updates
+        // without re-entering the tool loop.
+        suspend fun runProviderTurn(toolsForTurn: List<Tool>, addendum: String?) {
+            var overflowRetried = false
+            while (true) {
+                messages = onBeforeProviderRequest(messages)
+                try {
+                    generateInternal(
+                        assistant = assistant,
+                        settings = settings,
+                        systemAddendum = addendum,
+                        messages = messages,
+                        onUpdateMessages = {
+                            messages = it.transforms(
+                                transformers = outputTransformers,
+                                context = context,
+                                model = model,
+                                assistant = assistant,
+                                settings = settings,
+                            )
+                            emit(
+                                GenerationChunk.Messages(
+                                    messages.visualTransforms(
+                                        transformers = outputTransformers,
+                                        context = context,
+                                        model = model,
+                                        assistant = assistant,
+                                        settings = settings,
+                                    )
+                                )
+                            )
+                        },
+                        transformers = inputTransformers,
+                        model = model,
+                        providerImpl = providerImpl,
+                        provider = provider,
+                        tools = toolsForTurn,
+                        memories = memories ?: emptyList(),
+                        stream = assistant.streamOutput,
+                        processingStatus = processingStatus,
+                        conversationSystemPrompt = conversationSystemPrompt,
+                        conversationModeInjectionIds = conversationModeInjectionIds,
+                        conversationLorebookIds = conversationLorebookIds,
+                        workspaceCwd = workspaceCwd,
+                        suppressMemory = suppressMemory,
+                        suppressAssistantPrompt = suppressAssistantPrompt,
+                        suppressRecentChats = suppressRecentChats,
+                        enforceSubAgentPromptRules = enforceSubAgentPromptRules,
+                        orchestratorMode = orchestratorMode,
+                        reasoningLevelOverride = reasoningLevelOverride,
+                    )
+                    break
+                } catch (t: Throwable) {
+                    if (t !is CancellationException && !overflowRetried) {
+                        val recovered = recoverContextOverflow(t, messages)
+                        if (recovered != null) {
+                            messages = recovered
+                            overflowRetried = true
+                            continue
+                        }
+                    }
+                    // Preserve cancellation and put half-built tool calls in a
+                    // deterministic terminal state for replay after other failures.
+                    if (t !is CancellationException) {
+                        val lastMsg = messages.lastOrNull()
+                        if (lastMsg != null) {
+                            val newParts = lastMsg.parts.map { part ->
+                                if (part is UIMessagePart.Tool &&
+                                    (part.approvalState is ToolApprovalState.Auto ||
+                                        part.approvalState is ToolApprovalState.Pending)) {
+                                    part.copy(approvalState = ToolApprovalState.Denied(
+                                        "generation_failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}"
+                                    ))
+                                } else part
+                            }
+                            messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
+                            emit(GenerationChunk.Messages(messages))
+                        }
+                    }
+                    throw t
+                }
+            }
+            messages = messages.visualTransforms(
+                transformers = outputTransformers,
+                context = context,
+                model = model,
+                assistant = assistant,
+                settings = settings
+            )
+            messages = messages.onGenerationFinish(
+                transformers = outputTransformers,
+                context = context,
+                model = model,
+                assistant = assistant,
+                settings = settings
+            )
+            messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
+                finishedAt = Clock.System.now()
+                    .toLocalDateTime(TimeZone.currentSystemDefault())
+            )
+            emit(GenerationChunk.Messages(messages))
+        }
+
         for (stepIndex in 0 until maxSteps) {
             // Repeated loop-guard trips mean the model is flailing: it bumps into the
             // guard, picks a different tool, that one also gets guarded, and so on. After
@@ -392,10 +592,11 @@ class GenerationHandler(
             // step is paid for in tokens.
             if (loopGuardTripCount >= MAX_LOOP_GUARD_TRIPS_PER_TURN) {
                 Log.w(TAG, "generateText: loop-guard tripped $loopGuardTripCount times this turn; force-ending")
+                loopExit = GenerationLoopExit.LOOP_GUARD_EXHAUSTED
                 break
             }
 
-            Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
+            Log.i(TAG, "streamText: start step #$stepIndex of $maxSteps (${model.id})")
 
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools($assistant)")
@@ -431,6 +632,7 @@ class GenerationHandler(
                 } == true
                 if (lastHasPending) {
                     Log.i(TAG, "generateText: last message has Pending tools; waiting for approval, not regenerating")
+                    loopExit = GenerationLoopExit.WAITING_FOR_APPROVAL
                     break
                 }
             }
@@ -439,108 +641,12 @@ class GenerationHandler(
 
             // Skip generation if we have approved/denied tool calls to handle
             if (pendingTools.isEmpty()) {
-                var overflowRetried = false
-                while (true) {
-                    messages = onBeforeProviderRequest(messages)
-                    try {
-                        generateInternal(
-                            assistant = assistant,
-                            settings = settings,
-                            systemAddendum = systemAddendum,
-                            messages = messages,
-                            onUpdateMessages = {
-                                messages = it.transforms(
-                                    transformers = outputTransformers,
-                                    context = context,
-                                    model = model,
-                                    assistant = assistant,
-                                    settings = settings,
-                                )
-                                emit(
-                                    GenerationChunk.Messages(
-                                        messages.visualTransforms(
-                                            transformers = outputTransformers,
-                                            context = context,
-                                            model = model,
-                                            assistant = assistant,
-                                            settings = settings,
-                                        )
-                                    )
-                                )
-                            },
-                            transformers = inputTransformers,
-                            model = model,
-                            providerImpl = providerImpl,
-                            provider = provider,
-                            tools = toolsInternal,
-                            memories = memories ?: emptyList(),
-                            stream = assistant.streamOutput,
-                            processingStatus = processingStatus,
-                            conversationSystemPrompt = conversationSystemPrompt,
-                            conversationModeInjectionIds = conversationModeInjectionIds,
-                            conversationLorebookIds = conversationLorebookIds,
-                            workspaceCwd = workspaceCwd,
-                            suppressMemory = suppressMemory,
-                            suppressAssistantPrompt = suppressAssistantPrompt,
-                            suppressRecentChats = suppressRecentChats,
-                            enforceSubAgentPromptRules = enforceSubAgentPromptRules,
-                            orchestratorMode = orchestratorMode,
-                            reasoningLevelOverride = reasoningLevelOverride,
-                        )
-                        break
-                    } catch (t: Throwable) {
-                        if (t !is CancellationException && !overflowRetried) {
-                            val recovered = recoverContextOverflow(t, messages)
-                            if (recovered != null) {
-                                messages = recovered
-                                overflowRetried = true
-                                continue
-                            }
-                        }
-                        // Preserve cancellation and put half-built tool calls in a
-                        // deterministic terminal state for replay after other failures.
-                        if (t !is CancellationException) {
-                            val lastMsg = messages.lastOrNull()
-                            if (lastMsg != null) {
-                                val newParts = lastMsg.parts.map { part ->
-                                    if (part is UIMessagePart.Tool &&
-                                        (part.approvalState is ToolApprovalState.Auto ||
-                                            part.approvalState is ToolApprovalState.Pending)) {
-                                        part.copy(approvalState = ToolApprovalState.Denied(
-                                            "generation_failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}"
-                                        ))
-                                    } else part
-                                }
-                                messages = messages.dropLast(1) + lastMsg.copy(parts = newParts)
-                                emit(GenerationChunk.Messages(messages))
-                            }
-                        }
-                        throw t
-                    }
-                }
-                messages = messages.visualTransforms(
-                    transformers = outputTransformers,
-                    context = context,
-                    model = model,
-                    assistant = assistant,
-                    settings = settings
-                )
-                messages = messages.onGenerationFinish(
-                    transformers = outputTransformers,
-                    context = context,
-                    model = model,
-                    assistant = assistant,
-                    settings = settings
-                )
-                messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
-                    finishedAt = Clock.System.now()
-                        .toLocalDateTime(TimeZone.currentSystemDefault())
-                )
-                emit(GenerationChunk.Messages(messages))
+                runProviderTurn(toolsInternal, systemAddendum)
 
                 val tools = messages.last().getTools().filter { !it.isExecuted }
                 if (tools.isEmpty()) {
                     // no tool calls, break
+                    loopExit = GenerationLoopExit.COMPLETED_WITHOUT_TOOLS
                     break
                 }
 
@@ -615,6 +721,7 @@ class GenerationHandler(
                 // If there are pending approvals, break and wait for user
                 if (hasPendingApproval) {
                     Log.i(TAG, "generateText: waiting for tool approval")
+                    loopExit = GenerationLoopExit.WAITING_FOR_APPROVAL
                     break
                 }
 
@@ -902,6 +1009,7 @@ class GenerationHandler(
 
             if (executedTools.isEmpty()) {
                 // No results to add (all tools were pending)
+                loopExit = GenerationLoopExit.NO_EXECUTED_TOOL_RESULTS
                 break
             }
 
@@ -925,6 +1033,75 @@ class GenerationHandler(
                         settings = settings
                     )
                 )
+            )
+
+            if (stepIndex == maxSteps - 1) {
+                // The normal budget is now consumed and the last thing that happened was
+                // a tool execution — the model never received the follow-up turn that
+                // would have let it react to these results. This is the ONLY exit that
+                // makes the reserved no-tools wrap-up eligible.
+                loopExit = GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL
+            }
+        }
+
+        if (FinalWrapUpPolicy.shouldRun(loopExit, reserveFinalWrapUp)) {
+            val exhaustedTools = messages.lastOrNull()?.getTools().orEmpty()
+            Log.w(
+                TAG,
+                "generateText: normal step budget ($maxSteps) exhausted after executing " +
+                    "${exhaustedTools.size} tool(s) [${exhaustedTools.joinToString(", ") { it.toolName }}]; " +
+                    "starting reserved no-tools wrap-up turn"
+            )
+            val wrapUpAddendum = listOfNotNull(
+                systemAddendum?.takeIf { it.isNotBlank() },
+                RESERVED_WRAP_UP_ADDENDUM,
+            ).joinToString("\n\n")
+            // Exactly ONE extra provider turn, tools disabled. onBeforeProviderRequest
+            // (compaction), transformers, streaming updates and overflow recovery all
+            // apply via the shared runProviderTurn seam; the tool loop is NOT re-entered.
+            runProviderTurn(emptyList(), wrapUpAddendum)
+
+            // The provider was offered NO tools. If it still emitted tool calls, never
+            // execute them — flip them to a deterministic terminal Denied state so a
+            // later resume/replay can't run them either — and judge the turn on its text.
+            val lastMsg = messages.last()
+            val strayTools = lastMsg.getTools().filter { !it.isExecuted }
+            if (strayTools.isNotEmpty()) {
+                Log.w(TAG, "generateText: wrap-up returned ${strayTools.size} tool call(s) despite an empty tool list; refusing to execute them")
+                val deniedParts = lastMsg.parts.map { part ->
+                    if (part is UIMessagePart.Tool && !part.isExecuted) {
+                        part.copy(
+                            approvalState = ToolApprovalState.Denied(
+                                "tools_unavailable_final_turn: the normal tool budget was exhausted; " +
+                                    "tool calls are not available in the reserved final turn."
+                            )
+                        )
+                    } else part
+                }
+                messages = messages.dropLast(1) + lastMsg.copy(parts = deniedParts)
+                emit(GenerationChunk.Messages(messages))
+            }
+
+            val finalText = messages.last().parts
+                .filterIsInstance<UIMessagePart.Text>()
+                .joinToString("\n") { it.text }
+                .trim()
+            when (FinalWrapUpPolicy.outcomeFor(finalText)) {
+                WrapUpOutcome.SUCCESS_WITH_TEXT ->
+                    Log.i(TAG, "generateText: reserved wrap-up completed with text (${finalText.length} chars)")
+                WrapUpOutcome.EXHAUSTED_NO_TEXT -> {
+                    // Explicit exhaustion: the caller must NOT read this turn as ordinary
+                    // success. All partial messages/tool outputs were already emitted and
+                    // persist via the normal failure-path save.
+                    Log.w(TAG, "generateText: reserved wrap-up produced no text → $REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL")
+                    throw GenerationStepExhaustedException()
+                }
+            }
+        } else if (loopExit == GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL) {
+            Log.w(
+                TAG,
+                "generateText: normal step budget ($maxSteps) exhausted after tool execution " +
+                    "and no reserved wrap-up is enabled; turn ends on tool results"
             )
         }
 

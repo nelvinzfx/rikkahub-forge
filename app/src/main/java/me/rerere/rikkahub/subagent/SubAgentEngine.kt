@@ -410,7 +410,16 @@ class SubAgentEngine(
                 workerConvId,
                 listOf(UIMessagePart.Text(taskWithWrapup)),
                 reasoningLevelOverride = workerReasoningLevel,
+                // max_trips contract: bounds the worker's NORMAL tool-capable provider
+                // turns. reserveFinalWrapUp grants ONE additional no-tools turn after
+                // exhaustion so the worker can still write its final summary — before
+                // this wiring, maxTrips was accepted/validated/reported but never
+                // reached GenerationHandler, and exhaustion silently ended the run on a
+                // tool result with no harvestable text (the Kimi silent-stop defect).
+                generationMaxSteps = request.maxTrips,
+                reserveFinalWrapUp = true,
             )
+            Log.i(TAG, "sub-agent $runId dispatched with maxTrips=${request.maxTrips} normal turn(s) + one reserved no-tools wrap-up")
             // The naive form `withTimeoutOrNull { …first { it == null } }` followed by a
             // `finished == null` check is BROKEN: `.first { it == null }` returns the matched
             // value — which IS null on successful completion (the Job? went to null when the
@@ -436,6 +445,25 @@ class SubAgentEngine(
             // text parts from the last assistant message. This mirrors how the
             // CronJobWorker treats LLM-mode jobs.
             val finalText = harvestFinalText(workerConvId)
+            if (!SubAgentTerminalOutcome.canSucceed(finalText)) {
+                // No harvestable result — most commonly step exhaustion where even the
+                // reserved wrap-up produced no text (GenerationStepExhaustedException
+                // surfaced through ChatService's error channel). Never mark SUCCEEDED
+                // with an empty result: the parent would harvest nothing and treat the
+                // run as useful work. Partial tool outputs/assistant text stay in the
+                // worker conversation; markTerminal's own harvest keeps any walk-back
+                // text it can find.
+                markTerminal(
+                    runId,
+                    SubAgentStatus.FAILED,
+                    me.rerere.rikkahub.data.ai.REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL +
+                        ": worker finished without any final assistant text"
+                )
+                if (registry.get(runId)?.notifyParent == true) {
+                    notifyParentIfBackground(parentChatId, registry.get(runId))
+                }
+                return
+            }
             // Phase 30 (Orchestrator Mode Phase A) - token telemetry. Sum prompt/
             // completion tokens across the worker conversation's selected message branch so
             // Phase D's subtree cap has real numbers. tripCount = assistant messages = LLM

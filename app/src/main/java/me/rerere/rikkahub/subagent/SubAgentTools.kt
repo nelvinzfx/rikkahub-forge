@@ -77,8 +77,12 @@ fun subagentDispatchTool(
         providers, then pass the UUID here. Omit to inherit the current model.
 
         timeout_seconds: default 600 (10 min). Set higher (up to 1800) for research tasks
-        that need multiple web searches. max_trips: default 20. Set higher (up to 30) for
-        multi-step work.
+        that need multiple web searches. max_trips: default 20 (max 30). It bounds the
+        worker's NORMAL tool-capable turns; when that budget runs out right after a tool
+        call, the worker automatically gets ONE extra final turn with tools disabled to
+        write its summary, so the true provider-request count can be max_trips + 1. The
+        trip_count field in run records counts assistant messages (telemetry), not exact
+        provider requests.
 
         Concurrency caps: each assistant has its own (default 3, configurable 1-8) and
         there's a global cap of 16 across all assistants. Over-cap dispatches fail with
@@ -190,7 +194,9 @@ fun subagentDispatchContinueTool(
         progress before failing — the new worker builds on the existing context rather
         than restarting from scratch. Pass the conversation_id from the original run
         record as worker_conversation_id. Accepts the same task/label/model/tools fields
-        as subagent_dispatch.
+        as subagent_dispatch. max_trips works exactly as in subagent_dispatch: it bounds
+        the new run's normal tool-capable turns, and one extra no-tools wrap-up turn may
+        follow when the budget is exhausted after a tool call.
     """.trimIndent(),
     parameters = {
         InputSchema.Obj(
