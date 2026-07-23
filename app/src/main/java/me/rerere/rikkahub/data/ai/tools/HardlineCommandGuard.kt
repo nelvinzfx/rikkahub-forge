@@ -169,6 +169,10 @@ object HardlineCommandGuard {
                     checkCommand("${exe.orEmpty()} ${args.orEmpty()}")
                 } else null
             }
+            toolName == "termux_session_start" ->
+                checkCommand(input["command"]?.jsonPrimitive?.contentOrNull)
+            toolName == "termux_session_send" ->
+                checkCommand(input["input"]?.jsonPrimitive?.contentOrNull)
             toolName == "ssh_exec" || toolName == "ssh_exec_saved" ->
                 checkCommand(input["command"]?.jsonPrimitive?.contentOrNull)
             // Sub-agent dispatch — the spawned LLM gets the parent's full tool surface

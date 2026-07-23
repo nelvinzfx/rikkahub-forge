@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.add
@@ -31,6 +32,154 @@ private const val TERMUX_RUN_COMMAND_SERVICE = "com.termux.app.RunCommandService
 private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"
 private const val TERMUX_BIN_DIR = "/data/data/com.termux/files/usr/bin"
 private const val TERMUX_HOME_DIR = "/data/data/com.termux/files/home"
+private const val MAX_CAPTURE_TIMEOUT_MS = 10L * 60 * 1000
+
+// Capture commands are launched through an argv-safe wrapper. The wrapper starts the requested
+// executable in a fresh process group when `setsid` is available, records its opaque job id plus
+// root pid/start-time under Termux home, then waits so RUN_COMMAND can capture exit/output.
+// User-controlled values are positional argv after the script; none are interpolated into it.
+internal val MANAGED_CAPTURE_SCRIPT = """
+    set +e
+    job_id=${'$'}1
+    shift
+    state_dir=${'$'}HOME/.cache/rikkahub/run-command
+    state_file=${'$'}state_dir/${'$'}job_id
+    mkdir -p -- "${'$'}state_dir" || exit 125
+    umask 077
+    leader=${'$'}1
+    shift
+    if ! command -v setsid >/dev/null 2>&1; then
+        printf '%s\n' 'managed capture requires setsid (install util-linux)' >&2
+        exit 125
+    fi
+    setsid bash -c "${'$'}leader" rikka-leader "${'$'}state_file" "${'$'}@" &
+    leader_pid=${'$'}!
+    wait "${'$'}leader_pid"
+    exit "${'$'}?"
+""".trimIndent()
+
+internal val MANAGED_CAPTURE_LEADER_SCRIPT = """
+    set +e
+    state_file=${'$'}1
+    shift
+    pid=${'$'}${'$'}
+    info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
+    pgrp=${'$'}{info%% *}
+    start=${'$'}{info#* }
+    case "${'$'}pid" in *[!0-9]*|'') exit 125 ;; esac
+    case "${'$'}pgrp" in *[!0-9]*|'') exit 125 ;; esac
+    case "${'$'}start" in *[!0-9]*|'') exit 125 ;; esac
+    [ "${'$'}pgrp" = "${'$'}pid" ] || exit 125
+    tmp=${'$'}state_file.${'$'}pid
+    printf 'group %s %s\n' "${'$'}pid" "${'$'}start" > "${'$'}tmp" &&
+        mv -f -- "${'$'}tmp" "${'$'}state_file" || {
+            rm -f -- "${'$'}tmp"
+            exit 125
+        }
+    exec "${'$'}@"
+""".trimIndent()
+
+// Cleanup is a separate bounded RUN_COMMAND dispatch because cancelling a PendingIntent only
+// unregisters result delivery; it does not stop the process already running in Termux. It waits
+// briefly for the wrapper's pid file to close the dispatch race, terminates the complete process
+// group where possible, recursively terminates descendants otherwise, then escalates to SIGKILL.
+internal val CAPTURE_CLEANUP_SCRIPT = """
+    set +e
+    job_id=${'$'}1
+    state_file=${'$'}HOME/.cache/rikkahub/run-command/${'$'}job_id
+    n=0
+    while [ ! -s "${'$'}state_file" ] && [ "${'$'}n" -lt 20 ]; do
+        sleep 0.1
+        n=${'$'}((n + 1))
+    done
+    [ -s "${'$'}state_file" ] || exit 0
+    reject_state() {
+        rm -f -- "${'$'}state_file"
+        exit 0
+    }
+    read -r mode pid root_start extra < "${'$'}state_file"
+    [ "${'$'}mode" = group ] || reject_state
+    case "${'$'}pid" in *[!0-9]*|'') reject_state ;; esac
+    case "${'$'}root_start" in *[!0-9]*|'') reject_state ;; esac
+    [ -z "${'$'}extra" ] || reject_state
+    [ "${'$'}pid" -gt 1 ] 2>/dev/null || reject_state
+    [ "${'$'}root_start" -gt 0 ] 2>/dev/null || reject_state
+    live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
+    live_pgrp=${'$'}{live_info%% *}
+    live_start=${'$'}{live_info#* }
+    if [ -n "${'$'}live_info" ]; then
+        case "${'$'}live_pgrp" in *[!0-9]*|'') reject_state ;; esac
+        case "${'$'}live_start" in *[!0-9]*|'') reject_state ;; esac
+        [ "${'$'}live_start" = "${'$'}root_start" ] || reject_state
+        [ "${'$'}live_pgrp" = "${'$'}pid" ] || reject_state
+    else
+        # A fast root may exit after forking while descendants retain the original group. Linux
+        # keeps that pgid allocated while members exist; authorize only a member created no earlier
+        # than the recorded leader, preventing stale state from targeting an unrelated reused pgid.
+        member_found=false
+        for stat in /proc/[0-9]*/stat; do
+            [ -r "${'$'}stat" ] || continue
+            member_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "${'$'}stat" 2>/dev/null)
+            member_pgrp=${'$'}{member_info%% *}
+            member_start=${'$'}{member_info#* }
+            case "${'$'}member_pgrp" in *[!0-9]*|'') continue ;; esac
+            case "${'$'}member_start" in *[!0-9]*|'') continue ;; esac
+            if [ "${'$'}member_pgrp" = "${'$'}pid" ] &&
+                [ "${'$'}member_start" -ge "${'$'}root_start" ] 2>/dev/null; then
+                member_found=true
+                break
+            fi
+        done
+        [ "${'$'}member_found" = true ] || reject_state
+    fi
+    # Authorization occurs once before TERM. The leader can exit during the grace interval while
+    # the already-authorized retained process group still requires KILL escalation.
+    kill -TERM -- "-${'$'}pid" 2>/dev/null
+    sleep 0.5
+    kill -KILL -- "-${'$'}pid" 2>/dev/null
+    rm -f -- "${'$'}state_file"
+""".trimIndent()
+
+internal data class CaptureLaunch(
+    val executable: String,
+    val arguments: Array<String>,
+    val jobId: String?,
+)
+
+internal fun captureTimeoutMs(requestedMs: Long): Long =
+    requestedMs.coerceIn(1L, MAX_CAPTURE_TIMEOUT_MS)
+
+internal fun shouldManageCapture(backgroundRequested: Boolean, shellCommandMode: Boolean): Boolean =
+    !backgroundRequested || !shellCommandMode
+
+internal fun buildCaptureLaunch(
+    executable: String,
+    arguments: Array<String>,
+    managed: Boolean,
+    jobId: String = UUID.randomUUID().toString(),
+): CaptureLaunch = if (managed) {
+    CaptureLaunch(
+        executable = "$TERMUX_BIN_DIR/bash",
+        arguments = arrayOf(
+            "-c", MANAGED_CAPTURE_SCRIPT, "rikka-capture", jobId,
+            MANAGED_CAPTURE_LEADER_SCRIPT, executable, *arguments,
+        ),
+        jobId = jobId,
+    )
+} else {
+    CaptureLaunch(executable, arguments, null)
+}
+
+internal fun captureCleanupArguments(jobId: String): Array<String> =
+    arrayOf("-c", CAPTURE_CLEANUP_SCRIPT, "rikka-cleanup", jobId)
+
+internal val CAPTURE_RELEASE_SCRIPT = """
+    job_id=${'$'}1
+    rm -f -- "${'$'}HOME/.cache/rikkahub/run-command/${'$'}job_id"
+""".trimIndent()
+
+internal fun captureReleaseArguments(jobId: String): Array<String> =
+    arrayOf("-c", CAPTURE_RELEASE_SCRIPT, "rikka-release", jobId)
 
 // Termux delivers stdout / stderr / exitCode via a result Bundle attached to the
 // RUN_COMMAND_PENDING_INTENT we register. Documented at:
@@ -132,6 +281,34 @@ internal sealed class CaptureResult {
     data class OtherError(val message: String) : CaptureResult()
 }
 
+/** A non-zero process exit is still an ordinary completed shell result. */
+internal fun completedCommandResult(stdout: String, stderr: String, exitCode: Int): CaptureResult =
+    CaptureResult.Success(stdout = stdout, stderr = stderr, exitCode = exitCode)
+
+private fun dispatchCaptureMaintenance(ctx: Context, arguments: Array<String>, operation: String) {
+    val maintenance = Intent().apply {
+        setClassName(TERMUX_PACKAGE, TERMUX_RUN_COMMAND_SERVICE)
+        action = TERMUX_RUN_COMMAND_ACTION
+        putExtra("com.termux.RUN_COMMAND_PATH", "$TERMUX_BIN_DIR/bash")
+        putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arguments)
+        putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME_DIR)
+        putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+    }
+    try {
+        ctx.startService(maintenance)
+    } catch (t: Throwable) {
+        // There is no cross-app process handle to fall back to. Avoid command/output logging; the
+        // exception class is enough to diagnose a maintenance dispatch failure in logcat.
+        android.util.Log.w("RikkaTermux", "capture $operation dispatch failed: ${t::class.java.simpleName}")
+    }
+}
+
+private fun dispatchCaptureCleanup(ctx: Context, jobId: String) =
+    dispatchCaptureMaintenance(ctx, captureCleanupArguments(jobId), "cleanup")
+
+private fun dispatchCaptureRelease(ctx: Context, jobId: String) =
+    dispatchCaptureMaintenance(ctx, captureReleaseArguments(jobId), "release")
+
 /**
  * Dispatch a Termux command and suspend until it completes (or times out), returning the
  * captured output. Implementation registers a one-shot BroadcastReceiver, hands a
@@ -147,6 +324,7 @@ internal suspend fun runCommandCapture(
     // Default reads from the runtime holder so callers that don't pass a timeout get the
     // user-configured value, not a stale compile-time constant.
     timeoutMs: Long = TermuxRuntime.commandTimeoutMs,
+    cleanupOnTimeoutOrCancellation: Boolean = true,
 ): CaptureResult {
     // Mark Termux as freshly touched BEFORE we issue the broadcast. The notification
     // listener uses this signal to suppress Termux's foreground-service notification
@@ -158,6 +336,8 @@ internal suspend fun runCommandCapture(
     // factories don't have to remember to call it themselves.
     me.rerere.rikkahub.data.ai.AgentTurnTracker.touchPackage(TERMUX_PACKAGE, "com.termux.api")
     val resultDeferred = CompletableDeferred<Bundle>()
+    val launch = buildCaptureLaunch(executable, arguments, cleanupOnTimeoutOrCancellation)
+    val boundedTimeoutMs = captureTimeoutMs(timeoutMs)
     val resultAction = "${ctx.packageName}.TERMUX_RESULT_${UUID.randomUUID()}"
     val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
@@ -217,8 +397,8 @@ internal suspend fun runCommandCapture(
     val intent = Intent().apply {
         setClassName(TERMUX_PACKAGE, TERMUX_RUN_COMMAND_SERVICE)
         action = TERMUX_RUN_COMMAND_ACTION
-        putExtra("com.termux.RUN_COMMAND_PATH", executable)
-        putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arguments)
+        putExtra("com.termux.RUN_COMMAND_PATH", launch.executable)
+        putExtra("com.termux.RUN_COMMAND_ARGUMENTS", launch.arguments)
         putExtra("com.termux.RUN_COMMAND_WORKDIR", workingDir)
         putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
         putExtra(EXTRA_PENDING_INTENT, pi)
@@ -226,8 +406,9 @@ internal suspend fun runCommandCapture(
 
     return try {
         ctx.startService(intent)
-        val bundle = withTimeoutOrNull(timeoutMs) { resultDeferred.await() }
+        val bundle = withTimeoutOrNull(boundedTimeoutMs) { resultDeferred.await() }
         if (bundle == null) {
+            launch.jobId?.let { dispatchCaptureCleanup(ctx, it) }
             CaptureResult.Timeout
         } else {
             // Per the Termux RUN_COMMAND wiki: `err = -1` (= Activity.RESULT_OK) means
@@ -236,7 +417,7 @@ internal suspend fun runCommandCapture(
             // OS killed it, etc). Earlier revisions inverted this and rejected the
             // success path because err=-1 != 0.
             val errCode = bundle.getInt(RESULT_KEY_ERR, -1)
-            if (errCode != -1) {
+            val completed = if (errCode != -1) {
                 val errMsg = bundle.getString(RESULT_KEY_ERRMSG).orEmpty()
                 if (errMsg.contains("PermissionDenied", ignoreCase = true) ||
                     errMsg.contains("not allowed", ignoreCase = true)
@@ -246,13 +427,20 @@ internal suspend fun runCommandCapture(
                     CaptureResult.OtherError("err=$errCode: $errMsg")
                 }
             } else {
-                CaptureResult.Success(
+                completedCommandResult(
                     stdout = bundle.getString(RESULT_KEY_STDOUT).orEmpty(),
                     stderr = bundle.getString(RESULT_KEY_STDERR).orEmpty(),
                     exitCode = bundle.getInt(RESULT_KEY_EXIT_CODE, -1),
                 )
             }
+            // The wrapper intentionally leaves its state file in place until the bundle has
+            // been classified. This keeps descendant cleanup possible through completion.
+            launch.jobId?.let { jobId -> dispatchCaptureRelease(ctx, jobId) }
+            completed
         }
+    } catch (t: CancellationException) {
+        launch.jobId?.let { dispatchCaptureCleanup(ctx, it) }
+        throw t
     } catch (t: SecurityException) {
         CaptureResult.Denied
     } catch (t: Throwable) {
@@ -459,6 +647,12 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
             arguments = resolvedArgs,
             workingDir = workingDir,
             timeoutMs = timeoutMs,
+            // A deliberately detached command owns its lifetime after this short PID-returning
+            // call; do not register it for timeout/cancellation cleanup.
+            cleanupOnTimeoutOrCancellation = shouldManageCapture(
+                backgroundRequested = background,
+                shellCommandMode = rawCommand != null,
+            ),
         )) {
             is CaptureResult.Success -> buildJsonObject {
                 put("success", true)

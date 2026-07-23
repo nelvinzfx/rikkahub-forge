@@ -1,13 +1,16 @@
 package me.rerere.rikkahub.data.ai.tools.local
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Unit tests for the pure logic of the interactive Termux session tools: tmux argv
  * construction, the settle / wait_for read decision, session-list parsing, and
- * not-found detection. The Android RUN_COMMAND IO is verified on-device.
+ * not-found detection. Android RUN_COMMAND IO still requires on-device verification.
  */
 class TermuxSessionToolTest {
 
@@ -175,4 +178,152 @@ class TermuxSessionToolTest {
         // Mixed: an ASCII prefix then an emoji. Budget 5 keeps "a" + one emoji (1 + 4 = 5).
         assertEquals("a😀", takeFirstUtf8Bytes("a😀😁", 5))
     }
+
+    @Test
+    fun tmuxClassification_turnsNonzeroExitIntoActionableFailure() {
+        val classified = classifyTmuxResult(
+            CaptureResult.Success("", "no server running on /tmp/tmux-123/default\n", 1)
+        )
+        assertTrue(classified is CaptureResult.OtherError)
+        assertTrue(isSessionNotFound((classified as CaptureResult.OtherError).message))
+    }
+
+    @Test
+    fun tmuxClassification_keepsZeroExitSuccess() {
+        val completed = CaptureResult.Success("pane", "", 0)
+        assertSame(completed, classifyTmuxResult(completed))
+    }
+
+    @Test
+    fun ordinaryCommand_nonzeroExitRemainsCompletedResult() {
+        val completed = completedCommandResult("out", "bad", 17)
+        assertTrue(completed is CaptureResult.Success)
+        completed as CaptureResult.Success
+        assertEquals(17, completed.exitCode)
+        assertEquals("bad", completed.stderr)
+    }
+
+    @Test
+    fun dimensionsLinesAndTimeouts_areExplicitlyClamped() {
+        assertEquals(MIN_COLS, clampCols(-1))
+        assertEquals(MAX_COLS, clampCols(Int.MAX_VALUE))
+        assertEquals(DEFAULT_COLS, clampCols(null))
+        assertEquals(MIN_ROWS, clampRows(-1))
+        assertEquals(MAX_ROWS, clampRows(Int.MAX_VALUE))
+        assertEquals(MIN_READ_LINES, clampReadLines(-1))
+        assertEquals(MAX_READ_LINES, clampReadLines(Int.MAX_VALUE))
+        assertEquals(DEFAULT_READ_LINES, clampReadLines(null))
+        assertEquals(1_000L, resolveTimeoutMs(-5))
+        assertEquals(DEFAULT_TIMEOUT_S * 1_000L, resolveTimeoutMs(0))
+        assertEquals(MAX_TIMEOUT_S * 1_000L, resolveTimeoutMs(Int.MAX_VALUE))
+        assertEquals(1L, captureTimeoutMs(Long.MIN_VALUE))
+        assertEquals(MAX_TIMEOUT_S * 1_000L, captureTimeoutMs(Long.MAX_VALUE))
+        assertTrue(shouldManageCapture(backgroundRequested = false, shellCommandMode = true))
+        assertTrue(shouldManageCapture(backgroundRequested = true, shellCommandMode = false))
+        assertFalse(shouldManageCapture(backgroundRequested = true, shellCommandMode = true))
+        assertEquals(
+            listOf("new-session", "-d", "-s", "rk_x", "-x", "$MIN_COLS", "-y", "$MIN_ROWS"),
+            TmuxOps.startArgv("rk_x", -1, -1).toList(),
+        )
+        assertEquals("-$MIN_READ_LINES", TmuxOps.capturePaneArgv("rk_x", -1).last())
+        assertEquals("-$MAX_READ_LINES", TmuxOps.capturePaneArgv("rk_x", Int.MAX_VALUE).last())
+    }
+
+    @Test
+    fun initialCommandHardlineCheck_canRunBeforeAnyAllocation() {
+        assertTrue(initialCommandBlockReason("reboot")?.isNotBlank() == true)
+        assertNull(initialCommandBlockReason("ssh myhost"))
+        // GenerationHandler calls this tool-aware seam before approval and again before execution;
+        // the local initialCommandBlockReason check remains defense in depth for direct callers.
+        assertTrue(
+            me.rerere.rikkahub.data.ai.tools.HardlineCommandGuard.checkTool(
+                "termux_session_start",
+                """{"command":"reboot"}""",
+            )?.isNotBlank() == true,
+        )
+        assertTrue(
+            me.rerere.rikkahub.data.ai.tools.HardlineCommandGuard.checkTool(
+                "termux_session_send",
+                """{"session_id":"rk_x","input":"reboot"}""",
+            )?.isNotBlank() == true,
+        )
+    }
+
+    @Test
+    fun managedCaptureWrapper_passesUserValuesAsArgvAndRegistersCleanup() {
+        val launch = buildCaptureLaunch(
+            executable = "/tmp/exe;touch /tmp/injected",
+            arguments = arrayOf("a b", "$(touch nope)", "'quoted'"),
+            managed = true,
+            jobId = "opaque-job-123",
+        )
+        assertEquals("$TERMUX_BIN/bash", launch.executable)
+        assertEquals("opaque-job-123", launch.jobId)
+        assertEquals("opaque-job-123", launch.arguments[3])
+        assertEquals(MANAGED_CAPTURE_LEADER_SCRIPT, launch.arguments[4])
+        assertEquals("/tmp/exe;touch /tmp/injected", launch.arguments[5])
+        assertEquals(listOf("a b", "$(touch nope)", "'quoted'"), launch.arguments.drop(6))
+        assertFalse(MANAGED_CAPTURE_SCRIPT.contains("opaque-job-123"))
+        assertTrue(MANAGED_CAPTURE_SCRIPT.contains("managed capture requires setsid (install util-linux)"))
+        assertTrue(MANAGED_CAPTURE_SCRIPT.contains("setsid bash -c \"${'$'}leader\" rikka-leader"))
+        assertFalse(MANAGED_CAPTURE_SCRIPT.contains("rikka-leader tree"))
+        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("pid=${'$'}${'$'}"))
+        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("printf 'group %s %s\\n' \"${'$'}pid\" \"${'$'}start\""))
+        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("mv -f -- \"${'$'}tmp\" \"${'$'}state_file\""))
+        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("exec \"${'$'}@\""))
+        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.indexOf("mv -f --") < MANAGED_CAPTURE_LEADER_SCRIPT.indexOf("exec \"${'$'}@\""))
+        assertFalse(MANAGED_CAPTURE_SCRIPT.contains("/proc/${'$'}leader_pid/stat"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("read -r mode pid root_start extra"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}mode\" = group ]"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}live_start\" = \"${'$'}root_start\" ]"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}live_pgrp\" = \"${'$'}pid\" ]"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("member_found=false"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}member_start\" -ge \"${'$'}root_start\" ]"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("for stat in /proc/[0-9]*/stat"))
+        assertFalse(CAPTURE_CLEANUP_SCRIPT.contains("mode=tree"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("reject_state"))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("kill -TERM -- \"-${'$'}pid\""))
+        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}pid\" -gt 1 ]"))
+        assertEquals("opaque-job-123", captureCleanupArguments("opaque-job-123").last())
+        assertEquals("opaque-job-123", captureReleaseArguments("opaque-job-123").last())
+    }
+
+    @Test
+    fun detachedCapture_preservesOriginalArgvAndHasNoManagedJob() {
+        val launch = buildCaptureLaunch(
+            executable = "/usr/bin/bash",
+            arguments = arrayOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"),
+            managed = false,
+            jobId = "must-not-be-used",
+        )
+        assertEquals("/usr/bin/bash", launch.executable)
+        assertEquals(listOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"), launch.arguments.toList())
+        assertNull(launch.jobId)
+    }
+
+
+    @Test
+    fun tmuxInstallTimeout_isReportedAsStopped() {
+        assertEquals("tmux_install_timed_out", classifyTmuxInstallFailure(CaptureResult.Timeout))
+        assertEquals("termux_permission_denied", classifyTmuxInstallFailure(CaptureResult.Denied))
+        assertNull(classifyTmuxInstallFailure(CaptureResult.Success("", "", 0)))
+        val recovery = tmuxInstallRecovery("tmux_install_timed_out")
+        assertTrue(recovery.contains("timed out and was stopped"))
+        assertFalse(recovery.contains("still installing"))
+    }
+
+
+    @Test
+    fun initialSetupFailure_classifiesOnlyExplicitTmuxFailures() {
+        assertNull(initialSetupFailure("Initial input", CaptureResult.Success("", "", 0)))
+        assertEquals(
+            "Initial Enter failed: no server running.",
+            initialSetupFailure("Initial Enter", CaptureResult.OtherError("no server running")),
+        )
+        assertEquals(
+            "Initial input failed: tmux operation failed.",
+            initialSetupFailure("Initial input", CaptureResult.Timeout),
+        )
+    }
+
 }
