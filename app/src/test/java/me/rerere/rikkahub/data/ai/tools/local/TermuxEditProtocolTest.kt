@@ -14,7 +14,7 @@ class TermuxEditProtocolTest {
         val parsed = parseTermuxEditSnapshots(valid, id, listOf(pathSha)) as TermuxTransferProtocolResult.Ok
         assertEquals("/tmp/a", parsed.value.single().actualPath); assertEquals(3, parsed.value.single().bytes)
         assertTrue(parseTermuxEditSnapshots(valid, id, listOf("2".repeat(64))) is TermuxTransferProtocolResult.Error)
-        assertTrue(parseTermuxEditSnapshots(valid.replace(actual, actual.removeSuffix("=")), id, listOf(pathSha)) is TermuxTransferProtocolResult.Error)
+        assertTrue(parseTermuxEditSnapshots(valid.replace("item=0,$actual,", "item=0,${actual}=,"), id, listOf(pathSha)) is TermuxTransferProtocolResult.Error)
         assertTrue(parseTermuxEditSnapshots(valid.replace(",3\n", ",4194305\n"), id, listOf(pathSha)) is TermuxTransferProtocolResult.Error)
         assertTrue(parseTermuxEditSnapshots(valid + "unknown=x\n", id, listOf(pathSha)) is TermuxTransferProtocolResult.Error)
         val duplicateIdentity = valid.replace("count=1", "count=2").replace("item=0,$actual,$pathSha,$contentSha,640,1:2,3", "item=0,$actual,$pathSha,$contentSha,640,1:2,3\nitem=1,${Base64.getEncoder().encodeToString("/tmp/b".toByteArray())},$pathSha,$contentSha,640,1:2,3")
