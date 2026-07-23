@@ -43,6 +43,8 @@ class TermuxPreferences(private val context: Context) {
     private val workingDirKey     = stringPreferencesKey("working_dir")
     private val maxStdoutKey      = intPreferencesKey("max_stdout_bytes")
     private val maxStderrKey      = intPreferencesKey("max_stderr_bytes")
+    private val textReadMaxLinesKey = intPreferencesKey("text_read_max_lines")
+    private val textReadMaxBytesKey = intPreferencesKey("text_read_max_bytes")
     private val maxRetainedOutputJobsKey = intPreferencesKey("max_retained_output_jobs")
     private val outputTtlKey = longPreferencesKey("output_ttl_ms")
     private val aptWrapKey        = booleanPreferencesKey("apt_wrap_enabled")
@@ -62,6 +64,8 @@ class TermuxPreferences(private val context: Context) {
         TermuxRuntime.defaultWorkingDir  = initial.defaultWorkingDir
         TermuxRuntime.maxStdoutBytes     = initial.maxStdoutBytes
         TermuxRuntime.maxStderrBytes     = initial.maxStderrBytes
+        TermuxRuntime.textReadMaxLines   = initial.textReadMaxLines
+        TermuxRuntime.textReadMaxBytes   = initial.textReadMaxBytes
         TermuxRuntime.maxRetainedOutputJobs = initial.maxRetainedOutputJobs
         TermuxRuntime.outputTtlMs = initial.outputTtlMs
         TermuxRuntime.aptWrapEnabled     = initial.aptWrapEnabled
@@ -106,6 +110,18 @@ class TermuxPreferences(private val context: Context) {
             maxStderrFlow()
                 .distinctUntilChanged()
                 .onEach { TermuxRuntime.maxStderrBytes = it }
+                .collect {}
+        }
+        scope.launch {
+            textReadMaxLinesFlow()
+                .distinctUntilChanged()
+                .onEach { TermuxRuntime.textReadMaxLines = it }
+                .collect {}
+        }
+        scope.launch {
+            textReadMaxBytesFlow()
+                .distinctUntilChanged()
+                .onEach { TermuxRuntime.textReadMaxBytes = it }
                 .collect {}
         }
         scope.launch {
@@ -167,6 +183,18 @@ class TermuxPreferences(private val context: Context) {
         )
     }
 
+    fun textReadMaxLinesFlow(): Flow<Int> = store.data.map { prefs ->
+        TermuxDefaults.clampTextReadMaxLines(
+            prefs[textReadMaxLinesKey] ?: TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES
+        )
+    }
+
+    fun textReadMaxBytesFlow(): Flow<Int> = store.data.map { prefs ->
+        TermuxDefaults.clampTextReadMaxBytes(
+            prefs[textReadMaxBytesKey] ?: TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES
+        )
+    }
+
     fun maxRetainedOutputJobsFlow(): Flow<Int> = store.data.map { prefs ->
         TermuxDefaults.clampMaxRetainedOutputJobs(
             prefs[maxRetainedOutputJobsKey] ?: TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS
@@ -212,6 +240,14 @@ class TermuxPreferences(private val context: Context) {
         store.edit { it[maxStderrKey] = TermuxDefaults.clampMaxStderr(bytes) }
     }
 
+    suspend fun setTextReadMaxLines(lines: Int) {
+        store.edit { it[textReadMaxLinesKey] = TermuxDefaults.clampTextReadMaxLines(lines) }
+    }
+
+    suspend fun setTextReadMaxBytes(bytes: Int) {
+        store.edit { it[textReadMaxBytesKey] = TermuxDefaults.clampTextReadMaxBytes(bytes) }
+    }
+
     suspend fun setMaxRetainedOutputJobs(count: Int) {
         store.edit { it[maxRetainedOutputJobsKey] = TermuxDefaults.clampMaxRetainedOutputJobs(count) }
     }
@@ -240,6 +276,8 @@ class TermuxPreferences(private val context: Context) {
             defaultWorkingDir  = TermuxDefaults.clampWorkingDir(prefs[workingDirKey]            ?: TermuxDefaults.DEFAULT_WORKING_DIR),
             maxStdoutBytes     = TermuxDefaults.clampMaxStdout(prefs[maxStdoutKey]              ?: TermuxDefaults.DEFAULT_MAX_STDOUT),
             maxStderrBytes     = TermuxDefaults.clampMaxStderr(prefs[maxStderrKey]              ?: TermuxDefaults.DEFAULT_MAX_STDERR),
+            textReadMaxLines   = TermuxDefaults.clampTextReadMaxLines(prefs[textReadMaxLinesKey] ?: TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES),
+            textReadMaxBytes   = TermuxDefaults.clampTextReadMaxBytes(prefs[textReadMaxBytesKey] ?: TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES),
             maxRetainedOutputJobs = TermuxDefaults.clampMaxRetainedOutputJobs(prefs[maxRetainedOutputJobsKey] ?: TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS),
             outputTtlMs        = TermuxDefaults.clampOutputTtlMs(prefs[outputTtlKey] ?: TermuxDefaults.DEFAULT_OUTPUT_TTL_MS),
             aptWrapEnabled     = prefs[aptWrapKey]                                              ?: TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,
@@ -261,6 +299,8 @@ data class TermuxRuntimeConfig(
     val defaultWorkingDir: String,
     val maxStdoutBytes: Int,
     val maxStderrBytes: Int,
+    val textReadMaxLines: Int,
+    val textReadMaxBytes: Int,
     val maxRetainedOutputJobs: Int,
     val outputTtlMs: Long,
     val aptWrapEnabled: Boolean,

@@ -193,6 +193,20 @@ class TermuxDefaultsTest {
             TermuxDefaults.clampMaxStdout(TermuxDefaults.DEFAULT_MAX_STDOUT))
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDERR,
             TermuxDefaults.clampMaxStderr(TermuxDefaults.DEFAULT_MAX_STDERR))
+        assertEquals(TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES,
+            TermuxDefaults.clampTextReadMaxLines(TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES))
+        assertEquals(TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES,
+            TermuxDefaults.clampTextReadMaxBytes(TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES))
+    }
+
+    @Test
+    fun fileReadBudgets_clampToSafeHardRanges() {
+        assertEquals(1, TermuxDefaults.clampTextReadMaxLines(0))
+        assertEquals(10_000, TermuxDefaults.clampTextReadMaxLines(Int.MAX_VALUE))
+        assertEquals(2_000, TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES)
+        assertEquals(4_096, TermuxDefaults.clampTextReadMaxBytes(0))
+        assertEquals(61_440, TermuxDefaults.clampTextReadMaxBytes(Int.MAX_VALUE))
+        assertEquals(51_200, TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES)
     }
 
     @Test

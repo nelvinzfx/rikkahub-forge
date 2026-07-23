@@ -39,6 +39,15 @@ object TermuxDefaults {
     const val MIN_MAX_STDERR     =    500
     const val MAX_MAX_STDERR     = 12_288
 
+    // --- Termux file-read budgets ---------------------------------------------------------
+    const val DEFAULT_TEXT_READ_MAX_LINES = 2_000
+    const val MIN_TEXT_READ_MAX_LINES = 1
+    const val MAX_TEXT_READ_MAX_LINES = 10_000
+
+    const val DEFAULT_TEXT_READ_MAX_BYTES = 51_200
+    const val MIN_TEXT_READ_MAX_BYTES = 4_096
+    const val MAX_TEXT_READ_MAX_BYTES = 61_440
+
     // --- Native output-spool retention ----------------------------------------------------
     const val DEFAULT_MAX_RETAINED_OUTPUT_JOBS = 50
     const val MIN_MAX_RETAINED_OUTPUT_JOBS = 1
@@ -78,6 +87,12 @@ object TermuxDefaults {
 
     fun clampMaxStderr(bytes: Int): Int =
         bytes.coerceIn(MIN_MAX_STDERR, MAX_MAX_STDERR)
+
+    fun clampTextReadMaxLines(lines: Int): Int =
+        lines.coerceIn(MIN_TEXT_READ_MAX_LINES, MAX_TEXT_READ_MAX_LINES)
+
+    fun clampTextReadMaxBytes(bytes: Int): Int =
+        bytes.coerceIn(MIN_TEXT_READ_MAX_BYTES, MAX_TEXT_READ_MAX_BYTES)
 
     fun validCombinedHeadBytes(stdoutBytes: Int, stderrBytes: Int): Boolean =
         stdoutBytes in MIN_MAX_STDOUT..MAX_MAX_STDOUT &&

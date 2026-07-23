@@ -83,6 +83,23 @@ class TermuxJobProtocolTest {
         )
     }
 
+    @Test fun captureLifecycle_finalSuccessReleasesEverythingElseCleans() {
+        assertEquals(CaptureLifecycleAction.RELEASE, captureLifecycleAction(CaptureCompletionKind.FINAL_SUCCESS, true))
+        listOf(
+            CaptureCompletionKind.INTERNAL_ERROR,
+            CaptureCompletionKind.EXCEPTION,
+            CaptureCompletionKind.TIMEOUT,
+            CaptureCompletionKind.CANCELLATION,
+        ).forEach { assertEquals(CaptureLifecycleAction.CLEANUP, captureLifecycleAction(it, true)) }
+        assertEquals(CaptureLifecycleAction.NONE, captureLifecycleAction(CaptureCompletionKind.EXCEPTION, false))
+        assertEquals(CaptureLifecycleAction.NONE, captureLifecycleAction(CaptureCompletionKind.FINAL_SUCCESS, false))
+        assertEquals("timed_out", spoolCleanupReason("timed_out"))
+        assertEquals("cancelled", spoolCleanupReason("cancelled"))
+        assertEquals("cancelled", spoolCleanupReason("internal_error"))
+        assertEquals("cancelled", spoolCleanupReason("transport_exception"))
+        assertEquals("cancelled", spoolCleanupReason("security_exception"))
+    }
+
     @Test fun capturedEnvelope_decodesHeadsAndCounts() {
         val protocol = """
             RIKKAHUB_JOB_V1

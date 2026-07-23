@@ -31,23 +31,27 @@ class SettingTermuxViewModel(
         },
         combine(
             prefs.maxStderrFlow(),
+            prefs.textReadMaxLinesFlow(),
+            prefs.textReadMaxBytesFlow(),
             prefs.maxRetainedOutputJobsFlow(),
             prefs.outputTtlFlow(),
-            prefs.aptWrapEnabledFlow(),
-        ) { maxStderr, maxJobs, outputTtl, aptWrap ->
-            RetentionPartial(maxStderr, maxJobs, outputTtl, aptWrap)
+        ) { maxStderr, textLines, textBytes, maxJobs, outputTtl ->
+            LimitsPartial(maxStderr, textLines, textBytes, maxJobs, outputTtl)
         },
-    ) { partial, retention ->
+        prefs.aptWrapEnabledFlow(),
+    ) { partial, limits, aptWrap ->
         TermuxRuntimeConfig(
             commandTimeoutMs  = partial.commandTimeoutMs,
             toolCallTimeoutMs = partial.toolCallTimeoutMs,
             verifyTimeoutMs   = partial.verifyTimeoutMs,
             defaultWorkingDir = partial.defaultWorkingDir,
             maxStdoutBytes    = partial.maxStdoutBytes,
-            maxStderrBytes    = retention.maxStderrBytes,
-            maxRetainedOutputJobs = retention.maxRetainedOutputJobs,
-            outputTtlMs       = retention.outputTtlMs,
-            aptWrapEnabled    = retention.aptWrapEnabled,
+            maxStderrBytes    = limits.maxStderrBytes,
+            textReadMaxLines  = limits.textReadMaxLines,
+            textReadMaxBytes  = limits.textReadMaxBytes,
+            maxRetainedOutputJobs = limits.maxRetainedOutputJobs,
+            outputTtlMs       = limits.outputTtlMs,
+            aptWrapEnabled    = aptWrap,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -59,6 +63,8 @@ class SettingTermuxViewModel(
             defaultWorkingDir = TermuxDefaults.DEFAULT_WORKING_DIR,
             maxStdoutBytes    = TermuxDefaults.DEFAULT_MAX_STDOUT,
             maxStderrBytes    = TermuxDefaults.DEFAULT_MAX_STDERR,
+            textReadMaxLines  = TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES,
+            textReadMaxBytes  = TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES,
             maxRetainedOutputJobs = TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS,
             outputTtlMs       = TermuxDefaults.DEFAULT_OUTPUT_TTL_MS,
             aptWrapEnabled    = TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,
@@ -94,6 +100,14 @@ class SettingTermuxViewModel(
         viewModelScope.launch { prefs.setMaxStderrBytes(bytes) }
     }
 
+    fun setTextReadMaxLines(lines: Int) {
+        viewModelScope.launch { prefs.setTextReadMaxLines(lines) }
+    }
+
+    fun setTextReadMaxBytes(bytes: Int) {
+        viewModelScope.launch { prefs.setTextReadMaxBytes(bytes) }
+    }
+
     fun setMaxRetainedOutputJobs(count: Int) {
         viewModelScope.launch { prefs.setMaxRetainedOutputJobs(count) }
     }
@@ -107,11 +121,12 @@ class SettingTermuxViewModel(
     }
 
     // Private intermediate holder to avoid 7-flow combine vararg.
-    private data class RetentionPartial(
+    private data class LimitsPartial(
         val maxStderrBytes: Int,
+        val textReadMaxLines: Int,
+        val textReadMaxBytes: Int,
         val maxRetainedOutputJobs: Int,
         val outputTtlMs: Long,
-        val aptWrapEnabled: Boolean,
     )
 
     private data class Partial(

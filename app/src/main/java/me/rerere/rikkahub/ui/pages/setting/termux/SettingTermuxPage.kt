@@ -306,6 +306,28 @@ fun SettingTermuxPage(
                     },
                 )
                 item(
+                    headlineContent = { Text(stringResource(R.string.setting_termux_text_read_max_lines)) },
+                    supportingContent = { Text(stringResource(R.string.setting_termux_text_read_max_lines_desc)) },
+                    trailingContent = {
+                        TimeoutInput(
+                            currentValue = config.textReadMaxLines.toLong(),
+                            unitLabel = stringResource(R.string.setting_termux_unit_lines),
+                            onCommit = { vm.setTextReadMaxLines(it.toInt()) },
+                        )
+                    },
+                )
+                item(
+                    headlineContent = { Text(stringResource(R.string.setting_termux_text_read_max_bytes)) },
+                    supportingContent = { Text(stringResource(R.string.setting_termux_text_read_max_bytes_desc)) },
+                    trailingContent = {
+                        TimeoutInput(
+                            currentValue = config.textReadMaxBytes.toLong(),
+                            unitLabel = stringResource(R.string.setting_termux_unit_bytes),
+                            onCommit = { vm.setTextReadMaxBytes(it.toInt()) },
+                        )
+                    },
+                )
+                item(
                     headlineContent = { Text(stringResource(R.string.setting_termux_max_retained_output_jobs)) },
                     supportingContent = { Text(stringResource(R.string.setting_termux_max_retained_output_jobs_desc)) },
                     trailingContent = {

@@ -127,6 +127,18 @@ internal fun captureTimeoutMs(requestedMs: Long): Long = requestedMs.coerceIn(1L
 internal fun shouldManageCapture(backgroundRequested: Boolean, shellCommandMode: Boolean): Boolean =
     !backgroundRequested || !shellCommandMode
 
+internal enum class CaptureLifecycleAction { RELEASE, CLEANUP, NONE }
+internal enum class CaptureCompletionKind { FINAL_SUCCESS, INTERNAL_ERROR, EXCEPTION, TIMEOUT, CANCELLATION }
+internal fun captureLifecycleAction(kind: CaptureCompletionKind, managed: Boolean): CaptureLifecycleAction = when {
+    !managed -> CaptureLifecycleAction.NONE
+    kind == CaptureCompletionKind.FINAL_SUCCESS -> CaptureLifecycleAction.RELEASE
+    else -> CaptureLifecycleAction.CLEANUP
+}
+
+/** The spool protocol persists only terminal timeout/cancellation states. */
+internal fun spoolCleanupReason(reason: String): String =
+    if (reason == "timed_out") "timed_out" else "cancelled"
+
 internal fun buildDirectCaptureLaunch(
     executable: String,
     arguments: Array<String>,
@@ -387,7 +399,11 @@ private fun dispatchCaptureMaintenance(ctx: Context, arguments: Array<String>, o
 
 private fun dispatchCaptureCleanup(ctx: Context, launch: CaptureLaunch, reason: String) {
     val jobId = launch.jobId ?: return
-    val arguments = if (launch.spooled) spoolCleanupArguments(jobId, reason) else directCleanupArguments(jobId)
+    val arguments = if (launch.spooled) {
+        spoolCleanupArguments(jobId, spoolCleanupReason(reason))
+    } else {
+        directCleanupArguments(jobId)
+    }
     dispatchCaptureMaintenance(ctx, arguments, "cleanup")
 }
 
@@ -536,17 +552,26 @@ internal suspend fun runCommandCapture(
                     exitCode = bundle.getInt(RESULT_KEY_EXIT_CODE, -1),
                 )
             }
-            // Direct lifecycle state is released after classification. Spooled state is published
-            // atomically by its wrapper and retained for termux_read_output.
-            dispatchCaptureRelease(ctx, launch)
+            // Only a complete final process result may release direct lifecycle state. Termux
+            // internal errors have not proven process completion and must request cleanup.
+            when (captureLifecycleAction(
+                if (errCode == -1) CaptureCompletionKind.FINAL_SUCCESS else CaptureCompletionKind.INTERNAL_ERROR,
+                launch.managed,
+            )) {
+                CaptureLifecycleAction.RELEASE -> dispatchCaptureRelease(ctx, launch)
+                CaptureLifecycleAction.CLEANUP -> dispatchCaptureCleanup(ctx, launch, "internal_error")
+                CaptureLifecycleAction.NONE -> Unit
+            }
             completed
         }
     } catch (t: CancellationException) {
         if (cleanupOnTimeoutOrCancellation) dispatchCaptureCleanup(ctx, launch, "cancelled")
         throw t
     } catch (t: SecurityException) {
+        if (cleanupOnTimeoutOrCancellation) dispatchCaptureCleanup(ctx, launch, "security_exception")
         CaptureResult.Denied
     } catch (t: Throwable) {
+        if (cleanupOnTimeoutOrCancellation) dispatchCaptureCleanup(ctx, launch, "transport_exception")
         CaptureResult.OtherError(t.message ?: t::class.java.simpleName)
     } finally {
         try { ctx.unregisterReceiver(receiver) } catch (_: Throwable) {}

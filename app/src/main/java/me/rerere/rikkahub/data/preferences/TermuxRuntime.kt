@@ -15,6 +15,8 @@ object TermuxRuntime {
     @Volatile var defaultWorkingDir: String = TermuxDefaults.DEFAULT_WORKING_DIR
     @Volatile var maxStdoutBytes: Int     = TermuxDefaults.DEFAULT_MAX_STDOUT
     @Volatile var maxStderrBytes: Int     = TermuxDefaults.DEFAULT_MAX_STDERR
+    @Volatile var textReadMaxLines: Int   = TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES
+    @Volatile var textReadMaxBytes: Int   = TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES
     @Volatile var maxRetainedOutputJobs: Int = TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS
     @Volatile var outputTtlMs: Long = TermuxDefaults.DEFAULT_OUTPUT_TTL_MS
     @Volatile var aptWrapEnabled: Boolean = TermuxDefaults.DEFAULT_APT_WRAP_ENABLED

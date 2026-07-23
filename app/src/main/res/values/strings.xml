@@ -1604,12 +1604,17 @@
   <string name="setting_termux_max_stdout_desc">Initial stdout bytes returned with a command result. Complete output remains in Termux for ranged reads. Range 1 000 to 49 152.</string>
   <string name="setting_termux_max_stderr">Stderr initial head</string>
   <string name="setting_termux_max_stderr_desc">Initial stderr bytes returned with a command result. Complete output remains in Termux for ranged reads. Range 500 to 12 288.</string>
+  <string name="setting_termux_text_read_max_lines">Text read maximum lines</string>
+  <string name="setting_termux_text_read_max_lines_desc">Maximum lines returned by one Termux text read, and the aggregate batch line budget. Range 1 to 10 000; default 2 000.</string>
+  <string name="setting_termux_text_read_max_bytes">File read maximum bytes</string>
+  <string name="setting_termux_text_read_max_bytes_desc">Maximum raw bytes returned from a stable opened-file view, and the aggregate batch byte budget. Range 4 096 to 61 440; default 51 200.</string>
   <string name="setting_termux_max_retained_output_jobs">Retained output jobs</string>
   <string name="setting_termux_max_retained_output_jobs_desc">Maximum completed native Termux output jobs kept for ranged reads. Range 1 to 200; default 50.</string>
   <string name="setting_termux_output_ttl">Output retention</string>
   <string name="setting_termux_output_ttl_desc">Hours to retain completed native Termux command output. Range 1 hour to 7 days; default 24 hours.</string>
   <string name="setting_termux_unit_hours">hours</string>
   <string name="setting_termux_unit_jobs">jobs</string>
+  <string name="setting_termux_unit_lines">lines</string>
   <string name="setting_termux_apt_wrap">Auto-wrap apt/dpkg as noninteractive</string>
   <string name="setting_termux_apt_wrap_desc">Prepend DEBIAN_FRONTEND=noninteractive so apt upgrades do not hang waiting for interactive prompts.</string>
   <string name="setting_termux_section_help">Setup help</string>

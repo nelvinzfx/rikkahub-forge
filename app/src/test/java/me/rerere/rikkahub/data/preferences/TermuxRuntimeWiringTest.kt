@@ -23,6 +23,8 @@ class TermuxRuntimeWiringTest {
     private var origWorkingDir: String   = ""
     private var origMaxStdout: Int       = 0
     private var origMaxStderr: Int       = 0
+    private var origTextReadMaxLines: Int = 0
+    private var origTextReadMaxBytes: Int = 0
     private var origMaxRetainedJobs: Int = 0
     private var origOutputTtlMs: Long = 0
     private var origAptWrap: Boolean     = true
@@ -34,6 +36,8 @@ class TermuxRuntimeWiringTest {
         origWorkingDir     = TermuxRuntime.defaultWorkingDir
         origMaxStdout      = TermuxRuntime.maxStdoutBytes
         origMaxStderr      = TermuxRuntime.maxStderrBytes
+        origTextReadMaxLines = TermuxRuntime.textReadMaxLines
+        origTextReadMaxBytes = TermuxRuntime.textReadMaxBytes
         origMaxRetainedJobs = TermuxRuntime.maxRetainedOutputJobs
         origOutputTtlMs = TermuxRuntime.outputTtlMs
         origAptWrap        = TermuxRuntime.aptWrapEnabled
@@ -46,6 +50,8 @@ class TermuxRuntimeWiringTest {
         TermuxRuntime.defaultWorkingDir = origWorkingDir
         TermuxRuntime.maxStdoutBytes    = origMaxStdout
         TermuxRuntime.maxStderrBytes    = origMaxStderr
+        TermuxRuntime.textReadMaxLines  = origTextReadMaxLines
+        TermuxRuntime.textReadMaxBytes  = origTextReadMaxBytes
         TermuxRuntime.maxRetainedOutputJobs = origMaxRetainedJobs
         TermuxRuntime.outputTtlMs = origOutputTtlMs
         TermuxRuntime.aptWrapEnabled    = origAptWrap
@@ -73,6 +79,14 @@ class TermuxRuntimeWiringTest {
     fun maxStdout_writeIsVisibleImmediately() {
         TermuxRuntime.maxStdoutBytes = 16_000
         assertEquals(16_000, TermuxRuntime.maxStdoutBytes)
+    }
+
+    @Test
+    fun fileReadBudgets_writeAreVisibleImmediately() {
+        TermuxRuntime.textReadMaxLines = 123
+        TermuxRuntime.textReadMaxBytes = 12_345
+        assertEquals(123, TermuxRuntime.textReadMaxLines)
+        assertEquals(12_345, TermuxRuntime.textReadMaxBytes)
     }
 
     @Test
@@ -107,6 +121,8 @@ class TermuxRuntimeWiringTest {
         assertEquals(TermuxDefaults.DEFAULT_WORKING_DIR,         origWorkingDir)
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDOUT,          origMaxStdout)
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDERR,          origMaxStderr)
+        assertEquals(TermuxDefaults.DEFAULT_TEXT_READ_MAX_LINES,  origTextReadMaxLines)
+        assertEquals(TermuxDefaults.DEFAULT_TEXT_READ_MAX_BYTES,  origTextReadMaxBytes)
         assertEquals(TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS, origMaxRetainedJobs)
         assertEquals(TermuxDefaults.DEFAULT_OUTPUT_TTL_MS, origOutputTtlMs)
         assertEquals(TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,    origAptWrap)
