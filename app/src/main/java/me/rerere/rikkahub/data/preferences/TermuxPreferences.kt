@@ -43,6 +43,8 @@ class TermuxPreferences(private val context: Context) {
     private val workingDirKey     = stringPreferencesKey("working_dir")
     private val maxStdoutKey      = intPreferencesKey("max_stdout_bytes")
     private val maxStderrKey      = intPreferencesKey("max_stderr_bytes")
+    private val maxRetainedOutputJobsKey = intPreferencesKey("max_retained_output_jobs")
+    private val outputTtlKey = longPreferencesKey("output_ttl_ms")
     private val aptWrapKey        = booleanPreferencesKey("apt_wrap_enabled")
 
     init {
@@ -60,6 +62,8 @@ class TermuxPreferences(private val context: Context) {
         TermuxRuntime.defaultWorkingDir  = initial.defaultWorkingDir
         TermuxRuntime.maxStdoutBytes     = initial.maxStdoutBytes
         TermuxRuntime.maxStderrBytes     = initial.maxStderrBytes
+        TermuxRuntime.maxRetainedOutputJobs = initial.maxRetainedOutputJobs
+        TermuxRuntime.outputTtlMs = initial.outputTtlMs
         TermuxRuntime.aptWrapEnabled     = initial.aptWrapEnabled
         ToolRuntimeLimits.toolCallTimeoutMs = initial.toolCallTimeoutMs
 
@@ -102,6 +106,18 @@ class TermuxPreferences(private val context: Context) {
             maxStderrFlow()
                 .distinctUntilChanged()
                 .onEach { TermuxRuntime.maxStderrBytes = it }
+                .collect {}
+        }
+        scope.launch {
+            maxRetainedOutputJobsFlow()
+                .distinctUntilChanged()
+                .onEach { TermuxRuntime.maxRetainedOutputJobs = it }
+                .collect {}
+        }
+        scope.launch {
+            outputTtlFlow()
+                .distinctUntilChanged()
+                .onEach { TermuxRuntime.outputTtlMs = it }
                 .collect {}
         }
         scope.launch {
@@ -151,6 +167,18 @@ class TermuxPreferences(private val context: Context) {
         )
     }
 
+    fun maxRetainedOutputJobsFlow(): Flow<Int> = store.data.map { prefs ->
+        TermuxDefaults.clampMaxRetainedOutputJobs(
+            prefs[maxRetainedOutputJobsKey] ?: TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS
+        )
+    }
+
+    fun outputTtlFlow(): Flow<Long> = store.data.map { prefs ->
+        TermuxDefaults.clampOutputTtlMs(
+            prefs[outputTtlKey] ?: TermuxDefaults.DEFAULT_OUTPUT_TTL_MS
+        )
+    }
+
     fun aptWrapEnabledFlow(): Flow<Boolean> = store.data.map { prefs ->
         prefs[aptWrapKey] ?: TermuxDefaults.DEFAULT_APT_WRAP_ENABLED
     }
@@ -184,6 +212,14 @@ class TermuxPreferences(private val context: Context) {
         store.edit { it[maxStderrKey] = TermuxDefaults.clampMaxStderr(bytes) }
     }
 
+    suspend fun setMaxRetainedOutputJobs(count: Int) {
+        store.edit { it[maxRetainedOutputJobsKey] = TermuxDefaults.clampMaxRetainedOutputJobs(count) }
+    }
+
+    suspend fun setOutputTtlMs(ms: Long) {
+        store.edit { it[outputTtlKey] = TermuxDefaults.clampOutputTtlMs(ms) }
+    }
+
     suspend fun setAptWrapEnabled(enabled: Boolean) {
         store.edit { it[aptWrapKey] = enabled }
     }
@@ -204,6 +240,8 @@ class TermuxPreferences(private val context: Context) {
             defaultWorkingDir  = TermuxDefaults.clampWorkingDir(prefs[workingDirKey]            ?: TermuxDefaults.DEFAULT_WORKING_DIR),
             maxStdoutBytes     = TermuxDefaults.clampMaxStdout(prefs[maxStdoutKey]              ?: TermuxDefaults.DEFAULT_MAX_STDOUT),
             maxStderrBytes     = TermuxDefaults.clampMaxStderr(prefs[maxStderrKey]              ?: TermuxDefaults.DEFAULT_MAX_STDERR),
+            maxRetainedOutputJobs = TermuxDefaults.clampMaxRetainedOutputJobs(prefs[maxRetainedOutputJobsKey] ?: TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS),
+            outputTtlMs        = TermuxDefaults.clampOutputTtlMs(prefs[outputTtlKey] ?: TermuxDefaults.DEFAULT_OUTPUT_TTL_MS),
             aptWrapEnabled     = prefs[aptWrapKey]                                              ?: TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,
         )
     }
@@ -223,5 +261,7 @@ data class TermuxRuntimeConfig(
     val defaultWorkingDir: String,
     val maxStdoutBytes: Int,
     val maxStderrBytes: Int,
+    val maxRetainedOutputJobs: Int,
+    val outputTtlMs: Long,
     val aptWrapEnabled: Boolean,
 )

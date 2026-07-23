@@ -1600,10 +1600,16 @@
   <string name="setting_termux_unit_bytes">bytes</string>
   <string name="setting_termux_section_defaults">Defaults &amp; limits</string>
   <string name="setting_termux_working_dir">Default working directory</string>
-  <string name="setting_termux_max_stdout">Stdout capture cap</string>
-  <string name="setting_termux_max_stdout_desc">Max bytes of stdout returned to the AI per command. Range 1 000 to 64 000.</string>
-  <string name="setting_termux_max_stderr">Stderr capture cap</string>
-  <string name="setting_termux_max_stderr_desc">Max bytes of stderr returned to the AI per command. Range 500 to 16 000.</string>
+  <string name="setting_termux_max_stdout">Stdout initial head</string>
+  <string name="setting_termux_max_stdout_desc">Initial stdout bytes returned with a command result. Complete output remains in Termux for ranged reads. Range 1 000 to 49 152.</string>
+  <string name="setting_termux_max_stderr">Stderr initial head</string>
+  <string name="setting_termux_max_stderr_desc">Initial stderr bytes returned with a command result. Complete output remains in Termux for ranged reads. Range 500 to 12 288.</string>
+  <string name="setting_termux_max_retained_output_jobs">Retained output jobs</string>
+  <string name="setting_termux_max_retained_output_jobs_desc">Maximum completed native Termux output jobs kept for ranged reads. Range 1 to 200; default 50.</string>
+  <string name="setting_termux_output_ttl">Output retention</string>
+  <string name="setting_termux_output_ttl_desc">Hours to retain completed native Termux command output. Range 1 hour to 7 days; default 24 hours.</string>
+  <string name="setting_termux_unit_hours">hours</string>
+  <string name="setting_termux_unit_jobs">jobs</string>
   <string name="setting_termux_apt_wrap">Auto-wrap apt/dpkg as noninteractive</string>
   <string name="setting_termux_apt_wrap_desc">Prepend DEBIAN_FRONTEND=noninteractive so apt upgrades do not hang waiting for interactive prompts.</string>
   <string name="setting_termux_section_help">Setup help</string>

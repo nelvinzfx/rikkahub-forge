@@ -33,11 +33,20 @@ object TermuxDefaults {
     // --- Stdout / stderr capture caps (bytes) ----------------------------------------------
     const val DEFAULT_MAX_STDOUT =  8_000
     const val MIN_MAX_STDOUT     =  1_000
-    const val MAX_MAX_STDOUT     = 64_000
+    const val MAX_MAX_STDOUT     = 49_152
 
     const val DEFAULT_MAX_STDERR =  2_000
     const val MIN_MAX_STDERR     =    500
-    const val MAX_MAX_STDERR     = 16_000
+    const val MAX_MAX_STDERR     = 12_288
+
+    // --- Native output-spool retention ----------------------------------------------------
+    const val DEFAULT_MAX_RETAINED_OUTPUT_JOBS = 50
+    const val MIN_MAX_RETAINED_OUTPUT_JOBS = 1
+    const val MAX_MAX_RETAINED_OUTPUT_JOBS = 200
+
+    const val DEFAULT_OUTPUT_TTL_MS = 24L * 60L * 60L * 1_000L
+    const val MIN_OUTPUT_TTL_MS = 1L * 60L * 60L * 1_000L
+    const val MAX_OUTPUT_TTL_MS = 7L * 24L * 60L * 60L * 1_000L
 
     // --- apt-wrap default ------------------------------------------------------------------
     /** ON by default — preserves the prior behavior for existing users. */
@@ -69,6 +78,17 @@ object TermuxDefaults {
 
     fun clampMaxStderr(bytes: Int): Int =
         bytes.coerceIn(MIN_MAX_STDERR, MAX_MAX_STDERR)
+
+    fun validCombinedHeadBytes(stdoutBytes: Int, stderrBytes: Int): Boolean =
+        stdoutBytes in MIN_MAX_STDOUT..MAX_MAX_STDOUT &&
+            stderrBytes in MIN_MAX_STDERR..MAX_MAX_STDERR &&
+            stdoutBytes.toLong() + stderrBytes.toLong() <= 61_440L
+
+    fun clampMaxRetainedOutputJobs(count: Int): Int =
+        count.coerceIn(MIN_MAX_RETAINED_OUTPUT_JOBS, MAX_MAX_RETAINED_OUTPUT_JOBS)
+
+    fun clampOutputTtlMs(ms: Long): Long =
+        ms.coerceIn(MIN_OUTPUT_TTL_MS, MAX_OUTPUT_TTL_MS)
 
     /**
      * Non-empty rule for the working directory. An empty value would pass a blank string to

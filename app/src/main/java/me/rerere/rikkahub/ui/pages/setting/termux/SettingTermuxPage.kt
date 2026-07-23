@@ -306,6 +306,28 @@ fun SettingTermuxPage(
                     },
                 )
                 item(
+                    headlineContent = { Text(stringResource(R.string.setting_termux_max_retained_output_jobs)) },
+                    supportingContent = { Text(stringResource(R.string.setting_termux_max_retained_output_jobs_desc)) },
+                    trailingContent = {
+                        TimeoutInput(
+                            currentValue = config.maxRetainedOutputJobs.toLong(),
+                            unitLabel = stringResource(R.string.setting_termux_unit_jobs),
+                            onCommit = { vm.setMaxRetainedOutputJobs(it.toInt()) },
+                        )
+                    },
+                )
+                item(
+                    headlineContent = { Text(stringResource(R.string.setting_termux_output_ttl)) },
+                    supportingContent = { Text(stringResource(R.string.setting_termux_output_ttl_desc)) },
+                    trailingContent = {
+                        TimeoutInput(
+                            currentValue = config.outputTtlMs / (60L * 60L * 1_000L),
+                            unitLabel = stringResource(R.string.setting_termux_unit_hours),
+                            onCommit = vm::setOutputTtlHours,
+                        )
+                    },
+                )
+                item(
                     headlineContent = { Text(stringResource(R.string.setting_termux_apt_wrap)) },
                     supportingContent = { Text(stringResource(R.string.setting_termux_apt_wrap_desc)) },
                     trailingContent = {

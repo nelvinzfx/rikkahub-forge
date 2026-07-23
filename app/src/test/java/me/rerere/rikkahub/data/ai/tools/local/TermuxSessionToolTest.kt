@@ -253,61 +253,60 @@ class TermuxSessionToolTest {
     }
 
     @Test
-    fun managedCaptureWrapper_passesUserValuesAsArgvAndRegistersCleanup() {
+    fun defaultCapture_isDirectManagedAndPreservesFullOutputLifecycle() {
         val launch = buildCaptureLaunch(
             executable = "/tmp/exe;touch /tmp/injected",
             arguments = arrayOf("a b", "$(touch nope)", "'quoted'"),
             managed = true,
-            jobId = "opaque-job-123",
+            jobId = "123e4567-e89b-42d3-a456-426614174000",
         )
+        assertFalse(launch.spooled)
+        assertTrue(launch.managed)
         assertEquals("$TERMUX_BIN/bash", launch.executable)
-        assertEquals("opaque-job-123", launch.jobId)
-        assertEquals("opaque-job-123", launch.arguments[3])
-        assertEquals(MANAGED_CAPTURE_LEADER_SCRIPT, launch.arguments[4])
+        assertEquals(DIRECT_CAPTURE_SCRIPT, launch.arguments[1])
+        assertEquals("123e4567-e89b-42d3-a456-426614174000", launch.arguments[3])
+        assertEquals(DIRECT_CAPTURE_LEADER_SCRIPT, launch.arguments[4])
         assertEquals("/tmp/exe;touch /tmp/injected", launch.arguments[5])
         assertEquals(listOf("a b", "$(touch nope)", "'quoted'"), launch.arguments.drop(6))
-        assertFalse(MANAGED_CAPTURE_SCRIPT.contains("opaque-job-123"))
-        assertTrue(MANAGED_CAPTURE_SCRIPT.contains("managed capture requires setsid (install util-linux)"))
-        assertTrue(MANAGED_CAPTURE_SCRIPT.contains("setsid bash -c \"${'$'}leader\" rikka-leader"))
-        assertFalse(MANAGED_CAPTURE_SCRIPT.contains("rikka-leader tree"))
-        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("pid=${'$'}${'$'}"))
-        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("printf 'group %s %s\\n' \"${'$'}pid\" \"${'$'}start\""))
-        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("mv -f -- \"${'$'}tmp\" \"${'$'}state_file\""))
-        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.contains("exec \"${'$'}@\""))
-        assertTrue(MANAGED_CAPTURE_LEADER_SCRIPT.indexOf("mv -f --") < MANAGED_CAPTURE_LEADER_SCRIPT.indexOf("exec \"${'$'}@\""))
-        assertFalse(MANAGED_CAPTURE_SCRIPT.contains("/proc/${'$'}leader_pid/stat"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("read -r mode pid root_start extra"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}mode\" = group ]"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}live_start\" = \"${'$'}root_start\" ]"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}live_pgrp\" = \"${'$'}pid\" ]"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("member_found=false"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}member_start\" -ge \"${'$'}root_start\" ]"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("for stat in /proc/[0-9]*/stat"))
-        assertFalse(CAPTURE_CLEANUP_SCRIPT.contains("mode=tree"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("reject_state"))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("kill -TERM -- \"-${'$'}pid\""))
-        assertTrue(CAPTURE_CLEANUP_SCRIPT.contains("[ \"${'$'}pid\" -gt 1 ]"))
-        assertEquals("opaque-job-123", captureCleanupArguments("opaque-job-123").last())
-        assertEquals("opaque-job-123", captureReleaseArguments("opaque-job-123").last())
+        assertTrue(DIRECT_CAPTURE_SCRIPT.contains("${'$'}HOME/.cache/rikkahub/run-command"))
+        assertTrue(DIRECT_CAPTURE_LEADER_SCRIPT.indexOf("mv -f --") < DIRECT_CAPTURE_LEADER_SCRIPT.indexOf("exec \"${'$'}@\""))
+        assertTrue(DIRECT_CAPTURE_CLEANUP_SCRIPT.contains("member_found=false"))
+        assertTrue(DIRECT_CAPTURE_CLEANUP_SCRIPT.contains("kill -TERM -- \"-${'$'}pid\""))
+        assertEquals("123e4567-e89b-42d3-a456-426614174000", directCleanupArguments("123e4567-e89b-42d3-a456-426614174000").last())
+        assertEquals("123e4567-e89b-42d3-a456-426614174000", directReleaseArguments("123e4567-e89b-42d3-a456-426614174000").last())
     }
 
     @Test
-    fun detachedCapture_preservesOriginalArgvAndHasNoManagedJob() {
+    fun spooledCapture_isExplicitAndDetachedModeSkipsManagedLifecycle() {
         val launch = buildCaptureLaunch(
             executable = "/usr/bin/bash",
             arguments = arrayOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"),
             managed = false,
-            jobId = "must-not-be-used",
+            spoolOutput = true,
+            jobId = "223e4567-e89b-42d3-a456-426614174000",
         )
-        assertEquals("/usr/bin/bash", launch.executable)
-        assertEquals(listOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"), launch.arguments.toList())
-        assertNull(launch.jobId)
+        assertTrue(launch.spooled)
+        assertFalse(launch.managed)
+        assertEquals("$TERMUX_BIN/bash", launch.executable)
+        assertEquals(SPOOL_CAPTURE_SCRIPT, launch.arguments[1])
+        assertEquals(JOB_RETENTION_LOCKED_SCRIPT, launch.arguments[8])
+        assertEquals(SPOOL_CAPTURE_LEADER_SCRIPT, launch.arguments[9])
+        assertEquals("0", launch.arguments[10])
+        assertEquals("/usr/bin/bash", launch.arguments[11])
+        assertEquals(listOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"), launch.arguments.drop(12))
+    }
+
+    @Test
+    fun tmuxTailTruncation_remainsIndependentOfSpoolHeads() {
+        val direct = buildCaptureLaunch("/bin/echo", arrayOf("x"), managed = true, jobId = "323e4567-e89b-42d3-a456-426614174000")
+        assertFalse(direct.spooled)
+        assertEquals("好", takeLastUtf8Bytes("你好", 4))
     }
 
 
     @Test
     fun tmuxInstallTimeout_isReportedAsStopped() {
-        assertEquals("tmux_install_timed_out", classifyTmuxInstallFailure(CaptureResult.Timeout))
+        assertEquals("tmux_install_timed_out", classifyTmuxInstallFailure(CaptureResult.Timeout("job")))
         assertEquals("termux_permission_denied", classifyTmuxInstallFailure(CaptureResult.Denied))
         assertNull(classifyTmuxInstallFailure(CaptureResult.Success("", "", 0)))
         val recovery = tmuxInstallRecovery("tmux_install_timed_out")
@@ -325,7 +324,7 @@ class TermuxSessionToolTest {
         )
         assertEquals(
             "Initial input failed: tmux operation failed.",
-            initialSetupFailure("Initial input", CaptureResult.Timeout),
+            initialSetupFailure("Initial input", CaptureResult.Timeout("job")),
         )
     }
 

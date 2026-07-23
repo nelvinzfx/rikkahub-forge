@@ -29,17 +29,25 @@ class SettingTermuxViewModel(
         ) { commandTimeout, toolCallTimeout, verifyTimeout, workingDir, maxStdout ->
             Partial(commandTimeout, toolCallTimeout, verifyTimeout, workingDir, maxStdout)
         },
-        prefs.maxStderrFlow(),
-        prefs.aptWrapEnabledFlow(),
-    ) { partial, maxStderr, aptWrap ->
+        combine(
+            prefs.maxStderrFlow(),
+            prefs.maxRetainedOutputJobsFlow(),
+            prefs.outputTtlFlow(),
+            prefs.aptWrapEnabledFlow(),
+        ) { maxStderr, maxJobs, outputTtl, aptWrap ->
+            RetentionPartial(maxStderr, maxJobs, outputTtl, aptWrap)
+        },
+    ) { partial, retention ->
         TermuxRuntimeConfig(
             commandTimeoutMs  = partial.commandTimeoutMs,
             toolCallTimeoutMs = partial.toolCallTimeoutMs,
             verifyTimeoutMs   = partial.verifyTimeoutMs,
             defaultWorkingDir = partial.defaultWorkingDir,
             maxStdoutBytes    = partial.maxStdoutBytes,
-            maxStderrBytes    = maxStderr,
-            aptWrapEnabled    = aptWrap,
+            maxStderrBytes    = retention.maxStderrBytes,
+            maxRetainedOutputJobs = retention.maxRetainedOutputJobs,
+            outputTtlMs       = retention.outputTtlMs,
+            aptWrapEnabled    = retention.aptWrapEnabled,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -51,6 +59,8 @@ class SettingTermuxViewModel(
             defaultWorkingDir = TermuxDefaults.DEFAULT_WORKING_DIR,
             maxStdoutBytes    = TermuxDefaults.DEFAULT_MAX_STDOUT,
             maxStderrBytes    = TermuxDefaults.DEFAULT_MAX_STDERR,
+            maxRetainedOutputJobs = TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS,
+            outputTtlMs       = TermuxDefaults.DEFAULT_OUTPUT_TTL_MS,
             aptWrapEnabled    = TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,
         ),
     )
@@ -84,11 +94,26 @@ class SettingTermuxViewModel(
         viewModelScope.launch { prefs.setMaxStderrBytes(bytes) }
     }
 
+    fun setMaxRetainedOutputJobs(count: Int) {
+        viewModelScope.launch { prefs.setMaxRetainedOutputJobs(count) }
+    }
+
+    fun setOutputTtlHours(hours: Long) {
+        viewModelScope.launch { prefs.setOutputTtlMs(hours * 60L * 60L * 1_000L) }
+    }
+
     fun setAptWrapEnabled(enabled: Boolean) {
         viewModelScope.launch { prefs.setAptWrapEnabled(enabled) }
     }
 
     // Private intermediate holder to avoid 7-flow combine vararg.
+    private data class RetentionPartial(
+        val maxStderrBytes: Int,
+        val maxRetainedOutputJobs: Int,
+        val outputTtlMs: Long,
+        val aptWrapEnabled: Boolean,
+    )
+
     private data class Partial(
         val commandTimeoutMs: Long,
         val toolCallTimeoutMs: Long,

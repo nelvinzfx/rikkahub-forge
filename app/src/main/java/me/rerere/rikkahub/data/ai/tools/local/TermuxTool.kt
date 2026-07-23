@@ -33,12 +33,11 @@ private const val TERMUX_RUN_COMMAND_ACTION = "com.termux.RUN_COMMAND"
 private const val TERMUX_BIN_DIR = "/data/data/com.termux/files/usr/bin"
 private const val TERMUX_HOME_DIR = "/data/data/com.termux/files/home"
 private const val MAX_CAPTURE_TIMEOUT_MS = 10L * 60 * 1000
+internal const val PUBLIC_RUN_COMMAND_SPOOL_OUTPUT = true
 
-// Capture commands are launched through an argv-safe wrapper. The wrapper starts the requested
-// executable in a fresh process group when `setsid` is available, records its opaque job id plus
-// root pid/start-time under Termux home, then waits so RUN_COMMAND can capture exit/output.
-// User-controlled values are positional argv after the script; none are interpolated into it.
-internal val MANAGED_CAPTURE_SCRIPT = """
+// The direct path is the c52a316d contract used by tmux, verify, and transcription: argv-safe
+// setsid lifecycle management with complete RUN_COMMAND stdout/stderr and state under run-command.
+internal val DIRECT_CAPTURE_SCRIPT = """
     set +e
     job_id=${'$'}1
     shift
@@ -58,7 +57,7 @@ internal val MANAGED_CAPTURE_SCRIPT = """
     exit "${'$'}?"
 """.trimIndent()
 
-internal val MANAGED_CAPTURE_LEADER_SCRIPT = """
+internal val DIRECT_CAPTURE_LEADER_SCRIPT = """
     set +e
     state_file=${'$'}1
     shift
@@ -72,114 +71,119 @@ internal val MANAGED_CAPTURE_LEADER_SCRIPT = """
     [ "${'$'}pgrp" = "${'$'}pid" ] || exit 125
     tmp=${'$'}state_file.${'$'}pid
     printf 'group %s %s\n' "${'$'}pid" "${'$'}start" > "${'$'}tmp" &&
-        mv -f -- "${'$'}tmp" "${'$'}state_file" || {
-            rm -f -- "${'$'}tmp"
-            exit 125
-        }
+        mv -f -- "${'$'}tmp" "${'$'}state_file" || { rm -f -- "${'$'}tmp"; exit 125; }
     exec "${'$'}@"
 """.trimIndent()
 
-// Cleanup is a separate bounded RUN_COMMAND dispatch because cancelling a PendingIntent only
-// unregisters result delivery; it does not stop the process already running in Termux. It waits
-// briefly for the wrapper's pid file to close the dispatch race, terminates the complete process
-// group where possible, recursively terminates descendants otherwise, then escalates to SIGKILL.
-internal val CAPTURE_CLEANUP_SCRIPT = """
+internal val DIRECT_CAPTURE_CLEANUP_SCRIPT = """
     set +e
     job_id=${'$'}1
     state_file=${'$'}HOME/.cache/rikkahub/run-command/${'$'}job_id
     n=0
-    while [ ! -s "${'$'}state_file" ] && [ "${'$'}n" -lt 20 ]; do
-        sleep 0.1
-        n=${'$'}((n + 1))
-    done
+    while [ ! -s "${'$'}state_file" ] && [ "${'$'}n" -lt 20 ]; do sleep 0.1; n=${'$'}((n + 1)); done
     [ -s "${'$'}state_file" ] || exit 0
-    reject_state() {
-        rm -f -- "${'$'}state_file"
-        exit 0
-    }
+    reject_state() { rm -f -- "${'$'}state_file"; exit 0; }
     read -r mode pid root_start extra < "${'$'}state_file"
     [ "${'$'}mode" = group ] || reject_state
     case "${'$'}pid" in *[!0-9]*|'') reject_state ;; esac
     case "${'$'}root_start" in *[!0-9]*|'') reject_state ;; esac
-    [ -z "${'$'}extra" ] || reject_state
-    [ "${'$'}pid" -gt 1 ] 2>/dev/null || reject_state
-    [ "${'$'}root_start" -gt 0 ] 2>/dev/null || reject_state
+    [ -z "${'$'}extra" ] && [ "${'$'}pid" -gt 1 ] 2>/dev/null && [ "${'$'}root_start" -gt 0 ] 2>/dev/null || reject_state
     live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
-    live_pgrp=${'$'}{live_info%% *}
-    live_start=${'$'}{live_info#* }
+    live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
     if [ -n "${'$'}live_info" ]; then
-        case "${'$'}live_pgrp" in *[!0-9]*|'') reject_state ;; esac
-        case "${'$'}live_start" in *[!0-9]*|'') reject_state ;; esac
-        [ "${'$'}live_start" = "${'$'}root_start" ] || reject_state
-        [ "${'$'}live_pgrp" = "${'$'}pid" ] || reject_state
+        [ "${'$'}live_start" = "${'$'}root_start" ] && [ "${'$'}live_pgrp" = "${'$'}pid" ] || reject_state
     else
-        # A fast root may exit after forking while descendants retain the original group. Linux
-        # keeps that pgid allocated while members exist; authorize only a member created no earlier
-        # than the recorded leader, preventing stale state from targeting an unrelated reused pgid.
         member_found=false
         for stat in /proc/[0-9]*/stat; do
             [ -r "${'$'}stat" ] || continue
             member_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "${'$'}stat" 2>/dev/null)
-            member_pgrp=${'$'}{member_info%% *}
-            member_start=${'$'}{member_info#* }
+            member_pgrp=${'$'}{member_info%% *}; member_start=${'$'}{member_info#* }
             case "${'$'}member_pgrp" in *[!0-9]*|'') continue ;; esac
             case "${'$'}member_start" in *[!0-9]*|'') continue ;; esac
-            if [ "${'$'}member_pgrp" = "${'$'}pid" ] &&
-                [ "${'$'}member_start" -ge "${'$'}root_start" ] 2>/dev/null; then
-                member_found=true
-                break
-            fi
+            if [ "${'$'}member_pgrp" = "${'$'}pid" ] && [ "${'$'}member_start" -ge "${'$'}root_start" ] 2>/dev/null; then member_found=true; break; fi
         done
         [ "${'$'}member_found" = true ] || reject_state
     fi
-    # Authorization occurs once before TERM. The leader can exit during the grace interval while
-    # the already-authorized retained process group still requires KILL escalation.
     kill -TERM -- "-${'$'}pid" 2>/dev/null
     sleep 0.5
     kill -KILL -- "-${'$'}pid" 2>/dev/null
     rm -f -- "${'$'}state_file"
 """.trimIndent()
 
+internal val DIRECT_CAPTURE_RELEASE_SCRIPT = """
+    job_id=${'$'}1
+    rm -f -- "${'$'}HOME/.cache/rikkahub/run-command/${'$'}job_id"
+""".trimIndent()
+
 internal data class CaptureLaunch(
     val executable: String,
     val arguments: Array<String>,
     val jobId: String?,
+    val spooled: Boolean,
+    val managed: Boolean,
 )
 
-internal fun captureTimeoutMs(requestedMs: Long): Long =
-    requestedMs.coerceIn(1L, MAX_CAPTURE_TIMEOUT_MS)
-
+internal fun captureTimeoutMs(requestedMs: Long): Long = requestedMs.coerceIn(1L, MAX_CAPTURE_TIMEOUT_MS)
 internal fun shouldManageCapture(backgroundRequested: Boolean, shellCommandMode: Boolean): Boolean =
     !backgroundRequested || !shellCommandMode
 
-internal fun buildCaptureLaunch(
+internal fun buildDirectCaptureLaunch(
     executable: String,
     arguments: Array<String>,
     managed: Boolean,
     jobId: String = UUID.randomUUID().toString(),
 ): CaptureLaunch = if (managed) {
     CaptureLaunch(
-        executable = "$TERMUX_BIN_DIR/bash",
-        arguments = arrayOf(
-            "-c", MANAGED_CAPTURE_SCRIPT, "rikka-capture", jobId,
-            MANAGED_CAPTURE_LEADER_SCRIPT, executable, *arguments,
-        ),
-        jobId = jobId,
+        "$TERMUX_BIN_DIR/bash",
+        arrayOf("-c", DIRECT_CAPTURE_SCRIPT, "rikka-capture", jobId, DIRECT_CAPTURE_LEADER_SCRIPT, executable, *arguments),
+        jobId,
+        spooled = false,
+        managed = true,
     )
 } else {
-    CaptureLaunch(executable, arguments, null)
+    CaptureLaunch(executable, arguments, null, spooled = false, managed = false)
 }
 
-internal fun captureCleanupArguments(jobId: String): Array<String> =
-    arrayOf("-c", CAPTURE_CLEANUP_SCRIPT, "rikka-cleanup", jobId)
+internal fun buildSpoolCaptureLaunch(
+    executable: String,
+    arguments: Array<String>,
+    managed: Boolean,
+    jobId: String = UUID.randomUUID().toString(),
+): CaptureLaunch {
+    require(isValidTermuxJobId(jobId)) { "invalid generated Termux job id" }
+    return CaptureLaunch(
+        "$TERMUX_BIN_DIR/bash",
+        arrayOf(
+            "-c", SPOOL_CAPTURE_SCRIPT, "rikka-spool", jobId,
+            TermuxRuntime.maxStdoutBytes.toString(), TermuxRuntime.maxStderrBytes.toString(),
+            TermuxRuntime.maxRetainedOutputJobs.toString(), TermuxRuntime.outputTtlMs.div(1000L).toString(),
+            JOB_RETENTION_LOCKED_SCRIPT, SPOOL_CAPTURE_LEADER_SCRIPT, if (managed) "1" else "0",
+            executable, *arguments,
+        ),
+        jobId,
+        spooled = true,
+        managed = managed,
+    )
+}
 
-internal val CAPTURE_RELEASE_SCRIPT = """
-    job_id=${'$'}1
-    rm -f -- "${'$'}HOME/.cache/rikkahub/run-command/${'$'}job_id"
-""".trimIndent()
+internal fun buildCaptureLaunch(
+    executable: String,
+    arguments: Array<String>,
+    managed: Boolean,
+    spoolOutput: Boolean = false,
+    jobId: String = UUID.randomUUID().toString(),
+): CaptureLaunch = if (spoolOutput) {
+    buildSpoolCaptureLaunch(executable, arguments, managed, jobId)
+} else {
+    buildDirectCaptureLaunch(executable, arguments, managed, jobId)
+}
 
-internal fun captureReleaseArguments(jobId: String): Array<String> =
-    arrayOf("-c", CAPTURE_RELEASE_SCRIPT, "rikka-release", jobId)
+internal fun directCleanupArguments(jobId: String): Array<String> =
+    arrayOf("-c", DIRECT_CAPTURE_CLEANUP_SCRIPT, "rikka-cleanup", jobId)
+internal fun spoolCleanupArguments(jobId: String, reason: String): Array<String> =
+    arrayOf("-c", SPOOL_CLEANUP_SCRIPT, "rikka-spool-cleanup", jobId, reason)
+internal fun directReleaseArguments(jobId: String): Array<String> =
+    arrayOf("-c", DIRECT_CAPTURE_RELEASE_SCRIPT, "rikka-release", jobId)
 
 // Termux delivers stdout / stderr / exitCode via a result Bundle attached to the
 // RUN_COMMAND_PENDING_INTENT we register. Documented at:
@@ -191,6 +195,56 @@ private const val RESULT_KEY_STDERR = "stderr"
 private const val RESULT_KEY_EXIT_CODE = "exitCode"
 private const val RESULT_KEY_ERR = "err"
 private const val RESULT_KEY_ERRMSG = "errmsg"
+
+internal enum class RunCommandValueKind { INT, STRING, OTHER }
+
+internal sealed class RunCommandPayloadShape {
+    data class Success(val err: Int) : RunCommandPayloadShape()
+    data class InternalError(val err: Int) : RunCommandPayloadShape()
+    data object Ignore : RunCommandPayloadShape()
+}
+
+/** Pure validation seam shared by BroadcastReceiver and JVM tests. */
+internal fun validateRunCommandPayloadShape(values: Map<String, Pair<RunCommandValueKind, Any?>>?): RunCommandPayloadShape {
+    values ?: return RunCommandPayloadShape.Ignore
+    val errEntry = values[RESULT_KEY_ERR] ?: return RunCommandPayloadShape.Ignore
+    if (errEntry.first != RunCommandValueKind.INT) return RunCommandPayloadShape.Ignore
+    val err = errEntry.second as? Int ?: return RunCommandPayloadShape.Ignore
+    return if (err == -1) {
+        val exit = values[RESULT_KEY_EXIT_CODE]
+        val stdout = values[RESULT_KEY_STDOUT]
+        val stderr = values[RESULT_KEY_STDERR]
+        if (exit?.first == RunCommandValueKind.INT && exit.second is Int &&
+            stdout?.first == RunCommandValueKind.STRING && stdout.second is String &&
+            stderr?.first == RunCommandValueKind.STRING && stderr.second is String
+        ) RunCommandPayloadShape.Success(err) else RunCommandPayloadShape.Ignore
+    } else {
+        val errmsg = values[RESULT_KEY_ERRMSG]
+        if (errmsg?.first == RunCommandValueKind.STRING && errmsg.second is String) {
+            RunCommandPayloadShape.InternalError(err)
+        } else {
+            RunCommandPayloadShape.Ignore
+        }
+    }
+}
+
+private fun bundlePayloadShape(bundle: Bundle): RunCommandPayloadShape {
+    fun entry(key: String): Pair<RunCommandValueKind, Any?>? {
+        if (!bundle.containsKey(key)) return null
+        @Suppress("DEPRECATION") val value = bundle.get(key)
+        val kind = when (value) {
+            is Int -> RunCommandValueKind.INT
+            is String -> RunCommandValueKind.STRING
+            else -> RunCommandValueKind.OTHER
+        }
+        return kind to value
+    }
+    return validateRunCommandPayloadShape(
+        listOf(RESULT_KEY_ERR, RESULT_KEY_EXIT_CODE, RESULT_KEY_STDOUT, RESULT_KEY_STDERR, RESULT_KEY_ERRMSG)
+            .mapNotNull { key -> entry(key)?.let { key to it } }
+            .toMap()
+    )
+}
 
 // DEFAULT_CAPTURE_TIMEOUT_MS, MAX_RETURNED_STDOUT, MAX_RETURNED_STDERR removed — read from
 // TermuxRuntime at call time so they reflect any user edits from Settings → Termux.
@@ -250,6 +304,7 @@ internal object TermuxIntegration {
             arguments = arrayOf("-c", "echo RIKKAHUB_OK"),
             workingDir = TERMUX_HOME_DIR,
             timeoutMs = timeoutMs,
+            spoolOutput = false,
         )
         return when (result) {
             is CaptureResult.Success -> if (result.stdout.contains("RIKKAHUB_OK"))
@@ -275,15 +330,42 @@ internal sealed class CaptureResult {
         val stdout: String,
         val stderr: String,
         val exitCode: Int,
+        val jobId: String? = null,
+        val status: String = "completed",
+        val stdoutTotalBytes: Long = stdout.toByteArray(Charsets.UTF_8).size.toLong(),
+        val stderrTotalBytes: Long = stderr.toByteArray(Charsets.UTF_8).size.toLong(),
+        val stdoutHeadBytes: Int = stdout.toByteArray(Charsets.UTF_8).size,
+        val stderrHeadBytes: Int = stderr.toByteArray(Charsets.UTF_8).size,
     ) : CaptureResult()
-    data object Timeout : CaptureResult()
+    data class Timeout(val jobId: String?) : CaptureResult()
     data object Denied : CaptureResult()
-    data class OtherError(val message: String) : CaptureResult()
+    data class OtherError(val message: String, val jobId: String? = null) : CaptureResult()
 }
 
 /** A non-zero process exit is still an ordinary completed shell result. */
 internal fun completedCommandResult(stdout: String, stderr: String, exitCode: Int): CaptureResult =
     CaptureResult.Success(stdout = stdout, stderr = stderr, exitCode = exitCode)
+
+internal fun completedSpooledCommandResult(protocol: String, expectedJobId: String): CaptureResult =
+    when (val parsed = parseCapturedOutputEnvelope(protocol, expectedJobId)) {
+        is ProtocolParseResult.Error -> CaptureResult.OtherError(
+            message = "termux_output_${parsed.code}${parsed.detail?.let { ": $it" }.orEmpty()}",
+            jobId = expectedJobId,
+        )
+        is ProtocolParseResult.Ok -> parsed.value.let { envelope ->
+            CaptureResult.Success(
+                stdout = envelope.stdout,
+                stderr = envelope.stderr,
+                exitCode = envelope.exitCode,
+                jobId = envelope.jobId,
+                status = envelope.status,
+                stdoutTotalBytes = envelope.stdoutTotalBytes,
+                stderrTotalBytes = envelope.stderrTotalBytes,
+                stdoutHeadBytes = envelope.stdoutHeadBytes,
+                stderrHeadBytes = envelope.stderrHeadBytes,
+            )
+        }
+    }
 
 private fun dispatchCaptureMaintenance(ctx: Context, arguments: Array<String>, operation: String) {
     val maintenance = Intent().apply {
@@ -303,11 +385,17 @@ private fun dispatchCaptureMaintenance(ctx: Context, arguments: Array<String>, o
     }
 }
 
-private fun dispatchCaptureCleanup(ctx: Context, jobId: String) =
-    dispatchCaptureMaintenance(ctx, captureCleanupArguments(jobId), "cleanup")
+private fun dispatchCaptureCleanup(ctx: Context, launch: CaptureLaunch, reason: String) {
+    val jobId = launch.jobId ?: return
+    val arguments = if (launch.spooled) spoolCleanupArguments(jobId, reason) else directCleanupArguments(jobId)
+    dispatchCaptureMaintenance(ctx, arguments, "cleanup")
+}
 
-private fun dispatchCaptureRelease(ctx: Context, jobId: String) =
-    dispatchCaptureMaintenance(ctx, captureReleaseArguments(jobId), "release")
+private fun dispatchCaptureRelease(ctx: Context, launch: CaptureLaunch) {
+    if (!launch.spooled) launch.jobId?.let {
+        dispatchCaptureMaintenance(ctx, directReleaseArguments(it), "release")
+    }
+}
 
 /**
  * Dispatch a Termux command and suspend until it completes (or times out), returning the
@@ -325,6 +413,7 @@ internal suspend fun runCommandCapture(
     // user-configured value, not a stale compile-time constant.
     timeoutMs: Long = TermuxRuntime.commandTimeoutMs,
     cleanupOnTimeoutOrCancellation: Boolean = true,
+    spoolOutput: Boolean = false,
 ): CaptureResult {
     // Mark Termux as freshly touched BEFORE we issue the broadcast. The notification
     // listener uses this signal to suppress Termux's foreground-service notification
@@ -336,7 +425,12 @@ internal suspend fun runCommandCapture(
     // factories don't have to remember to call it themselves.
     me.rerere.rikkahub.data.ai.AgentTurnTracker.touchPackage(TERMUX_PACKAGE, "com.termux.api")
     val resultDeferred = CompletableDeferred<Bundle>()
-    val launch = buildCaptureLaunch(executable, arguments, cleanupOnTimeoutOrCancellation)
+    val launch = buildCaptureLaunch(
+        executable = executable,
+        arguments = arguments,
+        managed = cleanupOnTimeoutOrCancellation,
+        spoolOutput = spoolOutput,
+    )
     val boundedTimeoutMs = captureTimeoutMs(timeoutMs)
     val resultAction = "${ctx.packageName}.TERMUX_RESULT_${UUID.randomUUID()}"
     val receiver = object : BroadcastReceiver() {
@@ -356,18 +450,22 @@ internal suspend fun runCommandCapture(
                 "broadcast: action=${intent.action} hasExtras=${intent.extras != null} extraKeys=[$keys] hasResultBundle=${bundle != null}",
             )
             if (bundle == null && intent.extras == null) return  // empty ack, wait for real fire
-            if (bundle != null) {
-                // Do NOT log stdout/stderr content: command output can carry secrets and
-                // lands in logcat in release builds. Log only non-sensitive metadata.
-                android.util.Log.i(
-                    "RikkaTermux",
-                    "result bundle keys=${bundle.keySet().joinToString(",")} exit=${bundle.getInt(RESULT_KEY_EXIT_CODE, -999)} err=${bundle.getInt(RESULT_KEY_ERR, -999)} errmsg='${bundle.getString(RESULT_KEY_ERRMSG, "<null>")}'",
-                )
-            }
             // Some Termux variants put the keys directly on the broadcast intent rather than
-            // nested under "result". Support both shapes by falling back to flat extras.
-            val effective = bundle ?: intent.extras ?: Bundle()
-            if (resultDeferred.isActive) resultDeferred.complete(effective)
+            // nested under "result". Validate either shape before accepting it as final. Populated
+            // acknowledgements and malformed payloads are ignored without releasing lifecycle state.
+            val flat = intent.extras
+            val nestedShape = bundle?.let(::bundlePayloadShape) ?: RunCommandPayloadShape.Ignore
+            val flatShape = flat?.let(::bundlePayloadShape) ?: RunCommandPayloadShape.Ignore
+            val effective = when {
+                nestedShape != RunCommandPayloadShape.Ignore -> bundle
+                flatShape != RunCommandPayloadShape.Ignore -> flat
+                else -> null
+            }
+            android.util.Log.i(
+                "RikkaTermux",
+                "result candidate nested=${nestedShape::class.java.simpleName} flat=${flatShape::class.java.simpleName}",
+            )
+            if (effective != null && resultDeferred.isActive) resultDeferred.complete(effective)
         }
     }
     val filter = IntentFilter(resultAction)
@@ -408,8 +506,8 @@ internal suspend fun runCommandCapture(
         ctx.startService(intent)
         val bundle = withTimeoutOrNull(boundedTimeoutMs) { resultDeferred.await() }
         if (bundle == null) {
-            launch.jobId?.let { dispatchCaptureCleanup(ctx, it) }
-            CaptureResult.Timeout
+            if (cleanupOnTimeoutOrCancellation) dispatchCaptureCleanup(ctx, launch, "timed_out")
+            CaptureResult.Timeout(launch.jobId)
         } else {
             // Per the Termux RUN_COMMAND wiki: `err = -1` (= Activity.RESULT_OK) means
             // "no internal error" — i.e. the success sentinel. Any value other than -1
@@ -426,6 +524,11 @@ internal suspend fun runCommandCapture(
                 } else {
                     CaptureResult.OtherError("err=$errCode: $errMsg")
                 }
+            } else if (spoolOutput) {
+                completedSpooledCommandResult(
+                    protocol = bundle.getString(RESULT_KEY_STDOUT).orEmpty(),
+                    expectedJobId = requireNotNull(launch.jobId),
+                )
             } else {
                 completedCommandResult(
                     stdout = bundle.getString(RESULT_KEY_STDOUT).orEmpty(),
@@ -433,13 +536,13 @@ internal suspend fun runCommandCapture(
                     exitCode = bundle.getInt(RESULT_KEY_EXIT_CODE, -1),
                 )
             }
-            // The wrapper intentionally leaves its state file in place until the bundle has
-            // been classified. This keeps descendant cleanup possible through completion.
-            launch.jobId?.let { jobId -> dispatchCaptureRelease(ctx, jobId) }
+            // Direct lifecycle state is released after classification. Spooled state is published
+            // atomically by its wrapper and retained for termux_read_output.
+            dispatchCaptureRelease(ctx, launch)
             completed
         }
     } catch (t: CancellationException) {
-        launch.jobId?.let { dispatchCaptureCleanup(ctx, it) }
+        if (cleanupOnTimeoutOrCancellation) dispatchCaptureCleanup(ctx, launch, "cancelled")
         throw t
     } catch (t: SecurityException) {
         CaptureResult.Denied
@@ -461,8 +564,8 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
     name = "termux_run_command",
     description = """
         Execute a shell command in Termux. By default the command runs in the background and
-        its stdout / stderr / exit_code are returned to you so you can reason on the output
-        (e.g. check if a package is installed, read a file, run a script). Pass
+        a bounded stdout / stderr head, byte counts, truncation flags, and an opaque job_id are
+        returned. Use termux_read_output with job_id and next offsets for remaining output. Pass
         interactive=true to instead open a visible Termux session - useful when the user
         explicitly wants to watch output live or when the command needs an interactive prompt;
         in that mode no output is returned. Termux must have allow-external-apps=true set in
@@ -653,38 +756,38 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
                 backgroundRequested = background,
                 shellCommandMode = rawCommand != null,
             ),
+            spoolOutput = PUBLIC_RUN_COMMAND_SPOOL_OUTPUT,
         )) {
             is CaptureResult.Success -> buildJsonObject {
                 put("success", true)
                 put("mode", "capture")
+                res.jobId?.let { put("job_id", it) }
+                put("status", res.status)
                 put("exit_code", res.exitCode)
-                val maxOut = TermuxRuntime.maxStdoutBytes
-                val maxErr = TermuxRuntime.maxStderrBytes
-                // maxStdoutBytes/maxStderrBytes are UTF-8 byte budgets. Measure and cut on bytes
-                // (boundary-aligned via takeFirstUtf8Bytes) so multibyte output isn't mis-sized
-                // and the "bytes more" count is honest rather than a char-count delta.
-                put(
-                    "stdout",
-                    res.stdout.let {
-                        val outBytes = it.toByteArray(Charsets.UTF_8).size
-                        if (outBytes > maxOut) takeFirstUtf8Bytes(it, maxOut) + "\n…[truncated; ${outBytes - maxOut} bytes more]" else it
-                    }
-                )
-                if (res.stderr.isNotBlank()) {
-                    put(
-                        "stderr",
-                        res.stderr.let {
-                            if (it.toByteArray(Charsets.UTF_8).size > maxErr) takeFirstUtf8Bytes(it, maxErr) + "\n…[truncated]" else it
-                        }
-                    )
-                }
-                if (res.exitCode != 0) {
-                    put("note", "Non-zero exit code; check stderr.")
-                }
+                put("timed_out", res.status == "timed_out")
+                put("stdout", res.stdout)
+                put("stderr", res.stderr)
+                val stdoutTruncated = res.stdoutHeadBytes.toLong() < res.stdoutTotalBytes
+                val stderrTruncated = res.stderrHeadBytes.toLong() < res.stderrTotalBytes
+                put("stdout_truncated", stdoutTruncated)
+                put("stderr_truncated", stderrTruncated)
+                put("stdout_total_bytes", res.stdoutTotalBytes)
+                put("stderr_total_bytes", res.stderrTotalBytes)
+                put("stdout_next_offset", if (stdoutTruncated) kotlinx.serialization.json.JsonPrimitive(res.stdoutHeadBytes) else kotlinx.serialization.json.JsonNull)
+                put("stderr_next_offset", if (stderrTruncated) kotlinx.serialization.json.JsonPrimitive(res.stderrHeadBytes) else kotlinx.serialization.json.JsonNull)
+                if (res.exitCode != 0) put("note", "Non-zero exit code; check stderr.")
             }
             is CaptureResult.Timeout -> buildJsonObject {
                 put("error", "timeout")
-                put("recovery", "Command did not return within ${timeoutMs / 1000}s. Either bump timeout_seconds or, if Termux gave no result at all, the user likely has not set allow-external-apps=true in ~/.termux/termux.properties (or did not restart Termux after editing it).")
+                res.jobId?.let { put("job_id", it) }
+                put("timed_out", true)
+                val managed = shouldManageCapture(backgroundRequested = background, shellCommandMode = rawCommand != null)
+                put("cleanup_requested", managed)
+                put(
+                    "recovery",
+                    if (managed) "Cleanup was requested after ${timeoutMs / 1000}s. Partial output may become available through termux_read_output using this job_id."
+                    else "The detached launch timed out before returning its PID; ownership was already detached, so this tool did not request termination.",
+                )
             }
             is CaptureResult.Denied -> buildJsonObject {
                 put("error", "termux_permission_denied")
@@ -692,6 +795,7 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
             }
             is CaptureResult.OtherError -> buildJsonObject {
                 put("error", "termux_run_failed")
+                res.jobId?.let { put("job_id", it) }
                 put("reason", res.message)
             }
         }

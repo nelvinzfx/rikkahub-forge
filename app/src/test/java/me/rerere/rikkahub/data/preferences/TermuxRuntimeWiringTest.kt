@@ -23,6 +23,8 @@ class TermuxRuntimeWiringTest {
     private var origWorkingDir: String   = ""
     private var origMaxStdout: Int       = 0
     private var origMaxStderr: Int       = 0
+    private var origMaxRetainedJobs: Int = 0
+    private var origOutputTtlMs: Long = 0
     private var origAptWrap: Boolean     = true
 
     @Before
@@ -32,6 +34,8 @@ class TermuxRuntimeWiringTest {
         origWorkingDir     = TermuxRuntime.defaultWorkingDir
         origMaxStdout      = TermuxRuntime.maxStdoutBytes
         origMaxStderr      = TermuxRuntime.maxStderrBytes
+        origMaxRetainedJobs = TermuxRuntime.maxRetainedOutputJobs
+        origOutputTtlMs = TermuxRuntime.outputTtlMs
         origAptWrap        = TermuxRuntime.aptWrapEnabled
     }
 
@@ -42,6 +46,8 @@ class TermuxRuntimeWiringTest {
         TermuxRuntime.defaultWorkingDir = origWorkingDir
         TermuxRuntime.maxStdoutBytes    = origMaxStdout
         TermuxRuntime.maxStderrBytes    = origMaxStderr
+        TermuxRuntime.maxRetainedOutputJobs = origMaxRetainedJobs
+        TermuxRuntime.outputTtlMs = origOutputTtlMs
         TermuxRuntime.aptWrapEnabled    = origAptWrap
     }
 
@@ -101,6 +107,8 @@ class TermuxRuntimeWiringTest {
         assertEquals(TermuxDefaults.DEFAULT_WORKING_DIR,         origWorkingDir)
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDOUT,          origMaxStdout)
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDERR,          origMaxStderr)
+        assertEquals(TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS, origMaxRetainedJobs)
+        assertEquals(TermuxDefaults.DEFAULT_OUTPUT_TTL_MS, origOutputTtlMs)
         assertEquals(TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,    origAptWrap)
     }
 }

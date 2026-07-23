@@ -1,6 +1,8 @@
 package me.rerere.rikkahub.data.preferences
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -142,6 +144,25 @@ class TermuxDefaultsTest {
     fun maxStderr_inRange_passesThrough() {
         assertEquals(TermuxDefaults.DEFAULT_MAX_STDERR,
             TermuxDefaults.clampMaxStderr(TermuxDefaults.DEFAULT_MAX_STDERR))
+    }
+
+    @Test
+    fun binderHeadBudgets_areCombinedAtSixtyKiB() {
+        assertEquals(49_152, TermuxDefaults.MAX_MAX_STDOUT)
+        assertEquals(12_288, TermuxDefaults.MAX_MAX_STDERR)
+        assertTrue(TermuxDefaults.validCombinedHeadBytes(49_152, 12_288))
+        assertFalse(TermuxDefaults.validCombinedHeadBytes(49_153, 12_288))
+        assertFalse(TermuxDefaults.validCombinedHeadBytes(49_152, 12_289))
+    }
+
+    @Test
+    fun outputRetention_clampsToNativeHardRanges() {
+        assertEquals(1, TermuxDefaults.clampMaxRetainedOutputJobs(0))
+        assertEquals(200, TermuxDefaults.clampMaxRetainedOutputJobs(Int.MAX_VALUE))
+        assertEquals(50, TermuxDefaults.clampMaxRetainedOutputJobs(50))
+        assertEquals(60L * 60L * 1_000L, TermuxDefaults.clampOutputTtlMs(0))
+        assertEquals(7L * 24L * 60L * 60L * 1_000L, TermuxDefaults.clampOutputTtlMs(Long.MAX_VALUE))
+        assertEquals(24L * 60L * 60L * 1_000L, TermuxDefaults.clampOutputTtlMs(TermuxDefaults.DEFAULT_OUTPUT_TTL_MS))
     }
 
     // --- clampWorkingDir ------------------------------------------------------------------
