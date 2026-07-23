@@ -55,27 +55,33 @@ class TermuxWriteShellSimulationTest {
         assertTrue(forced != TERMUX_ATOMIC_WRITE_SCRIPT)
         val absentId = stage(home, tmp, "fallback".toByteArray())
         val absent = runFinalScript(home, tmp, forced, absentId, "write", "forced-absent", null, true)
-        assertTrue(absent.out.contains("operation=write")); assertEquals("fallback", File(home, "forced-absent").readText())
-        fun racedTarget(kind: String, setup: String): Result {
-            val script = forced.replace(
-                "mv -nT -- \"${'$'}temp\" \"${'$'}actual_path\" || path_error publish_failed",
-                "$setup\n            mv -nT -- \"${'$'}temp\" \"${'$'}actual_path\" || path_error publish_failed",
-            )
-            assertTrue(script != forced)
-            val id = stage(home, tmp, "blocked".toByteArray())
-            return runFinalScript(home, tmp, script, id, "write", "forced-$kind", null, true)
+        val fallbackSupported = absent.out.contains("operation=write")
+        if (fallbackSupported) {
+            assertEquals("fallback", File(home, "forced-absent").readText())
+            fun racedTarget(kind: String, setup: String): Result {
+                val script = forced.replace(
+                    "mv -nT -- \"${'$'}temp\" \"${'$'}actual_path\" || path_error publish_failed",
+                    "$setup\n            mv -nT -- \"${'$'}temp\" \"${'$'}actual_path\" || path_error publish_failed",
+                )
+                assertTrue(script != forced)
+                val id = stage(home, tmp, "blocked".toByteArray())
+                return runFinalScript(home, tmp, script, id, "write", "forced-$kind", null, true)
+            }
+            val regular = racedTarget("regular", "printf keep > \"${'$'}actual_path\"")
+            assertTrue(regular.out.contains("error=already_exists")); assertEquals("keep", File(home, "forced-regular").readText())
+            val symlink = racedTarget("symlink", "ln -s -- \"${'$'}HOME/redirect-target\" \"${'$'}actual_path\"")
+            assertTrue(symlink.out.contains("error=already_exists")); assertTrue(Files.isSymbolicLink(File(home, "forced-symlink").toPath()))
+            val directory = racedTarget("directory", "mkdir -- \"${'$'}actual_path\"")
+            assertTrue(directory.out.contains("error=already_exists")); assertTrue(File(home, "forced-directory").isDirectory)
+            assertTrue(File(home, "forced-directory").listFiles().orEmpty().isEmpty())
+            val id1 = stage(home, tmp, "one".toByteArray()); val id2 = stage(home, tmp, "two".toByteArray())
+            val results = listOf(startFinalScript(home, tmp, forced, id1, "write", "race", null, true), startFinalScript(home, tmp, forced, id2, "write", "race", null, true)).map(::finish)
+            assertEquals(1, results.count { it.out.contains("operation=write") }); assertEquals(1, results.count { it.out.contains("error=already_exists") })
+            assertTrue(File(home, "race").readText() in setOf("one", "two"))
+        } else {
+            assertTrue(absent.out.contains("error=noreplace_unsupported"))
+            assertFalse(File(home, "forced-absent").exists())
         }
-        val regular = racedTarget("regular", "printf keep > \"${'$'}actual_path\"")
-        assertTrue(regular.out.contains("error=already_exists")); assertEquals("keep", File(home, "forced-regular").readText())
-        val symlink = racedTarget("symlink", "ln -s -- \"${'$'}HOME/redirect-target\" \"${'$'}actual_path\"")
-        assertTrue(symlink.out.contains("error=already_exists")); assertTrue(Files.isSymbolicLink(File(home, "forced-symlink").toPath()))
-        val directory = racedTarget("directory", "mkdir -- \"${'$'}actual_path\"")
-        assertTrue(directory.out.contains("error=already_exists")); assertTrue(File(home, "forced-directory").isDirectory)
-        assertTrue(File(home, "forced-directory").listFiles().orEmpty().isEmpty())
-        val id1 = stage(home, tmp, "one".toByteArray()); val id2 = stage(home, tmp, "two".toByteArray())
-        val results = listOf(startFinalScript(home, tmp, forced, id1, "write", "race", null, true), startFinalScript(home, tmp, forced, id2, "write", "race", null, true)).map(::finish)
-        assertEquals(1, results.count { it.out.contains("operation=write") }); assertEquals(1, results.count { it.out.contains("error=already_exists") })
-        assertTrue(File(home, "race").readText() in setOf("one", "two"))
         val brokenProbe = forced.replace("mv -nT -- \"${'$'}probe_src\" \"${'$'}probe_absent\" || return 1", "false || return 1")
         assertTrue(brokenProbe != forced)
         val brokenId = stage(home, tmp, "never".toByteArray())
@@ -110,6 +116,7 @@ class TermuxWriteShellSimulationTest {
 
     @Test fun chmodAndSameSecondMutationAfterOpenFailSourceChanged() = withSandbox { home, tmp ->
         fun mutate(command: String): Result {
+            Files.deleteIfExists(File(home, "source").toPath())
             File(home, "source").writeText("same")
             val id = stage(home, tmp, "new".toByteArray())
             val needle = "# Closest possible pre-publication recheck."
