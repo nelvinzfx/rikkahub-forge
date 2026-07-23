@@ -145,7 +145,7 @@ class TermuxWriteShellSimulationTest {
             assertTrue(script != TERMUX_ATOMIC_WRITE_SCRIPT)
             val result = runFinalScript(home, tmp, script, id, "write", path, initial?.let { sha256Hex(it.toByteArray()) }, false)
             assertFalse(File(home, ".cache/rikkahub/transfers/$id").exists())
-            assertTrue(File(home).walkTopDown().none { it.name.startsWith(".rikkahub-write.$id.") })
+            assertTrue(home.walkTopDown().none { it.name.startsWith(".rikkahub-write.$id.") })
             return result
         }
         val pre = injected("sync \"${'$'}temp\" || path_error data_sync_failed", "false || path_error data_sync_failed", "pre-sync", "old")
