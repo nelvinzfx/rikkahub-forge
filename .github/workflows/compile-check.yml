@@ -52,6 +52,8 @@ jobs:
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxJobProtocolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxFileProtocolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxFileShellSimulationTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxTransferProtocolTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxWriteShellSimulationTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.ToolSchemaArrayItemsTest' \
             --tests 'me.rerere.rikkahub.service.TelegramAgentContextTest' \
             --tests 'me.rerere.rikkahub.service.ConflateLatestTest' \

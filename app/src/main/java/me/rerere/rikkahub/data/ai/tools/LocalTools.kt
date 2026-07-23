@@ -835,6 +835,8 @@ class LocalTools(
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileBytesTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFilesTool(context))
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxWriteFileTool(context))
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxAppendFileTool(context))
             // Persistent interactive (tmux-backed) sessions: ssh-with-prompts, sudo, REPLs,
             // stateful shells. start is approval-gated; send is hardline-guarded per call.
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionStartTool(context))
