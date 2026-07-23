@@ -29,5 +29,6 @@ sealed class InputSchema {
         val schema: String? = null,
         @SerialName("\$defs")
         val defs: JsonObject? = null,
+        val additionalProperties: Boolean? = null,
     ) : InputSchema()
 }

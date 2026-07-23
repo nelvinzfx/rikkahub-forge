@@ -54,6 +54,9 @@ jobs:
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxFileShellSimulationTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxTransferProtocolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxWriteShellSimulationTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditEngineTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditProtocolTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditShellSimulationTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.ToolSchemaArrayItemsTest' \
             --tests 'me.rerere.rikkahub.service.TelegramAgentContextTest' \
             --tests 'me.rerere.rikkahub.service.ConflateLatestTest' \
@@ -72,6 +75,7 @@ jobs:
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \
             --tests 'me.rerere.ai.provider.providers.LosslessCallbackFlowTest' \
+            --tests 'me.rerere.ai.core.InputSchemaSerializationTest' \
             --no-daemon --stacktrace
 
       - name: Upload build report on failure

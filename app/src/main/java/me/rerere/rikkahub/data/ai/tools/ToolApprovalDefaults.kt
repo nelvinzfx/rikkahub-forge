@@ -34,6 +34,8 @@ object ToolApprovalDefaults {
         "termux_read_files",
         "termux_write_file",
         "termux_append_file",
+        "termux_edit_file",
+        "termux_edit_files",
         "termux_session_start",  // opens a persistent interactive shell; the meaningful consent moment
         "transcribe_audio_file",  // shells out to whisper-cli via Termux; reads arbitrary audio files
         "eval_javascript",

@@ -24,6 +24,7 @@ class InputSchemaSerializationTest {
             defs = buildJsonObject {
                 put("FileSpec", buildJsonObject { put("type", "object") })
             },
+            additionalProperties = false,
         )
 
         val encoded = Json { encodeDefaults = true }.encodeToJsonElement(
@@ -32,6 +33,7 @@ class InputSchemaSerializationTest {
         ).jsonObject
 
         assertEquals("object", encoded["type"]?.jsonPrimitive?.content)
+        assertEquals("false", encoded["additionalProperties"]?.jsonPrimitive?.content)
         assertEquals(
             "https://json-schema.org/draft/2020-12/schema",
             encoded["\$schema"]?.jsonPrimitive?.content,
