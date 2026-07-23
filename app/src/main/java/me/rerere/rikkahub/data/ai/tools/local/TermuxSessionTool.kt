@@ -159,6 +159,7 @@ internal fun staleSessionsToReap(
 internal fun isSessionNotFound(stderr: String): Boolean {
     val s = stderr.lowercase()
     return s.contains("can't find session") ||
+        s.contains("can't find pane") ||
         s.contains("no server running") ||
         s.contains("session not found") ||
         s.contains("no current session")

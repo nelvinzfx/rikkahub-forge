@@ -109,6 +109,9 @@ class TermuxSessionToolTest {
     @Test
     fun isSessionNotFound_detectsTmuxErrors() {
         assertTrue(isSessionNotFound("can't find session: rk_x"))
+        // `capture-pane -t <missing>` uses pane wording even though the requested target is
+        // our session id. Treat it identically so read and kill expose one stable envelope.
+        assertTrue(isSessionNotFound("can't find pane: rk_x"))
         assertTrue(isSessionNotFound("no server running on /tmp/tmux-0/default"))
         assertTrue(!isSessionNotFound("some other error"))
     }
