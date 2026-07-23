@@ -763,6 +763,6 @@ internal fun encodeTermuxEditResult(source: TermuxTextBytes, text: String): Byte
         is BoundedUtf8Result.Ok -> result.bytes
         else -> return null
     }
-    if (encoded.size + if (source.bom) 3 else 0 > MAX_TERMUX_TRANSFER_BYTES) return null
+    if (encoded.size + (if (source.bom) 3 else 0) > MAX_TERMUX_TRANSFER_BYTES) return null
     return if (source.bom) byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) + encoded else encoded
 }
