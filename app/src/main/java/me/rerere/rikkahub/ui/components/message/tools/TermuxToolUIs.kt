@@ -53,7 +53,6 @@ private const val EDIT_DIAGNOSTIC_MAX_CHARS = 24 * 1024
 private const val EDIT_DIAGNOSTIC_MAX_LINES = 200
 
 internal object TermuxWriteFileToolUI : TermuxWriteToolUI("termux_write_file")
-internal object TermuxAppendFileToolUI : TermuxWriteToolUI("termux_append_file")
 
 internal open class TermuxWriteToolUI(
     final override val toolName: String,
@@ -80,12 +79,10 @@ internal open class TermuxWriteToolUI(
     @Composable
     override fun title(context: ToolUIContext): String {
         val path = model(context)?.path ?: context.arguments.getStringContent("path")
-        val append = toolName == "termux_append_file"
-        return when {
-            append && path != null -> stringResource(R.string.tool_ui_termux_append_file, path)
-            append -> stringResource(R.string.tool_ui_termux_append_file_default)
-            path != null -> stringResource(R.string.tool_ui_write_file, path)
-            else -> stringResource(R.string.tool_ui_write_file_default)
+        return if (path != null) {
+            stringResource(R.string.tool_ui_write_file, path)
+        } else {
+            stringResource(R.string.tool_ui_write_file_default)
         }
     }
 

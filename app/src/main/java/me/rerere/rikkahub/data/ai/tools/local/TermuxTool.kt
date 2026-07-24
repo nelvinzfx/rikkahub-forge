@@ -10,7 +10,6 @@ import android.os.Bundle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -597,14 +596,11 @@ internal suspend fun runCommandCapture(
  * for the legacy "open visible Termux session" mode where the user sees output live but
  * the bot cannot read it.
  */
-private const val MAX_TERMUX_RUN_ARGUMENTS = 256
 private const val MAX_TERMUX_RUN_FIELD_BYTES = 64 * 1024
 private const val MAX_TERMUX_RUN_REQUEST_BYTES = 96 * 1024
 
 internal data class TermuxRunCommandRequest(
-    val command: String?,
-    val executable: String?,
-    val arguments: Array<String>,
+    val command: String,
     val workingDir: String,
     val interactive: Boolean,
     val background: Boolean,
@@ -632,7 +628,7 @@ private fun boundedRunFieldBytes(value: String): Int? {
 internal fun parseTermuxRunCommandRequest(input: JsonElement): PublicInputResult<TermuxRunCommandRequest> {
     val root = input as? JsonObject
         ?: return PublicInputResult.Error(PublicInputError("request_must_be_object"))
-    val allowed = setOf("command", "executable", "arguments", "working_dir", "interactive", "background", "timeout_seconds")
+    val allowed = setOf("command", "working_dir", "interactive", "background", "timeout_seconds")
     val unknown = root.keys - allowed
     if (unknown.isNotEmpty()) {
         return PublicInputResult.Error(PublicInputError("unknown_fields:${unknown.sorted().joinToString(",")}"))
@@ -651,32 +647,11 @@ internal fun parseTermuxRunCommandRequest(input: JsonElement): PublicInputResult
     val command = when (val parsed = optionalString("command")) {
         is PublicInputResult.Error -> return parsed
         is PublicInputResult.Ok -> parsed.value
-    }
-    val executable = when (val parsed = optionalString("executable")) {
-        is PublicInputResult.Error -> return parsed
-        is PublicInputResult.Ok -> parsed.value
+            ?: return PublicInputResult.Error(PublicInputError("command_is_required"))
     }
     val workingDir = when (val parsed = optionalString("working_dir")) {
         is PublicInputResult.Error -> return parsed
         is PublicInputResult.Ok -> parsed.value ?: TermuxRuntime.defaultWorkingDir
-    }
-
-    val arguments = when (val raw = root["arguments"]) {
-        null -> emptyArray()
-        is JsonArray -> {
-            if (raw.size > MAX_TERMUX_RUN_ARGUMENTS) {
-                return PublicInputResult.Error(PublicInputError("arguments_count_out_of_range"))
-            }
-            raw.mapIndexed { index, element ->
-                val value = (element as? JsonPrimitive)?.takeIf { it.isString }?.content
-                    ?: return PublicInputResult.Error(PublicInputError("arguments[$index]_must_be_string"))
-                if (boundedRunFieldBytes(value) == null) {
-                    return PublicInputResult.Error(PublicInputError("arguments[$index]_too_large_or_invalid_utf8"))
-                }
-                value
-            }.toTypedArray()
-        }
-        else -> return PublicInputResult.Error(PublicInputError("arguments_must_be_array"))
     }
 
     val interactive = strictRunBoolean(root, "interactive")
@@ -692,26 +667,13 @@ internal fun parseTermuxRunCommandRequest(input: JsonElement): PublicInputResult
     if (timeoutSeconds !in 0..TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS) {
         return PublicInputResult.Error(PublicInputError("timeout_seconds_out_of_range"))
     }
-    if (command != null && command.isBlank()) {
+    if (command.isBlank()) {
         return PublicInputResult.Error(PublicInputError("command_must_not_be_blank"))
-    }
-    if (executable != null && executable.isBlank()) {
-        return PublicInputResult.Error(PublicInputError("executable_must_not_be_blank"))
-    }
-    if ((command != null) == (executable != null)) {
-        return PublicInputResult.Error(PublicInputError("exactly_one_of_command_or_executable_required"))
-    }
-    if (command != null && root["arguments"] != null) {
-        return PublicInputResult.Error(PublicInputError("arguments_require_executable_mode"))
-    }
-    if (executable != null && background) {
-        return PublicInputResult.Error(PublicInputError("background_requires_command_mode"))
     }
     if (interactive && background) {
         return PublicInputResult.Error(PublicInputError("interactive_background_conflict"))
     }
-    val aggregateBytes = listOfNotNull(command, executable, workingDir).sumOf { boundedRunFieldBytes(it)!!.toLong() } +
-        arguments.sumOf { boundedRunFieldBytes(it)!!.toLong() }
+    val aggregateBytes = listOf(command, workingDir).sumOf { boundedRunFieldBytes(it)!!.toLong() }
     if (aggregateBytes > MAX_TERMUX_RUN_REQUEST_BYTES) {
         return PublicInputResult.Error(PublicInputError("request_too_large"))
     }
@@ -721,9 +683,39 @@ internal fun parseTermuxRunCommandRequest(input: JsonElement): PublicInputResult
         timeoutSeconds.toLong() * 1_000L
     }
     return PublicInputResult.Ok(
-        TermuxRunCommandRequest(command, executable, arguments, workingDir, interactive, background, timeoutMs)
+        TermuxRunCommandRequest(command, workingDir, interactive, background, timeoutMs)
     )
 }
+
+internal fun termuxRunCommandSchema(): InputSchema.Obj = InputSchema.Obj(
+    properties = buildJsonObject {
+        put("command", buildJsonObject {
+            put("type", "string")
+            put("description", "Shell command line, e.g. 'pkg update && pkg upgrade -y'.")
+            put("minLength", 1)
+        })
+        put("working_dir", buildJsonObject {
+            put("type", "string")
+            put("description", "Working directory. Defaults to Termux home (/data/data/com.termux/files/home).")
+        })
+        put("interactive", buildJsonObject {
+            put("type", "boolean")
+            put("description", "If true, opens a visible Termux session and does NOT capture output. Default false (background + capture).")
+        })
+        put("background", buildJsonObject {
+            put("type", "boolean")
+            put("description", "If true, launch the command fully detached (nohup, streams redirected) and return immediately with its PID. Use for servers / long-running processes that would otherwise keep the capture pipe open and block until timeout. Default false.")
+        })
+        put("timeout_seconds", buildJsonObject {
+            put("type", "integer")
+            put("description", "Capture-mode timeout in seconds. Omit or pass 0 to use the user-configured default (Settings -> Termux). Max ${TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS} s.")
+            put("minimum", 0)
+            put("maximum", TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS)
+        })
+    },
+    required = listOf("command"),
+    additionalProperties = false,
+)
 
 fun termuxRunCommandTool(context: Context): Tool = Tool(
     name = "termux_run_command",
@@ -738,47 +730,7 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
         automatically wrapped with DEBIAN_FRONTEND=noninteractive and safe dpkg defaults;
         do not add extra -y flags unless the user specifically asked for unattended upgrades.
     """.trimIndent().replace("\n", " "),
-    parameters = {
-        InputSchema.Obj(
-            properties = buildJsonObject {
-                put("command", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Shell command line, e.g. 'pkg update && pkg upgrade -y'. Mutually exclusive with executable+arguments.")
-                    put("minLength", 1)
-                })
-                put("executable", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Absolute path to executable, e.g. /data/data/com.termux/files/usr/bin/bash. Pairs with arguments[].")
-                    put("minLength", 1)
-                })
-                put("arguments", buildJsonObject {
-                    put("type", "array")
-                    put("description", "Argument list when using executable mode")
-                    put("maxItems", MAX_TERMUX_RUN_ARGUMENTS)
-                    put("items", buildJsonObject { put("type", "string") })
-                })
-                put("working_dir", buildJsonObject {
-                    put("type", "string")
-                    put("description", "Working directory. Defaults to Termux home (/data/data/com.termux/files/home).")
-                })
-                put("interactive", buildJsonObject {
-                    put("type", "boolean")
-                    put("description", "If true, opens a visible Termux session and does NOT capture output. Default false (background + capture).")
-                })
-                put("background", buildJsonObject {
-                    put("type", "boolean")
-                    put("description", "Command mode only. If true, launch the command fully detached (nohup, streams redirected) and return immediately with its PID. Use for servers / long-running processes that would otherwise keep the capture pipe open and block until timeout. Default false.")
-                })
-                put("timeout_seconds", buildJsonObject {
-                    put("type", "integer")
-                    put("description", "Capture-mode timeout in seconds. Omit or pass 0 to use the user-configured default (Settings -> Termux). Max ${TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS} s.")
-                    put("minimum", 0)
-                    put("maximum", TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS)
-                })
-            },
-            additionalProperties = false,
-        )
-    },
+    parameters = { termuxRunCommandSchema() },
     execute = { input ->
         val request = when (val parsed = parseTermuxRunCommandRequest(input)) {
             is PublicInputResult.Error -> {
@@ -789,8 +741,6 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
             is PublicInputResult.Ok -> parsed.value
         }
         val rawCommand = request.command
-        val executable = request.executable
-        val resolvedInputArguments = request.arguments
         val workingDir = request.workingDir
         val interactive = request.interactive
         val background = request.background
@@ -828,27 +778,21 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
         // they don't need a Telegram ping for every session counter flap.
         AgentTurnTracker.touchPackage(TERMUX_PACKAGE, "com.termux.api")
 
-        // Prepend a noninteractive preamble for `command` mode so apt/pkg upgrades don't
-        // hang waiting for "keep your existing config?" debconf prompts. Only applies to
-        // the bash -c path; raw executable+arguments callers get no wrapping.
-        // Gated on TermuxRuntime.aptWrapEnabled — user can disable from Settings → Termux.
-        val (resolvedExe, resolvedArgs) = if (rawCommand != null) {
-            // apt/dpkg noninteractive wrapping, gated on TermuxRuntime.aptWrapEnabled (user can
-            // disable from Settings -> Termux).
-            val preamble = if (TermuxRuntime.aptWrapEnabled) {
-                "export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a; " +
-                    "apt(){ command apt -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' \"\$@\"; }; " +
-                    "apt-get(){ command apt-get -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' \"\$@\"; }; " +
-                    "export -f apt apt-get; "
-            } else ""
-            // background: detach so a long-running child doesn't keep the capture pipe open and
-            // stall the result bundle until timeout. Same inherited-fd hazard as the SSH exec
-            // channel; wrapDetachedCommand applies the identical nohup + redirect + echo-pid fix.
-            val body = if (background) wrapDetachedCommand(rawCommand) else rawCommand
-            "$TERMUX_BIN_DIR/bash" to arrayOf("-c", preamble + body)
-        } else {
-            executable!! to resolvedInputArguments
-        }
+        // Prepend a noninteractive preamble so apt/pkg upgrades don't hang waiting for
+        // "keep your existing config?" debconf prompts. Public calls always use bash -c;
+        // internal helpers still use argv-safe RUN_COMMAND path/argument dispatch directly.
+        val preamble = if (TermuxRuntime.aptWrapEnabled) {
+            "export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a; " +
+                "apt(){ command apt -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' \"\$@\"; }; " +
+                "apt-get(){ command apt-get -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' \"\$@\"; }; " +
+                "export -f apt apt-get; "
+        } else ""
+        // background: detach so a long-running child doesn't keep the capture pipe open and
+        // stall the result bundle until timeout. Same inherited-fd hazard as the SSH exec
+        // channel; wrapDetachedCommand applies the identical nohup + redirect + echo-pid fix.
+        val body = if (background) wrapDetachedCommand(rawCommand) else rawCommand
+        val resolvedExe = "$TERMUX_BIN_DIR/bash"
+        val resolvedArgs = arrayOf("-c", preamble + body)
 
         if (interactive) {
             // Legacy fire-and-forget interactive session. Cannot read output back.
@@ -904,7 +848,7 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
             // call; do not register it for timeout/cancellation cleanup.
             cleanupOnTimeoutOrCancellation = shouldManageCapture(
                 backgroundRequested = background,
-                shellCommandMode = rawCommand != null,
+                shellCommandMode = true,
             ),
             spoolOutput = PUBLIC_RUN_COMMAND_SPOOL_OUTPUT,
         )) {
@@ -933,7 +877,7 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
                 put("error", "timeout")
                 res.jobId?.let { put("job_id", it) }
                 put("timed_out", true)
-                val managed = shouldManageCapture(backgroundRequested = background, shellCommandMode = rawCommand != null)
+                val managed = shouldManageCapture(backgroundRequested = background, shellCommandMode = true)
                 put("cleanup_requested", managed)
                 put(
                     "recovery",

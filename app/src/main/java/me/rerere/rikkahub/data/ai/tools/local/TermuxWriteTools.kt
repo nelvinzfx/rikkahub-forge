@@ -127,18 +127,17 @@ internal val TERMUX_TRANSFER_CLEANUP_SCRIPT = """
 internal val TERMUX_ATOMIC_WRITE_SCRIPT = """
     ${TERMUX_TRANSFER_COMMON_SCRIPT}
     ${TERMUX_PATH_RESOLVER_SCRIPT}
-    operation=${'$'}2; path_b64=${'$'}3; expected_sha=${'$'}4; create_only=${'$'}5; expected_path_sha=${'$'}6
+    path_b64=${'$'}2; expected_sha=${'$'}3; create_only=${'$'}4; expected_path_sha=${'$'}5
     marker=RIKKAHUB_WRITE_V1; actual_b64=; temp=; probe_prefix=
     cleanup() { [ -z "${'$'}temp" ] || rm -f -- "${'$'}temp"; [ -z "${'$'}probe_prefix" ] || rm -rf -- "${'$'}probe_prefix".*; if [ -d "${'$'}transfer_dir" ] && [ ! -L "${'$'}transfer_dir" ]; then rm -rf -- "${'$'}transfer_dir"; fi; }
     trap cleanup EXIT HUP INT TERM
     bare_error() { printf '%s\nrequest_id=%s\nerror=%s\n' "${'$'}marker" "${'$'}request_id" "${'$'}1"; exit 0; }
     path_error() { printf '%s\nrequest_id=%s\nerror=%s\nactual_path_b64=%s\n' "${'$'}marker" "${'$'}request_id" "${'$'}1" "${'$'}actual_b64"; exit 0; }
     stale_error() { printf '%s\nrequest_id=%s\nerror=stale_source\nactual_path_b64=%s\ncurrent_sha256=%s\n' "${'$'}marker" "${'$'}request_id" "${'$'}actual_b64" "${'$'}1"; exit 0; }
-    [ "${'$'}operation" = write ] || [ "${'$'}operation" = append ] || bare_error invalid_operation
     [ "${'$'}create_only" = 0 ] || [ "${'$'}create_only" = 1 ] || bare_error invalid_create_only
     [ "${'$'}expected_sha" = - ] || valid_sha256 "${'$'}expected_sha" || bare_error invalid_expected_sha256
     valid_sha256 "${'$'}expected_path_sha" || bare_error invalid_path
-    [ "${'$'}create_only" = 0 ] || { [ "${'$'}operation" = write ] && [ "${'$'}expected_sha" = - ]; } || bare_error conflicting_guards
+    [ "${'$'}create_only" = 0 ] || [ "${'$'}expected_sha" = - ] || bare_error conflicting_guards
     [ -d "${'$'}transfer_dir" ] && [ ! -L "${'$'}transfer_dir" ] || bare_error missing_transfer
     unknown=${'$'}(find "${'$'}transfer_dir" -mindepth 1 -maxdepth 1 ! -name meta ! -name payload -print -quit); [ -z "${'$'}unknown" ] || bare_error unsafe_transfer_state
     for f in meta payload; do [ -f "${'$'}transfer_dir/${'$'}f" ] && [ ! -L "${'$'}transfer_dir/${'$'}f" ] || bare_error unsafe_transfer_state; [ "${'$'}(stat -c '%a' -- "${'$'}transfer_dir/${'$'}f")" = 600 ] || bare_error unsafe_transfer_state; done
@@ -172,17 +171,16 @@ internal val TERMUX_ATOMIC_WRITE_SCRIPT = """
         exists=1
     fi
     if [ "${'$'}expected_sha" != - ]; then
-        if [ "${'$'}exists" -eq 0 ]; then [ "${'$'}operation" = append ] && [ "${'$'}expected_sha" = ${EMPTY_SHA256} ] || stale_error "${EMPTY_SHA256}"; else [ "${'$'}current_sha" = "${'$'}expected_sha" ] || stale_error "${'$'}current_sha"; fi
+        if [ "${'$'}exists" -eq 0 ]; then stale_error "${EMPTY_SHA256}"; else [ "${'$'}current_sha" = "${'$'}expected_sha" ] || stale_error "${'$'}current_sha"; fi
     fi
     if [ "${'$'}create_only" = 1 ] && { [ -e "${'$'}actual_path" ] || [ -L "${'$'}actual_path" ]; }; then path_error already_exists; fi
     temp=${'$'}(mktemp "${'$'}parent/.rikkahub-write.${'$'}request_id.XXXXXXXX") || path_error temp_failed
     [ -f "${'$'}temp" ] && [ ! -L "${'$'}temp" ] || path_error unsafe_temp_path
     chmod 600 -- "${'$'}temp"
-    if [ "${'$'}operation" = append ] && [ "${'$'}exists" -eq 1 ]; then cat -- "${'$'}fd_path" > "${'$'}temp" || path_error copy_failed; fi
     cat -- "${'$'}transfer_dir/payload" >> "${'$'}temp" || path_error copy_failed
     chmod "${'$'}mode" -- "${'$'}temp" || path_error mode_failed
     final_total=${'$'}(wc -c < "${'$'}temp" | tr -d ' '); final_sha=${'$'}(sha256sum < "${'$'}temp" | cut -d' ' -f1) || path_error hash_failed
-    if [ "${'$'}operation" = write ]; then [ "${'$'}final_total" -eq "${'$'}meta_total" ] && [ "${'$'}final_sha" = "${'$'}meta_sha" ] || path_error publication_changed; fi
+    [ "${'$'}final_total" -eq "${'$'}meta_total" ] && [ "${'$'}final_sha" = "${'$'}meta_sha" ] || path_error publication_changed
     temp_identity=${'$'}(stat -Lc '%d:%i' -- "${'$'}temp") || path_error stat_failed
     # Closest possible pre-publication recheck. The RikkaHub lock serializes cooperative writers;
     # an uncooperative same-UID writer can still race this check-to-rename interval.
@@ -270,7 +268,7 @@ internal val TERMUX_ATOMIC_WRITE_SCRIPT = """
     [ "${'$'}published_identity" = "${'$'}temp_identity" ] && [ "${'$'}published_mode" = "${'$'}mode" ] && [ "${'$'}published_total" = "${'$'}final_total" ] && [ "${'$'}published_sha" = "${'$'}final_sha" ] || path_error publication_changed
     sync "${'$'}actual_path" || path_error post_publish_sync_failed
     sync "${'$'}parent" || path_error post_publish_sync_failed
-    printf '%s\nrequest_id=%s\noperation=%s\nactual_path_b64=%s\npath_request_sha256=%s\ncontent_sha256=%s\nbytes_written=%s\ntotal_bytes=%s\nsha256=%s\n' "${'$'}marker" "${'$'}request_id" "${'$'}operation" "${'$'}actual_b64" "${'$'}expected_path_sha" "${'$'}meta_sha" "${'$'}meta_total" "${'$'}final_total" "${'$'}final_sha"
+    printf '%s\nrequest_id=%s\noperation=write\nactual_path_b64=%s\npath_request_sha256=%s\ncontent_sha256=%s\nbytes_written=%s\ntotal_bytes=%s\nsha256=%s\n' "${'$'}marker" "${'$'}request_id" "${'$'}actual_b64" "${'$'}expected_path_sha" "${'$'}meta_sha" "${'$'}meta_total" "${'$'}final_total" "${'$'}final_sha"
 """.trimIndent()
 
 internal data class TermuxWriteRequest(
@@ -279,16 +277,15 @@ internal data class TermuxWriteRequest(
     val contentBytes: ByteArray,
     val expectedSha256: String?,
     val createOnly: Boolean,
-    val append: Boolean,
 )
 
 private fun JsonPrimitive.writeStrictString(): String? = content.takeIf { isString }
 private fun JsonPrimitive.writeStrictBoolean(): Boolean? =
     if (!isString) when (content) { "true" -> true; "false" -> false; else -> null } else null
 
-internal fun parseTermuxWriteRequest(input: JsonElement, append: Boolean): PublicInputResult<TermuxWriteRequest> {
+internal fun parseTermuxWriteRequest(input: JsonElement): PublicInputResult<TermuxWriteRequest> {
     val obj = input as? JsonObject ?: return PublicInputResult.Error(PublicInputError("request_must_be_object"))
-    val allowed = if (append) setOf("path", "content", "expected_sha256") else setOf("path", "content", "expected_sha256", "create_only")
+    val allowed = setOf("path", "content", "expected_sha256", "create_only")
     val unknown = obj.keys - allowed
     val path = (obj["path"] as? JsonPrimitive)?.writeStrictString()
     if (unknown.isNotEmpty()) return PublicInputResult.Error(PublicInputError("unknown_fields:${unknown.sorted().joinToString(",")}", path))
@@ -316,14 +313,14 @@ internal fun parseTermuxWriteRequest(input: JsonElement, append: Boolean): Publi
         else -> return PublicInputResult.Error(PublicInputError("expected_sha256_must_be_string_or_null", path))
     }
     if (expected != null && !isValidSha256(expected)) return PublicInputResult.Error(PublicInputError("invalid_expected_sha256", path))
-    val createOnly = if (append) false else when (val raw = obj["create_only"]) {
+    val createOnly = when (val raw = obj["create_only"]) {
         null -> false
         is JsonPrimitive -> raw.writeStrictBoolean()
             ?: return PublicInputResult.Error(PublicInputError("create_only_must_be_boolean", path))
         else -> return PublicInputResult.Error(PublicInputError("create_only_must_be_boolean", path))
     }
     if (createOnly && expected != null) return PublicInputResult.Error(PublicInputError("conflicting_guards", path))
-    return PublicInputResult.Ok(TermuxWriteRequest(path, pathBytes, contentBytes, expected, createOnly, append))
+    return PublicInputResult.Ok(TermuxWriteRequest(path, pathBytes, contentBytes, expected, createOnly))
 }
 
 private suspend fun invokeTransferHelper(context: Context, script: String, arguments: Array<String>, timeoutMs: Long): CaptureResult =
@@ -343,7 +340,6 @@ private suspend fun cleanupTermuxTransfer(context: Context, requestId: String) {
 internal suspend fun writeTermuxFile(context: Context, request: TermuxWriteRequest): TermuxTransferProtocolResult<TermuxWriteEnvelope> {
     val requestId = UUID.randomUUID().toString()
     val chunks = splitTermuxTransferBytes(request.contentBytes)
-    val operation = if (request.append) "append" else "write"
     val pathSha = sha256Hex(request.pathBytes)
     val contentSha = sha256Hex(request.contentBytes)
     try {
@@ -364,12 +360,12 @@ internal suspend fun writeTermuxFile(context: Context, request: TermuxWriteReque
         }
         val finalCapture = invokeTransferHelper(
             context, TERMUX_ATOMIC_WRITE_SCRIPT,
-            arrayOf(requestId, operation, encodeTermuxPath(request.path), request.expectedSha256 ?: "-", if (request.createOnly) "1" else "0", pathSha),
+            arrayOf(requestId, encodeTermuxPath(request.path), request.expectedSha256 ?: "-", if (request.createOnly) "1" else "0", pathSha),
             TermuxRuntime.commandTimeoutMs,
         )
         return when (finalCapture) {
             is CaptureResult.Success -> if (finalCapture.exitCode == 0) parseTermuxWriteEnvelope(
-                finalCapture.stdout, requestId, operation, pathSha, contentSha, request.contentBytes.size,
+                finalCapture.stdout, requestId, pathSha, contentSha, request.contentBytes.size,
             ) else TermuxTransferProtocolResult.Error("termux_write_failed", finalCapture.stderr.take(1_000))
             is CaptureResult.Timeout -> TermuxTransferProtocolResult.Error("write_timeout")
             is CaptureResult.Denied -> TermuxTransferProtocolResult.Error("termux_permission_denied")
@@ -404,37 +400,22 @@ private fun termuxWriteJson(value: TermuxWriteEnvelope) = buildJsonObject {
     put("bytes_written", value.bytesWritten); put("total_bytes", value.totalBytes); put("sha256", value.sha256); put("error", JsonNull)
 }
 
-private fun writeSchema(append: Boolean) = buildJsonObject {
+private fun writeSchema() = buildJsonObject {
     put("path", buildJsonObject { put("type", "string"); put("description", "Strict UTF-8. Relative/~ paths resolve from Termux HOME; /tmp maps to TMPDIR.") })
     put("content", buildJsonObject { put("type", "string"); put("description", "Up to 4 MiB of strict UTF-8, preserved exactly including NUL, CRLF, and final-newline state.") })
     put("expected_sha256", buildJsonObject {
         put("type", buildJsonArray { add("string"); add("null") })
-        put("description", if (append) "Optional lowercase SHA-256 stale guard. A missing target is empty bytes for append." else "Optional lowercase SHA-256 stale guard; a missing target is stale.")
+        put("description", "Optional lowercase SHA-256 stale guard; a missing target is stale.")
     })
-    if (!append) put("create_only", buildJsonObject { put("type", "boolean"); put("description", "Race-safe no-clobber creation among filesystem publishers; mutually exclusive with expected_sha256.") })
+    put("create_only", buildJsonObject { put("type", "boolean"); put("description", "Race-safe no-clobber creation among filesystem publishers; mutually exclusive with expected_sha256.") })
 }
 
 fun termuxWriteFileTool(context: Context): Tool = Tool(
     name = "termux_write_file",
     description = "Atomically create or replace one normal Termux file from up to 4 MiB of exact strict UTF-8. Binder-safe staged chunks are byte/SHA verified; the same-directory temp is fully synced and published with no-container rename or no-clobber hard link (falling back only after same-parent no-clobber rename capability probes where Android denies hard links), then the file and final parent are fully synced. Existing mode bits are preserved; final-component symlinks are rejected. expected_sha256 serializes RikkaHub writers and fails closed on detected external changes; an uncooperative same-UID Termux writer can race the final check-to-rename boundary. Parent symlinks follow normal resolution; actual_path is authoritative. Post-publication sync failure is reported and publication may already be visible; recursively created ancestor directories are not individually synced.",
-    parameters = { InputSchema.Obj(writeSchema(false), listOf("path", "content")) },
+    parameters = { InputSchema.Obj(writeSchema(), listOf("path", "content")) },
     execute = { input ->
-        when (val parsed = parseTermuxWriteRequest(input, append = false)) {
-            is PublicInputResult.Error -> listOf(UIMessagePart.Text(termuxWriteError(TermuxTransferProtocolResult.Error(parsed.value.code), parsed.value.path).toString()))
-            is PublicInputResult.Ok -> listOf(UIMessagePart.Text(when (val result = writeTermuxFile(context, parsed.value)) {
-                is TermuxTransferProtocolResult.Ok -> termuxWriteJson(result.value)
-                is TermuxTransferProtocolResult.Error -> termuxWriteError(result, parsed.value.path)
-            }.toString()))
-        }
-    },
-)
-
-fun termuxAppendFileTool(context: Context): Tool = Tool(
-    name = "termux_append_file",
-    description = "Atomically append up to 4 MiB of exact strict UTF-8 by streaming the opened old file plus verified staged bytes into a same-directory replacement, never in place. A missing target is empty and accepts the empty SHA. The temp, published file, and final parent are fully synced; mode is preserved and final-component symlinks are rejected. expected_sha256 serializes RikkaHub writers and fails closed on detected external changes; an uncooperative same-UID Termux writer can race the final check-to-rename boundary. Post-publication sync failure is reported and publication may already be visible; recursively created ancestor directories are not individually synced.",
-    parameters = { InputSchema.Obj(writeSchema(true), listOf("path", "content")) },
-    execute = { input ->
-        when (val parsed = parseTermuxWriteRequest(input, append = true)) {
+        when (val parsed = parseTermuxWriteRequest(input)) {
             is PublicInputResult.Error -> listOf(UIMessagePart.Text(termuxWriteError(TermuxTransferProtocolResult.Error(parsed.value.code), parsed.value.path).toString()))
             is PublicInputResult.Ok -> listOf(UIMessagePart.Text(when (val result = writeTermuxFile(context, parsed.value)) {
                 is TermuxTransferProtocolResult.Ok -> termuxWriteJson(result.value)

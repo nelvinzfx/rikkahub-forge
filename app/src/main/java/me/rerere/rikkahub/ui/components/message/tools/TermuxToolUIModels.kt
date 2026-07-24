@@ -24,7 +24,6 @@ internal data class TermuxWriteUIModel(
     val path: String,
     val actualPath: String?,
     val content: String,
-    val append: Boolean,
     val bytesWritten: Long?,
     val totalBytes: Long?,
     val error: String?,
@@ -88,7 +87,7 @@ private data class ParsedDiagnostic(
     val text: String,
 )
 
-private val WRITE_TOOL_NAMES = setOf("termux_write_file", "termux_append_file")
+private const val WRITE_TOOL_NAME = "termux_write_file"
 private val EDIT_TOOL_NAMES = setOf("termux_edit_file", "termux_edit_files")
 private val TOP_LEVEL_EDIT_STATES = setOf("applied", "dry_run", "no_change", "error")
 private val SHA256_REGEX = Regex("^[0-9a-f]{64}$")
@@ -127,7 +126,6 @@ private fun parseEarlyTermuxWriteError(
         path = path,
         actualPath = output.strictString("actual_path"),
         content = input?.strictString("content").orEmpty(),
-        append = toolName == "termux_append_file",
         bytesWritten = null,
         totalBytes = null,
         error = output.strictString("error"),
@@ -144,7 +142,7 @@ internal fun parseTermuxWriteUIModel(
     content: JsonElement?,
     rawInput: String? = null,
 ): TermuxWriteUIModel? {
-    if (toolName !in WRITE_TOOL_NAMES) return null
+    if (toolName != WRITE_TOOL_NAME) return null
     parseEarlyTermuxWriteError(toolName, arguments, content)?.let { return it }
     val input = arguments as? JsonObject
     // While the tool call is still streaming, arguments fail strict JSON parsing.
@@ -157,13 +155,11 @@ internal fun parseTermuxWriteUIModel(
     val text = input?.strictString("content")
         ?: streamFallback?.let { extractPartialJsonString(it, "content") }
         ?: return null
-    val append = toolName == "termux_append_file"
     if (content == null) {
         return TermuxWriteUIModel(
             path = path,
             actualPath = null,
             content = text,
-            append = append,
             bytesWritten = null,
             totalBytes = null,
             error = null,
@@ -188,18 +184,17 @@ internal fun parseTermuxWriteUIModel(
         val bytesWritten = output.long("bytes_written") ?: return null
         val totalBytes = output.long("total_bytes") ?: return null
         val expectedBytes = text.toByteArray(Charsets.UTF_8).size.toLong()
-        val valid = operation == (if (append) "append" else "write") &&
+        val valid = operation == "write" &&
             pathSha == sha256(path.toByteArray(Charsets.UTF_8)) &&
             contentSha == sha256(text.toByteArray(Charsets.UTF_8)) &&
             resultSha.matches(SHA256_REGEX) && bytesWritten == expectedBytes &&
-            totalBytes >= bytesWritten && (append || totalBytes == bytesWritten) &&
-            (append || resultSha == contentSha) && output["error"] is JsonNull
+            totalBytes == bytesWritten && resultSha == contentSha &&
+            output["error"] is JsonNull
         if (!valid) return null
         return TermuxWriteUIModel(
             path = path,
             actualPath = actualPath,
             content = text,
-            append = append,
             bytesWritten = bytesWritten,
             totalBytes = totalBytes,
             error = null,
@@ -224,7 +219,6 @@ internal fun parseTermuxWriteUIModel(
         path = path,
         actualPath = output.strictString("actual_path"),
         content = text,
-        append = append,
         bytesWritten = null,
         totalBytes = null,
         error = error,

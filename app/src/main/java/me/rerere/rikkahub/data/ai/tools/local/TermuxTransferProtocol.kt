@@ -169,13 +169,12 @@ internal fun parseTermuxTransferAck(
 internal fun parseTermuxWriteEnvelope(
     text: String,
     expectedRequestId: String,
-    expectedOperation: String,
     expectedPathRequestSha256: String,
     expectedContentSha256: String,
     expectedBytesWritten: Int,
 ): TermuxTransferProtocolResult<TermuxWriteEnvelope> {
     if (!isValidRequestId(expectedRequestId)) return TermuxTransferProtocolResult.Error("invalid_request_id")
-    if (expectedOperation !in setOf("write", "append") || !isValidSha256(expectedPathRequestSha256) ||
+    if (!isValidSha256(expectedPathRequestSha256) ||
         !isValidSha256(expectedContentSha256) || expectedBytesWritten < 0
     ) return TermuxTransferProtocolResult.Error("invalid_expectation")
     val allowed = setOf(
@@ -211,7 +210,7 @@ internal fun parseTermuxWriteEnvelope(
     val operation = values.getValue("operation")
     val pathSha = values.getValue("path_request_sha256")
     val contentSha = values.getValue("content_sha256")
-    if (operation != expectedOperation || pathSha != expectedPathRequestSha256 || contentSha != expectedContentSha256 ||
+    if (operation != "write" || pathSha != expectedPathRequestSha256 || contentSha != expectedContentSha256 ||
         !isValidSha256(pathSha) || !isValidSha256(contentSha)
     ) return TermuxTransferProtocolResult.Error("response_mismatch")
     val bytesWritten = strictDecimalLong(values.getValue("bytes_written"))
@@ -223,7 +222,7 @@ internal fun parseTermuxWriteEnvelope(
     if (bytesWritten != expectedBytesWritten.toLong() || totalBytes < bytesWritten) {
         return TermuxTransferProtocolResult.Error("invalid_protocol")
     }
-    if (operation == "write" && (totalBytes != bytesWritten || finalSha != contentSha)) {
+    if (totalBytes != bytesWritten || finalSha != contentSha) {
         return TermuxTransferProtocolResult.Error("invalid_protocol")
     }
     return TermuxTransferProtocolResult.Ok(

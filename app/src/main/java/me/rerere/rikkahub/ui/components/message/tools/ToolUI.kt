@@ -164,7 +164,6 @@ object ToolUIRegistry {
         ReadFileToolUI,
         WriteFileToolUI,
         TermuxWriteFileToolUI,
-        TermuxAppendFileToolUI,
         TermuxEditFileToolUI,
         TermuxEditFilesToolUI,
         ShellToolUI,

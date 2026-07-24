@@ -306,27 +306,38 @@ class TermuxSessionToolTest {
     }
 
 
-    @Test fun strictRunCommandParser_boundsBinderInputAndTypes() {
+    @Test fun runCommandSchemaExposesOnlyCommandMode() {
+        val schema = termuxRunCommandSchema()
+        assertEquals(listOf("command"), schema.required)
+        assertEquals(
+            setOf("command", "working_dir", "interactive", "background", "timeout_seconds"),
+            schema.properties.keys,
+        )
+        assertFalse(schema.properties.containsKey("executable"))
+        assertFalse(schema.properties.containsKey("arguments"))
+        assertEquals(false, schema.additionalProperties)
+    }
+
+    @Test fun strictRunCommandParser_isCommandOnlyAndBoundsBinderInputAndTypes() {
         val valid = parseTermuxRunCommandRequest(
             kotlinx.serialization.json.Json.parseToJsonElement(
-                """{"executable":"/bin/echo","arguments":["a b"],"timeout_seconds":1}""",
+                """{"command":"printf '%s' 'a b'","timeout_seconds":1}""",
             ),
         ) as PublicInputResult.Ok
-        assertEquals("/bin/echo", valid.value.executable)
-        assertEquals(listOf("a b"), valid.value.arguments.toList())
+        assertEquals("printf '%s' 'a b'", valid.value.command)
         assertEquals(1_000L, valid.value.timeoutMs)
 
         fun code(raw: String) = (parseTermuxRunCommandRequest(
             kotlinx.serialization.json.Json.parseToJsonElement(raw),
         ) as PublicInputResult.Error).value.code
+        assertEquals("command_is_required", code("{}"))
         assertEquals("interactive_must_be_boolean", code("""{"command":"x","interactive":"true"}"""))
-        assertEquals("arguments[0]_must_be_string", code("""{"executable":"/bin/echo","arguments":[1]}"""))
-        assertEquals("arguments_require_executable_mode", code("""{"command":"x","arguments":[]}"""))
-        assertEquals("background_requires_command_mode", code("""{"executable":"/bin/echo","background":true}"""))
+        assertEquals("interactive_background_conflict", code("""{"command":"x","interactive":true,"background":true}"""))
         assertEquals("timeout_seconds_out_of_range", code("""{"command":"x","timeout_seconds":601}"""))
-        assertEquals("unknown_fields:extra", code("""{"command":"x","extra":1}"""))
-        assertEquals("command_must_not_be_blank", code("""{"command":" ","executable":"/bin/echo"}"""))
-        assertEquals("executable_must_not_be_blank", code("""{"executable":""}"""))
+        assertEquals("unknown_fields:arguments", code("""{"command":"x","arguments":[]}"""))
+        assertEquals("unknown_fields:executable", code("""{"executable":"/bin/echo"}"""))
+        assertEquals("unknown_fields:executable,extra", code("""{"command":"x","executable":"/bin/echo","extra":1}"""))
+        assertEquals("command_must_not_be_blank", code("""{"command":" "}"""))
         val tooLarge = kotlinx.serialization.json.buildJsonObject {
             put("command", kotlinx.serialization.json.JsonPrimitive("x".repeat(64 * 1024 + 1)))
         }

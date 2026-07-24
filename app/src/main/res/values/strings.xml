@@ -1796,8 +1796,6 @@
   <string name="tool_ui_read_file_default">Read file</string>
   <string name="tool_ui_write_file">Write: %s</string>
   <string name="tool_ui_write_file_default">Write file</string>
-  <string name="tool_ui_termux_append_file">Append: %s</string>
-  <string name="tool_ui_termux_append_file_default">Append file</string>
   <string name="tool_ui_termux_edit_files">Edit %d files</string>
   <string name="tool_ui_termux_more_files">+%d more files</string>
   <string name="tool_ui_termux_preview_more">… (%1$d more lines, %2$d total, view details to expand)</string>

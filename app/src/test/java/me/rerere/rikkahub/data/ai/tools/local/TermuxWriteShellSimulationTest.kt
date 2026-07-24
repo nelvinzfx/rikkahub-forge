@@ -26,35 +26,30 @@ class TermuxWriteShellSimulationTest {
         withSandbox { home, _ -> assertEquals(0, ProcessBuilder("sync", home.absolutePath).start().waitFor()) }
     }
 
-    @Test fun exactContentParentsModeExpectedAndAppendSemantics() = withSandbox { home, tmp ->
+    @Test fun exactContentParentsModeAndExpectedShaSemantics() = withSandbox { home, tmp ->
         val raw = ("α\u0000β\r\n" + "🙂line\r\n".repeat(12_000) + "tail").toByteArray()
         assertTrue(raw.size > TERMUX_TRANSFER_CHUNK_BYTES * 3)
-        val first = transfer(home, tmp, "nested/deep/value", raw, "write")
-        assertSuccess(first, "write", raw); assertArrayEquals(raw, File(home, "nested/deep/value").readBytes())
+        val first = transfer(home, tmp, "nested/deep/value", raw)
+        assertSuccess(first, raw); assertArrayEquals(raw, File(home, "nested/deep/value").readBytes())
         Files.setPosixFilePermissions(File(home, "nested/deep/value").toPath(), PosixFilePermissions.fromString("rw-r-----"))
         val oldSha = sha256Hex(raw); val replacement = "no-final".toByteArray()
-        assertSuccess(transfer(home, tmp, "nested/deep/value", replacement, "write", oldSha), "write", replacement)
+        assertSuccess(transfer(home, tmp, "nested/deep/value", replacement, oldSha), replacement)
         assertEquals("rw-r-----", PosixFilePermissions.toString(Files.getPosixFilePermissions(File(home, "nested/deep/value").toPath())))
-        assertTrue(transfer(home, tmp, "nested/deep/value", "bad".toByteArray(), "write", oldSha).out.contains("error=stale_source"))
-        assertTrue(transfer(home, tmp, "missing-write", byteArrayOf(), "write", EMPTY).out.contains("error=stale_source"))
-        assertSuccess(transfer(home, tmp, "empty", byteArrayOf(), "write"), "write", byteArrayOf())
-        assertSuccess(transfer(home, tmp, "missing-append", "x\u0000y".toByteArray(), "append", EMPTY), "append", "x\u0000y".toByteArray())
-        assertSuccess(transfer(home, tmp, "missing-empty-append", byteArrayOf(), "append", EMPTY), "append", byteArrayOf())
-        File(home, "append").writeText("old")
-        val appended = transfer(home, tmp, "append", "+new".toByteArray(), "append", sha256Hex("old".toByteArray()))
-        assertSuccess(appended, "append", "+new".toByteArray()); assertEquals("old+new", File(home, "append").readText())
+        assertTrue(transfer(home, tmp, "nested/deep/value", "bad".toByteArray(), oldSha).out.contains("error=stale_source"))
+        assertTrue(transfer(home, tmp, "missing-write", byteArrayOf(), EMPTY).out.contains("error=stale_source"))
+        assertSuccess(transfer(home, tmp, "empty", byteArrayOf()), byteArrayOf())
     }
 
     @Test fun createOnlyAndConcurrentGuardedWritersHaveOneWinner() = withSandbox { home, tmp ->
         // Force the Android/F2FS fallback even on hosts where hard links work.
         File(home, "exists").writeText("keep")
-        assertTrue(transfer(home, tmp, "exists", "lose".toByteArray(), "write", createOnly = true).out.contains("error=already_exists"))
+        assertTrue(transfer(home, tmp, "exists", "lose".toByteArray(), createOnly = true).out.contains("error=already_exists"))
         Files.createSymbolicLink(File(home, "dangling").toPath(), File(home, "nowhere").toPath())
-        assertTrue(transfer(home, tmp, "dangling", "lose".toByteArray(), "write", createOnly = true).out.contains("error=symlink_rejected"))
+        assertTrue(transfer(home, tmp, "dangling", "lose".toByteArray(), createOnly = true).out.contains("error=symlink_rejected"))
         val forced = TERMUX_ATOMIC_WRITE_SCRIPT.replace("if ! ln -T -- \"${'$'}temp\" \"${'$'}actual_path\" 2>/dev/null; then", "if ! false; then")
         assertTrue(forced != TERMUX_ATOMIC_WRITE_SCRIPT)
         val absentId = stage(home, tmp, "fallback".toByteArray())
-        val absent = runFinalScript(home, tmp, forced, absentId, "write", "forced-absent", null, true)
+        val absent = runFinalScript(home, tmp, forced, absentId, "forced-absent", null, true)
         val fallbackSupported = absent.out.contains("operation=write")
         if (fallbackSupported) {
             assertEquals("fallback", File(home, "forced-absent").readText())
@@ -65,7 +60,7 @@ class TermuxWriteShellSimulationTest {
                 )
                 assertTrue(script != forced)
                 val id = stage(home, tmp, "blocked".toByteArray())
-                return runFinalScript(home, tmp, script, id, "write", "forced-$kind", null, true)
+                return runFinalScript(home, tmp, script, id, "forced-$kind", null, true)
             }
             val regular = racedTarget("regular", "printf keep > \"${'$'}actual_path\"")
             assertTrue(regular.out.contains("error=already_exists")); assertEquals("keep", File(home, "forced-regular").readText())
@@ -75,7 +70,7 @@ class TermuxWriteShellSimulationTest {
             assertTrue(directory.out.contains("error=already_exists")); assertTrue(File(home, "forced-directory").isDirectory)
             assertTrue(File(home, "forced-directory").listFiles().orEmpty().isEmpty())
             val id1 = stage(home, tmp, "one".toByteArray()); val id2 = stage(home, tmp, "two".toByteArray())
-            val results = listOf(startFinalScript(home, tmp, forced, id1, "write", "race", null, true), startFinalScript(home, tmp, forced, id2, "write", "race", null, true)).map(::finish)
+            val results = listOf(startFinalScript(home, tmp, forced, id1, "race", null, true), startFinalScript(home, tmp, forced, id2, "race", null, true)).map(::finish)
             assertEquals(1, results.count { it.out.contains("operation=write") }); assertEquals(1, results.count { it.out.contains("error=already_exists") })
             assertTrue(File(home, "race").readText() in setOf("one", "two"))
         } else {
@@ -85,12 +80,8 @@ class TermuxWriteShellSimulationTest {
         val brokenProbe = forced.replace("mv -nT -- \"${'$'}probe_src\" \"${'$'}probe_absent\" || return 1", "false || return 1")
         assertTrue(brokenProbe != forced)
         val brokenId = stage(home, tmp, "never".toByteArray())
-        val broken = runFinalScript(home, tmp, brokenProbe, brokenId, "write", "probe-broken", null, true)
+        val broken = runFinalScript(home, tmp, brokenProbe, brokenId, "probe-broken", null, true)
         assertTrue(broken.out.contains("error=noreplace_unsupported")); assertFalse(File(home, "probe-broken").exists())
-        File(home, "append-race").writeText("base"); val expected = sha256Hex("base".toByteArray())
-        val a = stage(home, tmp, "+A".toByteArray()); val b = stage(home, tmp, "+B".toByteArray())
-        val appends = listOf(startFinal(home, tmp, a, "append", "append-race", expected, false), startFinal(home, tmp, b, "append", "append-race", expected, false)).map(::finish)
-        assertEquals(1, appends.count { it.out.contains("operation=append") }); assertEquals(1, appends.count { it.out.contains("error=stale_source") })
     }
 
     @Test fun noContainerPublicationResistsInjectedDirectoryAndSymlinkSubstitution() = withSandbox { home, tmp ->
@@ -100,7 +91,7 @@ class TermuxWriteShellSimulationTest {
             val needle = "if [ \"${'$'}create_only\" = 1 ]; then\n        if ! ln -T"
             val script = TERMUX_ATOMIC_WRITE_SCRIPT.replace(needle, "$command\n    $needle")
             assertTrue(script != TERMUX_ATOMIC_WRITE_SCRIPT)
-            return runFinalScript(home, tmp, script, id, "write", path, null, false)
+            return runFinalScript(home, tmp, script, id, path, null, false)
         }
         val dir = File(home, "swap-dir")
         val directory = injected("swap-dir", "mkdir -- \"${'$'}actual_path\"")
@@ -121,7 +112,7 @@ class TermuxWriteShellSimulationTest {
             val id = stage(home, tmp, "new".toByteArray())
             val needle = "# Closest possible pre-publication recheck."
             val script = TERMUX_ATOMIC_WRITE_SCRIPT.replace(needle, "$command\n    $needle")
-            return runFinalScript(home, tmp, script, id, "write", "source", sha256Hex("same".toByteArray()), false)
+            return runFinalScript(home, tmp, script, id, "source", sha256Hex("same".toByteArray()), false)
         }
         assertTrue(mutate("chmod 400 -- \"${'$'}actual_path\"").out.contains("error=source_changed"))
         assertTrue(mutate("printf SAME > \"${'$'}actual_path\"; touch -d @${'$'}(date +%s) \"${'$'}actual_path\"").out.contains("error=source_changed"))
@@ -150,7 +141,7 @@ class TermuxWriteShellSimulationTest {
             initial?.let { File(home, path).writeText(it) }
             val id = stage(home, tmp, "payload".toByteArray()); val script = TERMUX_ATOMIC_WRITE_SCRIPT.replace(needle, replacement)
             assertTrue(script != TERMUX_ATOMIC_WRITE_SCRIPT)
-            val result = runFinalScript(home, tmp, script, id, "write", path, initial?.let { sha256Hex(it.toByteArray()) }, false)
+            val result = runFinalScript(home, tmp, script, id, path, initial?.let { sha256Hex(it.toByteArray()) }, false)
             assertFalse(File(home, ".cache/rikkahub/transfers/$id").exists())
             assertTrue(home.walkTopDown().none { it.name.startsWith(".rikkahub-write.$id.") })
             return result
@@ -166,12 +157,12 @@ class TermuxWriteShellSimulationTest {
         assertTrue(result.code != 0)
     }
 
-    private fun assertSuccess(result: Result, operation: String, content: ByteArray) {
-        assertEquals("${result.out}\n${result.err}", 0, result.code); assertTrue(result.out.contains("operation=$operation"))
+    private fun assertSuccess(result: Result, content: ByteArray) {
+        assertEquals("${result.out}\n${result.err}", 0, result.code); assertTrue(result.out.contains("operation=write"))
         assertTrue(result.out.contains("content_sha256=${sha256Hex(content)}")); assertTrue(result.out.contains("bytes_written=${content.size}"))
     }
-    private fun transfer(home: File, tmp: File, path: String, raw: ByteArray, operation: String, expected: String? = null, createOnly: Boolean = false): Result =
-        runFinalScript(home, tmp, TERMUX_ATOMIC_WRITE_SCRIPT, stage(home, tmp, raw), operation, path, expected, createOnly)
+    private fun transfer(home: File, tmp: File, path: String, raw: ByteArray, expected: String? = null, createOnly: Boolean = false): Result =
+        runFinalScript(home, tmp, TERMUX_ATOMIC_WRITE_SCRIPT, stage(home, tmp, raw), path, expected, createOnly)
     private fun stage(home: File, tmp: File, raw: ByteArray): String {
         val id = UUID.randomUUID().toString(); val count = maxOf(1, (raw.size + TERMUX_TRANSFER_CHUNK_BYTES - 1) / TERMUX_TRANSFER_CHUNK_BYTES); val sha = sha256Hex(raw)
         repeat(count) { index ->
@@ -181,12 +172,10 @@ class TermuxWriteShellSimulationTest {
         }
         return id
     }
-    private fun startFinalScript(home: File, tmp: File, script: String, id: String, operation: String, path: String, expected: String?, createOnly: Boolean): Process =
-        process(home, tmp, script, id, operation, b64(path), expected ?: "-", if (createOnly) "1" else "0", sha256Hex(path.toByteArray())).start()
-    private fun startFinal(home: File, tmp: File, id: String, operation: String, path: String, expected: String?, createOnly: Boolean): Process =
-        process(home, tmp, TERMUX_ATOMIC_WRITE_SCRIPT, id, operation, b64(path), expected ?: "-", if (createOnly) "1" else "0", sha256Hex(path.toByteArray())).start()
-    private fun runFinalScript(home: File, tmp: File, script: String, id: String, operation: String, path: String, expected: String?, createOnly: Boolean): Result =
-        run(home, tmp, script, id, operation, b64(path), expected ?: "-", if (createOnly) "1" else "0", sha256Hex(path.toByteArray()))
+    private fun startFinalScript(home: File, tmp: File, script: String, id: String, path: String, expected: String?, createOnly: Boolean): Process =
+        process(home, tmp, script, id, b64(path), expected ?: "-", if (createOnly) "1" else "0", sha256Hex(path.toByteArray())).start()
+    private fun runFinalScript(home: File, tmp: File, script: String, id: String, path: String, expected: String?, createOnly: Boolean): Result =
+        run(home, tmp, script, id, b64(path), expected ?: "-", if (createOnly) "1" else "0", sha256Hex(path.toByteArray()))
     private fun finish(process: Process): Result { assertTrue(process.waitFor(30, TimeUnit.SECONDS)); return Result(process.exitValue(), process.inputStream.bufferedReader().readText(), process.errorStream.bufferedReader().readText()) }
     private fun run(home: File, tmp: File, script: String, vararg args: String): Result = finish(process(home, tmp, script, *args).start())
     private fun process(home: File, tmp: File, script: String, vararg args: String) = ProcessBuilder("/bin/bash", "-c", script, "rikka-test", *args).apply { environment()["HOME"] = home.absolutePath; environment()["TMPDIR"] = tmp.absolutePath }

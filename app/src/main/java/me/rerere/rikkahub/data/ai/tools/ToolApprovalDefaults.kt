@@ -33,7 +33,6 @@ object ToolApprovalDefaults {
         "termux_read_file_bytes",
         "termux_read_files",
         "termux_write_file",
-        "termux_append_file",
         "termux_edit_file",
         "termux_edit_files",
         "termux_session_start",  // opens a persistent interactive shell; the meaningful consent moment

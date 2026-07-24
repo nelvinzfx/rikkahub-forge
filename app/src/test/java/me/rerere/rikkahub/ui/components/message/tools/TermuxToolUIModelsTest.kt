@@ -18,7 +18,6 @@ class TermuxToolUIModelsTest {
     @Test
     fun registryResolvesAllNativeTermuxMutationRenderers() {
         assertEquals("termux_write_file", ToolUIRegistry.resolve("termux_write_file").toolName)
-        assertEquals("termux_append_file", ToolUIRegistry.resolve("termux_append_file").toolName)
         assertEquals("termux_edit_file", ToolUIRegistry.resolve("termux_edit_file").toolName)
         assertEquals("termux_edit_files", ToolUIRegistry.resolve("termux_edit_files").toolName)
     }
@@ -30,7 +29,6 @@ class TermuxToolUIModelsTest {
         val input = json("""{"path":"$path","content":"$text"}""")
         val pending = parseTermuxWriteUIModel("termux_write_file", input, null)!!
         assertEquals(text, pending.content)
-        assertFalse(pending.append)
         assertTrue(pending.badges.isEmpty())
 
         val applied = parseTermuxWriteUIModel(

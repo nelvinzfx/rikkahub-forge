@@ -219,14 +219,6 @@ class HardlineCommandGuardTest {
         assertNotNull("expected hardline match", reason)
     }
 
-    @Test fun `termux executable+arguments form blocks shutdown`() {
-        val reason = HardlineCommandGuard.checkTool(
-            "termux_run_command",
-            """{"executable":"/usr/sbin/shutdown","arguments":["-h","now"]}"""
-        )
-        assertNotNull("expected hardline match in executable form", reason)
-    }
-
     @Test fun `ssh_exec blocks rm -rf root`() {
         val reason = HardlineCommandGuard.checkTool(
             "ssh_exec",

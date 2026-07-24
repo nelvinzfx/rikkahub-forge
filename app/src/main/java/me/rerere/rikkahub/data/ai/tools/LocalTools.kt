@@ -840,7 +840,6 @@ class LocalTools(
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileBytesTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFilesTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxWriteFileTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxAppendFileTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxEditFileTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxEditFilesTool(context))
             // Persistent interactive (tmux-backed) sessions: ssh-with-prompts, sudo, REPLs,

@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -158,17 +157,8 @@ object HardlineCommandGuard {
      */
     fun checkToolParsed(toolName: String, input: JsonObject): String? {
         return when {
-            toolName == "termux_run_command" -> {
-                val cmd = input["command"]?.jsonPrimitive?.contentOrNull
-                checkCommand(cmd)?.let { return it }
-                val exe = input["executable"]?.jsonPrimitive?.contentOrNull
-                val args = input["arguments"]?.jsonArray
-                    ?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                    ?.joinToString(" ")
-                if (exe != null || args != null) {
-                    checkCommand("${exe.orEmpty()} ${args.orEmpty()}")
-                } else null
-            }
+            toolName == "termux_run_command" ->
+                checkCommand(input["command"]?.jsonPrimitive?.contentOrNull)
             toolName == "termux_session_start" ->
                 checkCommand(input["command"]?.jsonPrimitive?.contentOrNull)
             toolName == "termux_session_send" ->
