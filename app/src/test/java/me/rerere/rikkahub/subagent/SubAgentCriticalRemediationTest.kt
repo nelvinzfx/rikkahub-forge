@@ -12,7 +12,7 @@ class SubAgentCriticalRemediationTest {
         id: String,
         assistant: String = "assistant-a",
         parentChat: String? = "chat-a",
-        ownerChat: String? = "chat-a",
+        ownerChat: String? = parentChat,
         parentRun: String? = null,
         rootRun: String? = null,
         conversation: String? = null,
