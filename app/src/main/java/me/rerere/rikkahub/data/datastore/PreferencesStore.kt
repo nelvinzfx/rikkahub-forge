@@ -743,6 +743,7 @@ data class DisplaySetting(
     val enableLiveUpdateNotification: Boolean = false,
     val codeBlockAutoWrap: Boolean = false,
     val codeBlockAutoCollapse: Boolean = false,
+    val autoCollapseToolSteps: Boolean = true,
     val showLineNumbers: Boolean = false,
     val ttsOnlyReadQuoted: Boolean = false,
     val autoPlayTTSAfterGeneration: Boolean = false,

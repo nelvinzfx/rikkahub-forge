@@ -142,12 +142,21 @@ internal fun parseTermuxWriteUIModel(
     toolName: String,
     arguments: JsonElement,
     content: JsonElement?,
+    rawInput: String? = null,
 ): TermuxWriteUIModel? {
     if (toolName !in WRITE_TOOL_NAMES) return null
     parseEarlyTermuxWriteError(toolName, arguments, content)?.let { return it }
-    val input = arguments as? JsonObject ?: return null
-    val path = input.strictString("path") ?: return null
-    val text = input.strictString("content") ?: return null
+    val input = arguments as? JsonObject
+    // While the tool call is still streaming, arguments fail strict JSON parsing.
+    // Fall back to tolerant extraction from the raw input text so the preview and
+    // its line counts update live; never used once a result envelope exists.
+    val streamFallback = rawInput.takeIf { content == null }
+    val path = input?.strictString("path")
+        ?: streamFallback?.let { extractPartialJsonString(it, "path") }
+        ?: return null
+    val text = input?.strictString("content")
+        ?: streamFallback?.let { extractPartialJsonString(it, "content") }
+        ?: return null
     val append = toolName == "termux_append_file"
     if (content == null) {
         return TermuxWriteUIModel(
@@ -693,7 +702,7 @@ internal fun boundedJoinedPreviews(
     return BoundedDiffPreviews(previews, anyTruncated)
 }
 
-private fun physicalLineCount(text: String): Int {
+internal fun physicalLineCount(text: String): Int {
     if (text.isEmpty()) return 0
     var lines = 1
     var index = 0
@@ -708,6 +717,63 @@ private fun physicalLineCount(text: String): Int {
         index++
     }
     return lines
+}
+
+/**
+ * Tolerant extractor for a top-level string field inside possibly-truncated JSON
+ * text. Returns the decoded value-so-far: complete when the closing quote is
+ * present, partial when the stream ends mid-value. Used ONLY for live UI
+ * previews of streaming tool input; never for correctness-sensitive parsing.
+ */
+internal fun extractPartialJsonString(raw: String, key: String): String? {
+    val quotedKey = "\"$key\""
+    var searchFrom = 0
+    while (searchFrom < raw.length) {
+        val keyIndex = raw.indexOf(quotedKey, searchFrom)
+        if (keyIndex < 0) return null
+        var i = keyIndex + quotedKey.length
+        while (i < raw.length && raw[i].isWhitespace()) i++
+        if (i >= raw.length) return null
+        if (raw[i] != ':') {
+            searchFrom = keyIndex + quotedKey.length
+            continue
+        }
+        i++
+        while (i < raw.length && raw[i].isWhitespace()) i++
+        if (i >= raw.length || raw[i] != '"') {
+            searchFrom = keyIndex + quotedKey.length
+            continue
+        }
+        i++
+        val out = StringBuilder()
+        while (i < raw.length) {
+            when (val c = raw[i]) {
+                '\\' -> {
+                    if (i + 1 >= raw.length) return out.toString()
+                    when (raw[i + 1]) {
+                        '"', '\\', '/' -> { out.append(raw[i + 1]); i += 2 }
+                        'n' -> { out.append('\n'); i += 2 }
+                        't' -> { out.append('\t'); i += 2 }
+                        'r' -> { out.append('\r'); i += 2 }
+                        'b' -> { out.append('\b'); i += 2 }
+                        'f' -> { out.append('\u000C'); i += 2 }
+                        'u' -> {
+                            if (i + 6 > raw.length) return out.toString()
+                            val code = raw.substring(i + 2, i + 6).toIntOrNull(16)
+                                ?: return out.toString()
+                            out.append(code.toChar())
+                            i += 6
+                        }
+                        else -> return out.toString()
+                    }
+                }
+                '"' -> return out.toString()
+                else -> { out.append(c); i++ }
+            }
+        }
+        return out.toString()
+    }
+    return null
 }
 
 private fun sha256(bytes: ByteArray): String =

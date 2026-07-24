@@ -48,6 +48,9 @@ data class ToolUIContext(
     val loading: Boolean,
 )
 
+/** 步骤完成状态, 用于标题行的成功/失败图标; NONE 时回退到工具图标 */
+enum class ToolStepStatus { NONE, SUCCESS, ERROR }
+
 /**
  * 单个工具的 UI 渲染器
  *
@@ -65,6 +68,14 @@ interface ToolUIRenderer {
     @Composable
     fun title(context: ToolUIContext): String =
         stringResource(R.string.chat_message_tool_call_generic, context.tool.toolName)
+
+    /** 完成状态图标; 默认 NONE (显示工具图标) */
+    fun status(context: ToolUIContext): ToolStepStatus = ToolStepStatus.NONE
+
+    /** 标题右侧附加内容 (折叠后也可见), 例如 diff 的 +N/-N 统计 */
+    @Composable
+    fun LabelExtras(context: ToolUIContext) {
+    }
 
     /** 步骤展开时是否显示内联摘要 */
     fun hasSummary(context: ToolUIContext): Boolean = false

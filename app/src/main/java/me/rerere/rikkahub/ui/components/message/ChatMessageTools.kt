@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -52,8 +53,11 @@ import me.rerere.hugeicons.stroke.BubbleChatQuestion
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick01
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.ui.components.message.tools.ToolStepStatus
 import me.rerere.rikkahub.ui.components.message.tools.ToolUIContext
 import me.rerere.rikkahub.ui.components.message.tools.ToolUIRegistry
+import me.rerere.rikkahub.ui.components.richtext.DiffAddedColor
+import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
 import me.rerere.rikkahub.ui.components.ui.DotLoading
@@ -106,6 +110,15 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     var expanded by remember { mutableStateOf(true) }
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isDenied = tool.approvalState is ToolApprovalState.Denied
+
+    // Auto-collapse once the tool finishes (setting-gated). Fires only on the
+    // loading/executed edge, so a manual re-expand afterwards is not overridden.
+    val displaySetting = LocalSettings.current.displaySetting
+    LaunchedEffect(loading, tool.isExecuted) {
+        if (displaySetting.autoCollapseToolSteps && !loading && tool.isExecuted && !isPending) {
+            expanded = false
+        }
+    }
     val images = tool.output.filterIsInstance<UIMessagePart.Image>()
 
     // Summary detection is delegated to the registered renderer; image output and
@@ -121,23 +134,45 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                     size = 10.dp
                 )
             } else {
-                Icon(
-                    imageVector = renderer.icon(context),
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = LocalContentColor.current.copy(alpha = 0.7f)
-                )
+                when (if (isDenied) ToolStepStatus.ERROR else renderer.status(context)) {
+                    ToolStepStatus.SUCCESS -> Icon(
+                        imageVector = HugeIcons.Tick01,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = DiffAddedColor,
+                    )
+                    ToolStepStatus.ERROR -> Icon(
+                        imageVector = HugeIcons.Cancel01,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    ToolStepStatus.NONE -> Icon(
+                        imageVector = renderer.icon(context),
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = LocalContentColor.current.copy(alpha = 0.7f)
+                    )
+                }
             }
         },
         label = {
-            Text(
-                text = renderer.title(context),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.shimmer(isLoading = loading),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = renderer.title(context),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .shimmer(isLoading = loading),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                renderer.LabelExtras(context)
+            }
         },
         extra = if (isPending && onToolApproval != null) {
             {

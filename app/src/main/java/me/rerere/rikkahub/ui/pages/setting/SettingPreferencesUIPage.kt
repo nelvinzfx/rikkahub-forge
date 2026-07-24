@@ -185,6 +185,18 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
                         },
                     )
                     item(
+                        headlineContent = { Text(stringResource(R.string.setting_display_page_auto_collapse_tools_title)) },
+                        supportingContent = { Text(stringResource(R.string.setting_display_page_auto_collapse_tools_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = displaySetting.autoCollapseToolSteps,
+                                onCheckedChange = {
+                                    updateDisplaySetting(displaySetting.copy(autoCollapseToolSteps = it))
+                                }
+                            )
+                        },
+                    )
+                    item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_chat_list_model_icon_title)) },
                         supportingContent = { Text(stringResource(R.string.setting_display_page_chat_list_model_icon_desc)) },
                         trailingContent = {

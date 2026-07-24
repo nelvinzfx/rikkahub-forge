@@ -324,4 +324,32 @@ class TermuxToolUIModelsTest {
         assertTrue(bounded.truncated)
         assertEquals(400, bounded.text.lines().size)
     }
+
+    @Test
+    fun writeModelStreamsPartialContentFromRawInput() {
+        val raw = "{\"path\":\"src/Report.md\",\"content\":\"# Title\\nline two\\nline thr"
+        val model = parseTermuxWriteUIModel(
+            "termux_write_file",
+            json("{}"),
+            null,
+            rawInput = raw,
+        )!!
+        assertEquals("src/Report.md", model.path)
+        assertEquals("# Title\nline two\nline thr", model.content)
+        assertTrue(model.badges.isEmpty())
+    }
+
+    @Test
+    fun partialJsonStringExtractionDecodesEscapesAndToleratesTruncation() {
+        assertEquals(
+            "a\nb\"c",
+            extractPartialJsonString("{\"content\":\"a\\nb\\\"c\",\"x\":1}", "content"),
+        )
+        assertEquals("partial", extractPartialJsonString("{\"content\":\"partial", "content"))
+        assertEquals("", extractPartialJsonString("{\"content\":\"", "content"))
+        assertNull(extractPartialJsonString("{\"other\":1}", "content"))
+        assertEquals("€x", extractPartialJsonString("{\"content\":\"\\u20acx\"}", "content"))
+        assertEquals("ab", extractPartialJsonString("{\"content\":\"ab\\u20", "content"))
+        assertEquals("v", extractPartialJsonString("{\"a\":1,\"content\":\"v\"}", "content"))
+    }
 }

@@ -1149,7 +1149,9 @@
   <string name="setting_model_page_prompt_compress">Context Compression</string>
   <string name="setting_display_page_bubble_opacity_title">Bubble Opacity</string>
   <string name="setting_display_page_outline_blocks_title">Outline Blocks</string>
+  <string name="setting_display_page_auto_collapse_tools_title">Auto-collapse tool steps</string>
   <string name="setting_display_page_outline_blocks_desc">Show a thin outline around reasoning and tool blocks. Off: no outline, no fill. Code blocks and tables always have an outline</string>
+  <string name="setting_display_page_auto_collapse_tools_desc">Collapse each tool card automatically when it finishes; tap to expand again</string>
   <string name="setting_provider_page_include_history_reasoning">Include History Reasoning</string>
 
   <!-- fork (agent) strings preserved from merge -->
@@ -1798,6 +1800,7 @@
   <string name="tool_ui_termux_append_file_default">Append file</string>
   <string name="tool_ui_termux_edit_files">Edit %d files</string>
   <string name="tool_ui_termux_more_files">+%d more files</string>
+  <string name="tool_ui_termux_preview_more">… (%1$d more lines, %2$d total, view details to expand)</string>
   <string name="tool_ui_termux_applied">applied</string>
   <string name="tool_ui_termux_dry_run">dry run</string>
   <string name="tool_ui_termux_no_change">no change</string>
