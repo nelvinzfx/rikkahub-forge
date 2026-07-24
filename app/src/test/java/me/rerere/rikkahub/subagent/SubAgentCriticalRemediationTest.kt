@@ -220,7 +220,7 @@ class SubAgentCriticalRemediationTest {
                 assertTrue(registry.transitionTerminal("quiescence", SubAgentStatus.SUCCEEDED) { it })
                 assertTrue(registry.hasActiveOwnerRuns("chat-a"))
 
-                val waiter = kotlinx.coroutines.async { registry.awaitOwnerQuiescent("chat-a") }
+                val waiter = async { registry.awaitOwnerQuiescent("chat-a") }
                 kotlinx.coroutines.yield()
                 assertFalse(waiter.isCompleted)
                 registry.clearExecution("quiescence")
