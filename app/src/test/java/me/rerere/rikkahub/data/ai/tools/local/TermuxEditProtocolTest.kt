@@ -92,7 +92,7 @@ class TermuxEditProtocolTest {
         val text = requireNotNull(diff.text)
 
         assertTrue(diff.omitted)
-        assertTrue(text.contains("20,000-line fallback limit"))
+        assertTrue(text.contains("20000-line fallback limit"))
         assertTrue(text.length <= TERMUX_EDIT_DIFF_MAX_CHARS)
     }
 
