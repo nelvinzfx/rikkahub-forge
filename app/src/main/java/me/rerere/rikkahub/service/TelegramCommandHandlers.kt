@@ -156,7 +156,17 @@ internal suspend fun TelegramBotService.handleResetCommand(chatId: Long) {
     val existing = chatRepo.getByChatId(chatId)
     if (existing != null) {
         runCatching { Uuid.parse(existing.conversationId) }.getOrNull()?.let { convId ->
-            runCatching { chatService.awaitStopGenerationAndSubAgents(convId) }
+            try {
+                chatService.awaitStopGenerationAndSubAgents(convId)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                Log.e(TAG, "handleResetCommand: stop quiescence failed; refusing to drop session", failure)
+                runCatching {
+                    client.sendMessage(chatId, "⚠️ Could not finish stopping the previous conversation. /new was aborted; try again.")
+                }
+                return
+            }
             // This conversation id is permanently discarded by /new, so its stop fence
             // no longer protects a future epoch and can be released after verified quiescence.
             me.rerere.rikkahub.subagent.SubAgentRegistry

@@ -294,6 +294,9 @@ class SubAgentEngine(
             } finally {
                 withContext(NonCancellable) {
                     finalizeStartupCancellation(runId)
+                    // executeRun clears after its own final cleanup; this also covers a
+                    // pre-start cancellation where executeRun never established its finally.
+                    registry.clearExecution(runId)
                 }
             }
         }
@@ -793,9 +796,6 @@ class SubAgentEngine(
      */
     private suspend fun notifyParentIfBackground(parentChatId: String?, run: SubAgentRun?) {
         if (parentChatId == null || run == null || !run.runInBackground) return
-        // A parent stop fence suppresses completion wakeups from cancelled descendants;
-        // otherwise sendMessageIfIdle would start a fresh parent generation after /stop.
-        if (registry.isOwnerStopping(parentChatId)) return
         val parentUuid = runCatching { Uuid.parse(parentChatId) }.getOrNull() ?: return
         if (HeadlessConversations.isHeadless(parentUuid)) return
 
@@ -816,9 +816,14 @@ class SubAgentEngine(
         // notification rather than interrupting a human.
         runCatching {
             withTimeoutOrNull(5 * 60_000L) {
-                while (!chatService.sendMessageIfIdle(parentUuid, listOf(UIMessagePart.Text(message)))) {
+                while (true) {
+                    val sent = registry.runIfOwnerActive(parentChatId) {
+                        chatService.sendMessageIfIdle(parentUuid, listOf(UIMessagePart.Text(message)))
+                    }
+                    if (sent) break
+                    if (registry.isOwnerStopping(parentChatId)) return@withTimeoutOrNull Unit
                     chatService.getGenerationJobStateFlow(parentUuid).first { it == null }
-                    Unit
+                    kotlinx.coroutines.delay(50L)
                 }
                 Unit
             }

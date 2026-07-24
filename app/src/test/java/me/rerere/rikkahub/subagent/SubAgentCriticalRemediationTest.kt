@@ -211,6 +211,67 @@ class SubAgentCriticalRemediationTest {
     }
 
     @Test
+    fun `owner quiescence follows execution completion after terminal status`() =
+        kotlinx.coroutines.runBlocking {
+            val registry = SubAgentRegistry()
+            val handle = SubAgentExecutionHandle()
+            registry.addPending(run("quiescence"), handle)
+            assertTrue(registry.transitionTerminal("quiescence", SubAgentStatus.SUCCEEDED) { it })
+            assertTrue(registry.hasActiveOwnerRuns("chat-a"))
+
+            val waiter = kotlinx.coroutines.async { registry.awaitOwnerQuiescent("chat-a") }
+            kotlinx.coroutines.yield()
+            assertFalse(waiter.isCompleted)
+            registry.clearExecution("quiescence")
+            waiter.await()
+            assertFalse(registry.hasActiveOwnerRuns("chat-a"))
+        }
+
+    @Test
+    fun `atomic owner guard blocks wake action after stop fence`() {
+        val registry = SubAgentRegistry()
+        var invoked = false
+        assertTrue(registry.runIfOwnerActive("chat-a") { invoked = true; true })
+        assertTrue(invoked)
+        registry.cancelAllForParent("chat-a")
+        invoked = false
+        assertFalse(registry.runIfOwnerActive("chat-a") { invoked = true; true })
+        assertFalse(invoked)
+    }
+
+    @Test
+    fun `parent stop epoch absorbs repeated queued jobs before close`() =
+        kotlinx.coroutines.runBlocking {
+            val epoch = SubAgentParentStopEpoch()
+            val first = Job()
+            assertTrue(epoch.addAndCancel(first))
+            val firstSnapshot = epoch.snapshot()
+            val second = Job()
+            assertTrue(epoch.addAndCancel(second))
+            assertFalse(epoch.tryClose(firstSnapshot.revision))
+            first.join()
+            second.join()
+            assertTrue(epoch.tryClose(epoch.snapshot().revision))
+            epoch.complete()
+            epoch.completion.await()
+        }
+
+    @Test
+    fun `closed epoch rejects job so caller can migrate it to a fresh epoch`() =
+        kotlinx.coroutines.runBlocking {
+            val closed = SubAgentParentStopEpoch()
+            assertTrue(closed.tryClose(closed.snapshot().revision))
+            val queued = Job()
+            assertFalse(closed.addAndCancel(queued))
+            assertFalse(queued.isCancelled)
+
+            val fresh = SubAgentParentStopEpoch()
+            assertTrue(fresh.addAndCancel(queued))
+            assertTrue(queued.isCancelled)
+            queued.join()
+        }
+
+    @Test
     fun `owner remains active while any child is stopping`() {
         val registry = SubAgentRegistry()
         val handle = SubAgentExecutionHandle()
@@ -218,6 +279,8 @@ class SubAgentCriticalRemediationTest {
         assertTrue(registry.requestCancel("stopping-owner"))
         assertTrue(registry.hasActiveOwnerRuns("chat-a"))
         assertTrue(registry.transitionTerminal("stopping-owner", SubAgentStatus.CANCELLED) { it })
+        assertTrue(registry.hasActiveOwnerRuns("chat-a"))
+        registry.clearExecution("stopping-owner")
         assertFalse(registry.hasActiveOwnerRuns("chat-a"))
     }
 

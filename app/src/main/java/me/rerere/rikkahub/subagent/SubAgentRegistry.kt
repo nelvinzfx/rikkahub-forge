@@ -1,9 +1,9 @@
 package me.rerere.rikkahub.subagent
 
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
@@ -65,6 +65,9 @@ class SubAgentRegistry {
     private val _runs = MutableStateFlow<Map<String, SubAgentRun>>(emptyMap())
     val runs: StateFlow<Map<String, SubAgentRun>> = _runs
     private val activeExecutions = ConcurrentHashMap<String, SubAgentExecutionHandle>()
+    // Completes only after the supervisor has finished notification, headless/tracker cleanup,
+    // and execution-handle release. Terminal status alone is not execution quiescence.
+    private val executionCompletions = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
     // Owner stop fence: once a parent stop begins, no new worker owned by that chat may
     // enter until ChatService starts the next generation epoch and clears the fence.
@@ -73,10 +76,14 @@ class SubAgentRegistry {
     fun addPending(run: SubAgentRun, handle: SubAgentExecutionHandle? = null): Boolean = synchronized(lock) {
         if (run.ownerChatId != null && run.ownerChatId in stoppingOwners) return@synchronized false
         if (run.conversationId != null && _runs.value.values.any {
-                it.conversationId == run.conversationId && !it.status.isTerminal()
+                it.conversationId == run.conversationId &&
+                    (!it.status.isTerminal() || activeExecutions.containsKey(it.id))
             }) return@synchronized false
         _runs.value = pruneIfNeeded(_runs.value) + (run.id to run)
-        if (handle != null) activeExecutions[run.id] = handle
+        if (handle != null) {
+            activeExecutions[run.id] = handle
+            executionCompletions[run.id] = CompletableDeferred()
+        }
         true
     }
 
@@ -110,7 +117,6 @@ class SubAgentRegistry {
         val requestedTerminal = activeExecutions[id]?.stopReason()?.terminalStatus
         if (requestedTerminal != null && status != requestedTerminal) return@synchronized false
         _runs.value = _runs.value + (id to transform(existing).copy(status = status))
-        activeExecutions.remove(id)
         true
     }
 
@@ -174,7 +180,10 @@ class SubAgentRegistry {
     fun globalActiveCount(): Int = _runs.value.values.count { !it.status.isTerminal() }
 
     fun hasActiveConversation(conversationId: String): Boolean =
-        _runs.value.values.any { it.conversationId == conversationId && !it.status.isTerminal() }
+        _runs.value.values.any {
+            it.conversationId == conversationId &&
+                (!it.status.isTerminal() || activeExecutions.containsKey(it.id))
+        }
 
     fun requestCancel(id: String): Boolean = synchronized(lock) {
         val run = _runs.value[id] ?: return@synchronized false
@@ -205,6 +214,11 @@ class SubAgentRegistry {
     fun isOwnerStopping(ownerChatId: String?): Boolean =
         ownerChatId != null && ownerChatId in stoppingOwners
 
+    fun runIfOwnerActive(ownerChatId: String, action: () -> Boolean): Boolean =
+        synchronized(lock) {
+            if (ownerChatId in stoppingOwners) false else action()
+        }
+
     fun clearOwnerStopFence(ownerChatId: String) {
         stoppingOwners.remove(ownerChatId)
     }
@@ -220,16 +234,22 @@ class SubAgentRegistry {
     }
 
     fun hasActiveOwnerRuns(ownerChatId: String): Boolean =
-        _runs.value.values.any { it.ownerChatId == ownerChatId && !it.status.isTerminal() }
+        _runs.value.values.any {
+            it.ownerChatId == ownerChatId && activeExecutions.containsKey(it.id)
+        }
 
     suspend fun awaitOwnerQuiescent(ownerChatId: String) {
-        runs.first { snapshot ->
-            snapshot.values.none { it.ownerChatId == ownerChatId && !it.status.isTerminal() }
+        val completions = synchronized(lock) {
+            _runs.value.values
+                .filter { it.ownerChatId == ownerChatId && activeExecutions.containsKey(it.id) }
+                .mapNotNull { executionCompletions[it.id] }
         }
+        completions.forEach { it.await() }
     }
 
     fun clearExecution(id: String) {
         activeExecutions.remove(id)
+        executionCompletions.remove(id)?.complete(Unit)
     }
 
     fun cancelSubtree(rootRunId: String): Int {
@@ -274,7 +294,8 @@ class SubAgentRegistry {
 
     private fun pruneIfNeeded(current: Map<String, SubAgentRun>): Map<String, SubAgentRun> {
         if (current.size < SubAgentDefaults.REGISTRY_LRU_CAP) return current
-        val id = current.values.filter { it.status.isTerminal() }
+        val id = current.values
+            .filter { it.status.isTerminal() && !activeExecutions.containsKey(it.id) }
             .minByOrNull { it.finishedAtMs ?: it.startedAtMs }?.id
         return if (id == null) current else current - id
     }

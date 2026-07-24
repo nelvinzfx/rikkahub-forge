@@ -1,6 +1,8 @@
 package me.rerere.rikkahub.subagent
 
 import kotlinx.serialization.Serializable
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlin.uuid.Uuid
 
 /**
@@ -152,6 +154,52 @@ data class SubAgentRequest(
 enum class SubAgentStopReason(val terminalStatus: SubAgentStatus) {
     CANCELLED(SubAgentStatus.CANCELLED),
     TIMED_OUT(SubAgentStatus.TIMED_OUT),
+}
+
+internal data class SubAgentStopEpochSnapshot(
+    val revision: Long,
+    val jobs: List<Job>,
+)
+
+/**
+ * Linearizable parent-stop epoch. Repeated stop requests can add a newly queued parent job;
+ * the cleaner closes the epoch only if no job was added since its last snapshot.
+ */
+internal class SubAgentParentStopEpoch {
+    private val lock = Any()
+    private val jobs = linkedSetOf<Job>()
+    private var revision = 0L
+    private var closed = false
+    val completion = CompletableDeferred<Unit>()
+
+    fun addAndCancel(job: Job?): Boolean {
+        val accepted = synchronized(lock) {
+            if (closed) return@synchronized false
+            if (job != null && jobs.add(job)) revision++
+            true
+        }
+        if (accepted) job?.cancel()
+        return accepted
+    }
+
+    fun snapshot(): SubAgentStopEpochSnapshot = synchronized(lock) {
+        SubAgentStopEpochSnapshot(revision, jobs.toList())
+    }
+
+    fun tryClose(expectedRevision: Long): Boolean = synchronized(lock) {
+        if (closed || revision != expectedRevision) return@synchronized false
+        closed = true
+        true
+    }
+
+    fun complete() {
+        completion.complete(Unit)
+    }
+
+    fun abort() {
+        snapshot().jobs.forEach { it.cancel() }
+        completion.cancel()
+    }
 }
 
 internal object SubAgentTerminalCleanup {

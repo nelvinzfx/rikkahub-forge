@@ -268,11 +268,11 @@ class ChatService(
     }
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
-    // Generation jobs detached by explicit Stop remain owned here until quiescent. A new
-    // turn waits for this job before clearing the sub-agent owner stop fence.
-    private val stoppingGenerationJobs = ConcurrentHashMap<Uuid, Job>()
-    private val stoppingGenerationCleanups =
-        ConcurrentHashMap<Uuid, kotlinx.coroutines.CompletableDeferred<Unit>>()
+    // Guarded by parentStopEpochLock. One epoch absorbs repeated stop requests and all
+    // parent jobs detached by them until the full parent+worker tree is quiescent.
+    private val parentStopEpochLock = Any()
+    private val parentStopEpochs =
+        mutableMapOf<Uuid, me.rerere.rikkahub.subagent.SubAgentParentStopEpoch>()
     private val _sessionsVersion = MutableStateFlow(0L)
 
     /**
@@ -362,10 +362,10 @@ class ChatService(
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
         sessions.values.forEach { it.cleanup() }
         sessions.clear()
-        stoppingGenerationJobs.values.forEach { it.cancel() }
-        stoppingGenerationJobs.clear()
-        stoppingGenerationCleanups.values.forEach { it.cancel() }
-        stoppingGenerationCleanups.clear()
+        synchronized(parentStopEpochLock) {
+            parentStopEpochs.values.forEach { it.abort() }
+            parentStopEpochs.clear()
+        }
         sessionMutexes.clear()
         compactionMutexes.clear()
     }.onFailure {
@@ -641,16 +641,7 @@ class ChatService(
         val job = appScope.launch {
             try {
                 runCatching { previousJob?.join() }
-                val stopGate = stoppingGenerationCleanups[conversationId]
-                stopGate?.await()
-                if (stopGate != null) stoppingGenerationCleanups.remove(conversationId, stopGate)
-                val detachedJob = stoppingGenerationJobs[conversationId]
-                detachedJob?.join()
-                if (detachedJob != null) stoppingGenerationJobs.remove(conversationId, detachedJob)
-                // The prior generation epoch is now quiescent; a new parent turn may spawn
-                // workers again. Clearing earlier would let a cancelled old turn race-dispatch.
-                me.rerere.rikkahub.subagent.SubAgentRegistry
-                    .clearOwnerStopFenceViaGlobalInstance(conversationId.toString())
+                awaitParentStopEpochs(conversationId)
                 // sendMessage is also called by background entry points such as sub-agent
                 // completion callbacks. The UI may have released and evicted this session
                 // while the persisted conversation still contains the full transcript.
@@ -2354,50 +2345,81 @@ class ChatService(
      * [sendMessageOwned], so this returns quickly without allowing old and new epochs to race.
      */
     fun requestStopGenerationAndSubAgents(conversationId: Uuid): Int {
-        val existing = stoppingGenerationCleanups[conversationId]
-        if (existing != null) {
-            return me.rerere.rikkahub.subagent.SubAgentRegistry
-                .cancelAllForParentViaGlobalInstance(conversationId.toString())
-        }
-        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val winner = stoppingGenerationCleanups.putIfAbsent(conversationId, gate)
-        if (winner != null) {
-            return me.rerere.rikkahub.subagent.SubAgentRegistry
-                .cancelAllForParentViaGlobalInstance(conversationId.toString())
-        }
-        val cancelled = me.rerere.rikkahub.subagent.SubAgentRegistry
-            .cancelAllForParentViaGlobalInstance(conversationId.toString())
-        val cancelledJob = detachGeneration(conversationId)
-        if (cancelledJob != null) stoppingGenerationJobs[conversationId] = cancelledJob
-        appScope.launch(NonCancellable) {
-            try {
-                cancelledJob?.join()
-                while (true) {
-                    try {
-                        finalizeStoppedGenerationState(conversationId, allowQueuedSuccessor = true)
-                        // Keep the gate closed until every owned worker has also published a
-                        // truthful terminal state. A noncooperative child remains STOPPING.
-                        me.rerere.rikkahub.subagent.SubAgentRegistry
-                            .awaitOwnerQuiescentViaGlobalInstance(conversationId.toString())
-                        break
-                    } catch (cleanupError: Throwable) {
-                        Log.w(TAG, "parent generation cleanup failed; stop gate remains closed", cleanupError)
-                        delay(1_000L)
-                    }
+        val ownerId = conversationId.toString()
+        return synchronized(parentStopEpochLock) {
+            // Fence workers before detaching the parent so no child dispatch can linearize
+            // between the snapshot and cancellation.
+            val cancelled = me.rerere.rikkahub.subagent.SubAgentRegistry
+                .cancelAllForParentViaGlobalInstance(ownerId)
+            var detached: Job? = null
+            while (true) {
+                val existing = parentStopEpochs[conversationId]
+                val epoch = existing ?: me.rerere.rikkahub.subagent.SubAgentParentStopEpoch()
+                    .also { parentStopEpochs[conversationId] = it }
+                if (detached == null) detached = detachGeneration(conversationId)
+                if (epoch.addAndCancel(detached)) {
+                    if (existing == null) launchParentStopEpoch(conversationId, ownerId, epoch)
+                    break
                 }
-            } finally {
-                if (cancelledJob != null) stoppingGenerationJobs.remove(conversationId, cancelledJob)
-                gate.complete(Unit)
-                stoppingGenerationCleanups.remove(conversationId, gate)
+                // The observed epoch closed just before this request linearized. Keep the
+                // already-detached job and add it to a fresh epoch on the next iteration.
+                parentStopEpochs.remove(conversationId, epoch)
             }
+            cancelled
         }
-        return cancelled
     }
 
     suspend fun awaitStopGenerationAndSubAgents(conversationId: Uuid): Int {
         val cancelled = requestStopGenerationAndSubAgents(conversationId)
-        stoppingGenerationCleanups[conversationId]?.await()
+        awaitParentStopEpochs(conversationId)
         return cancelled
+    }
+
+    private fun launchParentStopEpoch(
+        conversationId: Uuid,
+        ownerId: String,
+        epoch: me.rerere.rikkahub.subagent.SubAgentParentStopEpoch,
+    ) {
+        appScope.launch(NonCancellable) {
+            try {
+                while (true) {
+                    val snapshot = epoch.snapshot()
+                    snapshot.jobs.forEach { it.join() }
+                    me.rerere.rikkahub.subagent.SubAgentRegistry
+                        .awaitOwnerQuiescentViaGlobalInstance(ownerId)
+                    try {
+                        finalizeStoppedGenerationState(
+                            conversationId,
+                            allowQueuedSuccessor = true,
+                        )
+                    } catch (cleanupError: Throwable) {
+                        Log.w(TAG, "parent generation cleanup failed; stop epoch remains open", cleanupError)
+                        delay(1_000L)
+                        continue
+                    }
+                    if (epoch.tryClose(snapshot.revision)) break
+                }
+            } finally {
+                synchronized(parentStopEpochLock) {
+                    parentStopEpochs.remove(conversationId, epoch)
+                }
+                epoch.complete()
+            }
+        }
+    }
+
+    private suspend fun awaitParentStopEpochs(conversationId: Uuid) {
+        while (true) {
+            val epoch = synchronized(parentStopEpochLock) { parentStopEpochs[conversationId] }
+                ?: break
+            epoch.completion.await()
+        }
+        synchronized(parentStopEpochLock) {
+            if (parentStopEpochs[conversationId] == null) {
+                me.rerere.rikkahub.subagent.SubAgentRegistry
+                    .clearOwnerStopFenceViaGlobalInstance(conversationId.toString())
+            }
+        }
     }
 
     private fun detachGeneration(conversationId: Uuid): Job? =
@@ -2432,14 +2454,9 @@ class ChatService(
     }
 
     // Internal worker cleanup seam. Parent UI/Telegram/web stops use
-    // requestStopGenerationAndSubAgents so they get an epoch fence and detached-job gate.
+    // requestStopGenerationAndSubAgents so they get a linearizable parent stop epoch.
     internal suspend fun stopGeneration(conversationId: Uuid) {
-        val cancelledJob = detachGeneration(conversationId)
-        if (cancelledJob != null) {
-            stoppingGenerationJobs[conversationId] = cancelledJob
-            cancelledJob.join()
-            stoppingGenerationJobs.remove(conversationId, cancelledJob)
-        }
+        detachGeneration(conversationId)?.join()
         finalizeStoppedGenerationState(conversationId)
     }
 }
