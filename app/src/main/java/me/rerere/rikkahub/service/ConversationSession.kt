@@ -89,8 +89,10 @@ class ConversationSession(
     fun trySetJobIfIdle(job: Job): Boolean {
         while (true) {
             val current = _generationJob.value
-            if (current?.isActive == true) return false
-            if (_generationJob.compareAndSet(current, job)) {
+            // A lazy claimed job is NEW (isActive=false) until start(), yet already owns
+            // the slot. Only a genuinely null slot is idle; completion callbacks clear it.
+            if (current != null) return false
+            if (_generationJob.compareAndSet(null, job)) {
                 watchJob(job)
                 return true
             }

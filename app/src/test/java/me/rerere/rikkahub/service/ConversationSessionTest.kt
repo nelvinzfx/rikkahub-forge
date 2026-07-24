@@ -88,6 +88,25 @@ class ConversationSessionTest {
     }
 
     @Test
+    fun `lazy claimant owns slot before start`() = runBlocking {
+        val id = Uuid.random()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = ConversationSession(id, Conversation.ofId(id), scope) {}
+        val lazyWinner = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {}
+        val loser = Job()
+
+        assertFalse(lazyWinner.isActive)
+        assertTrue(session.trySetJobIfIdle(lazyWinner))
+        assertFalse(session.trySetJobIfIdle(loser))
+        assertSame(lazyWinner, session.getJob())
+
+        loser.cancel()
+        lazyWinner.cancel()
+        joinAll(loser, lazyWinner)
+        scope.cancel()
+    }
+
+    @Test
     fun `applyConversationSnapshotIfIdle loads a cold idle session`() = runBlocking {
         val id = Uuid.random()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
