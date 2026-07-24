@@ -219,6 +219,8 @@ private fun ChatListNormal(
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
     var isRecentScroll by remember { mutableStateOf(false) }
+    var autoScrollPinned by rememberSaveable(conversation.id) { mutableStateOf(true) }
+    var sawScrollInProgress by remember(conversation.id) { mutableStateOf(false) }
     val conversationUpdated by rememberUpdatedState(conversation)
     val density = LocalDensity.current
     val activity = LocalContext.current as? me.rerere.rikkahub.RouteActivity
@@ -287,11 +289,9 @@ private fun ChatListNormal(
             LaunchedEffect(state) {
                 snapshotFlow { state.layoutInfo.visibleItemsInfo }.collect { visibleItemsInfo ->
                     // println("is bottom = ${visibleItemsInfo.isAtBottom()}, scroll = ${state.isScrollInProgress}, can_scroll = ${state.canScrollForward}, loading = $loading")
-                    if (!state.isScrollInProgress && loadingState) {
-                        if (visibleItemsInfo.isAtBottom()) {
-                            state.requestScrollToItem(conversationUpdated.messageNodes.lastIndex + 10)
-                            // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.messageNodes.lastIndex}")
-                        }
+                    if (!state.isScrollInProgress && loadingState && autoScrollPinned) {
+                        state.requestScrollToItem(conversationUpdated.messageNodes.lastIndex + 10)
+                        // Log.i(TAG, "ChatList: scroll to ${conversationUpdated.messageNodes.lastIndex}")
                     }
                 }
             }
@@ -300,10 +300,18 @@ private fun ChatListNormal(
         // 判断最近是否滚动
         LaunchedEffect(state.isScrollInProgress) {
             if (state.isScrollInProgress) {
+                // Release the bottom pin immediately so streaming/layout shrink cannot
+                // fight a user or programmatic scroll that is already in progress.
+                autoScrollPinned = false
+                sawScrollInProgress = true
                 isRecentScroll = true
                 delay(1500)
                 isRecentScroll = false
             } else {
+                if (sawScrollInProgress) {
+                    autoScrollPinned = state.layoutInfo.visibleItemsInfo.isAtBottom()
+                    sawScrollInProgress = false
+                }
                 delay(1500)
                 isRecentScroll = false
             }

@@ -7,21 +7,40 @@ import me.rerere.ai.ui.UIMessagePart
  * 思考步骤类型，用于分组 Reasoning 和 Tool
  */
 sealed interface ThinkingStep {
+    val sourceIndex: Int
+    val stableKey: String
+
     data class ReasoningStep(
         val reasoning: UIMessagePart.Reasoning,
-    ) : ThinkingStep
+        override val sourceIndex: Int,
+    ) : ThinkingStep {
+        override val stableKey: String = "reasoning:$sourceIndex"
+    }
 
     data class ToolStep(
         val tool: UIMessagePart.Tool,
-    ) : ThinkingStep
+        override val sourceIndex: Int,
+    ) : ThinkingStep {
+        override val stableKey: String = "tool:$sourceIndex"
+    }
 }
 
 /**
  * 消息部分块类型，用于保持渲染顺序
  */
 sealed interface MessagePartBlock {
-    data class ThinkingBlock(val steps: List<ThinkingStep>) : MessagePartBlock
-    data class ContentBlock(val part: UIMessagePart, val index: Int) : MessagePartBlock
+    val stableKey: String
+
+    data class ThinkingBlock(
+        val steps: List<ThinkingStep>,
+        val startIndex: Int,
+    ) : MessagePartBlock {
+        override val stableKey: String = "thinking:$startIndex"
+    }
+
+    data class ContentBlock(val part: UIMessagePart, val index: Int) : MessagePartBlock {
+        override val stableKey: String = "content:$index"
+    }
 }
 
 /**
@@ -34,7 +53,12 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
 
     fun flushThinkingSteps() {
         if (currentThinkingSteps.isNotEmpty()) {
-            result.add(MessagePartBlock.ThinkingBlock(currentThinkingSteps.toList()))
+            result.add(
+                MessagePartBlock.ThinkingBlock(
+                    steps = currentThinkingSteps.toList(),
+                    startIndex = currentThinkingSteps.first().sourceIndex,
+                )
+            )
             currentThinkingSteps = mutableListOf()
         }
     }
@@ -42,11 +66,11 @@ fun List<UIMessagePart>.groupMessageParts(): List<MessagePartBlock> {
     this.fastForEachIndexed { index, part ->
         when (part) {
             is UIMessagePart.Reasoning -> {
-                currentThinkingSteps.add(ThinkingStep.ReasoningStep(part))
+                currentThinkingSteps.add(ThinkingStep.ReasoningStep(part, index))
             }
 
             is UIMessagePart.Tool -> {
-                currentThinkingSteps.add(ThinkingStep.ToolStep(part))
+                currentThinkingSteps.add(ThinkingStep.ToolStep(part, index))
             }
 
             else -> {

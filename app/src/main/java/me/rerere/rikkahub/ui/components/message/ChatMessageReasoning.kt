@@ -25,7 +25,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
@@ -62,13 +63,26 @@ enum class ReasoningCardState(val expanded: Boolean) {
     Expanded(true),
 }
 
+internal fun reasoningStateAfterLoadingTransition(
+    autoClose: Boolean,
+    wasLoading: Boolean,
+    loading: Boolean,
+    current: ReasoningCardState,
+): ReasoningCardState {
+    if (!wasLoading || loading || !current.expanded) return current
+    return if (autoClose) ReasoningCardState.Collapsed else ReasoningCardState.Expanded
+}
+
 @Stable
 private class ReasoningState(
     val scrollState: ScrollState,
     initialDuration: Duration,
+    initialExpandState: ReasoningCardState,
+    initialLoading: Boolean,
 ) {
-    var expandState by mutableStateOf(ReasoningCardState.Collapsed)
+    var expandState by mutableStateOf(initialExpandState)
     var duration by mutableStateOf(initialDuration)
+    var wasLoading by mutableStateOf(initialLoading)
 
     fun onExpandedChange(nextExpanded: Boolean, loading: Boolean) {
         expandState = if (loading) {
@@ -85,11 +99,33 @@ private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<Rea
     val loading = reasoning.finishedAt == null
     val scrollState = rememberScrollState()
 
-    val state = remember(reasoning.createdAt) {
+    val initialDuration = reasoning.finishedAt?.let { it - reasoning.createdAt }
+        ?: (Clock.System.now() - reasoning.createdAt)
+    val initialExpandState = if (loading && settings.displaySetting.showThinkingContent) {
+        ReasoningCardState.Preview
+    } else {
+        ReasoningCardState.Collapsed
+    }
+    val state = rememberSaveable(
+        reasoning.createdAt,
+        saver = Saver(
+            save = { "${it.expandState.name}|${it.wasLoading}" },
+            restore = { savedState ->
+                val (expandState, wasLoading) = savedState.split('|', limit = 2)
+                ReasoningState(
+                    scrollState = scrollState,
+                    initialDuration = initialDuration,
+                    initialExpandState = ReasoningCardState.valueOf(expandState),
+                    initialLoading = wasLoading.toBooleanStrict(),
+                )
+            },
+        ),
+    ) {
         ReasoningState(
             scrollState = scrollState,
-            initialDuration = reasoning.finishedAt?.let { it - reasoning.createdAt }
-                ?: (Clock.System.now() - reasoning.createdAt)
+            initialDuration = initialDuration,
+            initialExpandState = initialExpandState,
+            initialLoading = loading,
         )
     }
 
@@ -101,13 +137,14 @@ private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<Rea
             // and restarting a smooth scroll animation per token is pure main-thread cost.
             scrollState.scrollTo(scrollState.maxValue)
         } else {
-            if (state.expandState.expanded) {
-                state.expandState = if (settings.displaySetting.autoCloseThinking)
-                    ReasoningCardState.Collapsed
-                else
-                    ReasoningCardState.Expanded
-            }
+            state.expandState = reasoningStateAfterLoadingTransition(
+                autoClose = settings.displaySetting.autoCloseThinking,
+                wasLoading = state.wasLoading,
+                loading = loading,
+                current = state.expandState,
+            )
         }
+        state.wasLoading = loading
     }
 
     LaunchedEffect(loading) {
@@ -214,12 +251,19 @@ fun ChainOfThoughtScope.ChatMessageReasoningStep(
     collapsedAdaptiveWidth: Boolean = false,
 ) {
     val (state, loading) = rememberReasoningState(reasoning)
+    val settings = LocalSettings.current
+    val displayedExpandState = reasoningStateAfterLoadingTransition(
+        autoClose = settings.displaySetting.autoCloseThinking,
+        wasLoading = state.wasLoading,
+        loading = loading,
+        current = state.expandState,
+    )
     val thinkingTitle = reasoning.reasoning.extractThinkingTitle()
     val showThinkingTitle = loading && thinkingTitle != null
     val chatFontFamily = LocalTextStyle.current.fontFamily
 
     ControlledChainOfThoughtStep(
-        expanded = state.expandState == ReasoningCardState.Expanded,
+        expanded = displayedExpandState == ReasoningCardState.Expanded,
         onExpandedChange = { state.onExpandedChange(it, loading) },
         icon = {
             Icon(
@@ -255,12 +299,12 @@ fun ChainOfThoughtScope.ChatMessageReasoningStep(
             }
         },
         collapsedAdaptiveWidth = collapsedAdaptiveWidth,
-        contentVisible = state.expandState != ReasoningCardState.Collapsed,
+        contentVisible = displayedExpandState != ReasoningCardState.Collapsed,
         content = {
             ReasoningContent(
                 reasoning = reasoning,
                 assistant = assistant,
-                expandState = state.expandState,
+                expandState = displayedExpandState,
                 scrollState = state.scrollState,
                 fadeHeight = fadeHeight,
                 loading = loading,

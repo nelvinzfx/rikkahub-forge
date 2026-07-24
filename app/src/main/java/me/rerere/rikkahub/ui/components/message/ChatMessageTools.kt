@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +75,21 @@ private fun JsonElement?.getStringContent(key: String): String? =
 
 private const val ASK_USER_TOOL_NAME = "ask_user"
 
+internal fun initialToolStepExpanded(
+    autoCollapse: Boolean,
+    generationLoading: Boolean,
+    executed: Boolean,
+    pending: Boolean,
+): Boolean = !autoCollapse || generationLoading || !executed || pending
+
+internal fun shouldCollapseToolStepOnGenerationEnd(
+    autoCollapse: Boolean,
+    wasGenerationLoading: Boolean,
+    generationLoading: Boolean,
+    executed: Boolean,
+    pending: Boolean,
+): Boolean = autoCollapse && wasGenerationLoading && !generationLoading && executed && !pending
+
 @Composable
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
@@ -110,19 +126,43 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 
     var showResult by remember { mutableStateOf(false) }
     var showDenyDialog by remember { mutableStateOf(false) }
-    var expanded by remember { mutableStateOf(true) }
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isDenied = tool.approvalState is ToolApprovalState.Denied
-
-    // Auto-collapse when the WHOLE generation ends (setting-gated), not at each
-    // tool's execution edge: edit diffs and short previews only exist once their
-    // tool completes, so per-edge collapse hid them instantly. Fires again only
-    // on the generation edge, so a manual re-expand afterwards is not overridden.
     val displaySetting = LocalSettings.current.displaySetting
-    LaunchedEffect(generationLoading, tool.isExecuted) {
-        if (displaySetting.autoCollapseToolSteps && !generationLoading && tool.isExecuted && !isPending) {
+    var expanded by rememberSaveable {
+        mutableStateOf(
+            initialToolStepExpanded(
+                autoCollapse = displaySetting.autoCollapseToolSteps,
+                generationLoading = generationLoading,
+                executed = tool.isExecuted,
+                pending = isPending,
+            )
+        )
+    }
+    var wasGenerationLoading by rememberSaveable { mutableStateOf(generationLoading) }
+
+    val collapseOnThisFrame = shouldCollapseToolStepOnGenerationEnd(
+        autoCollapse = displaySetting.autoCollapseToolSteps,
+        wasGenerationLoading = wasGenerationLoading,
+        generationLoading = generationLoading,
+        executed = tool.isExecuted,
+        pending = isPending,
+    )
+    val displayedExpanded = expanded && !collapseOnThisFrame
+
+    // Collapse only on the real whole-generation true -> false edge. A completed
+    // step that leaves and re-enters composition restores its saved user state
+    // instead of briefly expanding and firing this effect again.
+    LaunchedEffect(
+        generationLoading,
+        tool.isExecuted,
+        isPending,
+        displaySetting.autoCollapseToolSteps,
+    ) {
+        if (collapseOnThisFrame) {
             expanded = false
         }
+        wasGenerationLoading = generationLoading
     }
     val images = tool.output.filterIsInstance<UIMessagePart.Image>()
 
@@ -131,7 +171,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     val hasExtraContent = renderer.hasSummary(context) || isDenied || images.isNotEmpty() || renderer.hasInlineParams(context) || renderer.hasInlineResult(context)
 
     ControlledChainOfThoughtStep(
-        expanded = expanded,
+        expanded = displayedExpanded,
         onExpandedChange = { expanded = it },
         icon = {
             if (loading) {
@@ -459,7 +499,7 @@ private fun ChainOfThoughtScope.AskUserToolStep(
 
     val firstQuestion = questions.firstOrNull()?.question ?: "..."
 
-    var expanded by remember { mutableStateOf(true) }
+    var expanded by rememberSaveable { mutableStateOf(true) }
 
     ControlledChainOfThoughtStep(
         expanded = expanded,

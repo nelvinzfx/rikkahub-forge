@@ -326,7 +326,8 @@ private fun MessagePartsBlock(
     val partsKey = parts.size.toString() + (parts.lastOrNull()?.hashCode()?.toString() ?: "")
     val groupedParts = remember(partsKey) { parts.groupMessageParts() }
     groupedParts.fastForEach { block ->
-        when (block) {
+        key(block.stableKey) {
+            when (block) {
             is MessagePartBlock.ThinkingBlock -> {
                 if (block.steps.isNotEmpty()) {
                     val isReasoningOnlyBlock = block.steps.fastAll { it is ThinkingStep.ReasoningStep }
@@ -339,10 +340,11 @@ private fun MessagePartsBlock(
                             it.tool.approvalState is ToolApprovalState.Pending
                     }
                     ChainOfThought(
-                        modifier = Modifier.animateContentSize(),
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         forceExpanded = hasPendingApproval,
+                        stateKey = block.stableKey,
+                        stepKey = ThinkingStep::stableKey,
                         // Outline on = transparent + thin stroke; off = fully bare
                         // (no stroke, no fill). Tool-param pill stays outline-only.
                         cardColors = CardDefaults.cardColors(
@@ -355,34 +357,26 @@ private fun MessagePartsBlock(
                         },
                     ) { step ->
                         when (step) {
-                            is ThinkingStep.ReasoningStep -> {
-                                key(step.reasoning.createdAt) {
-                                    ChatMessageReasoningStep(
-                                        reasoning = step.reasoning,
-                                        model = model,
-                                        assistant = assistant,
-                                        collapsedAdaptiveWidth = isReasoningOnlyBlock,
-                                    )
-                                }
-                            }
+                            is ThinkingStep.ReasoningStep -> ChatMessageReasoningStep(
+                                reasoning = step.reasoning,
+                                model = model,
+                                assistant = assistant,
+                                collapsedAdaptiveWidth = isReasoningOnlyBlock,
+                            )
 
-                            is ThinkingStep.ToolStep -> {
-                                key(step.tool.toolCallId.ifBlank { step.hashCode().toString() }) {
-                                    ChatMessageToolStep(
-                                        tool = step.tool,
-                                        loading = loading && !step.tool.isExecuted,
-                                        generationLoading = loading,
-                                        onToolApproval = onToolApproval,
-                                        onToolAnswer = onToolAnswer,
-                                    )
-                                }
-                            }
+                            is ThinkingStep.ToolStep -> ChatMessageToolStep(
+                                tool = step.tool,
+                                loading = loading && !step.tool.isExecuted,
+                                generationLoading = loading,
+                                onToolApproval = onToolApproval,
+                                onToolAnswer = onToolAnswer,
+                            )
                         }
                     }
                 }
             }
 
-            is MessagePartBlock.ContentBlock -> key(block.index) {
+            is MessagePartBlock.ContentBlock -> {
                 when (val part = block.part) {
                     is UIMessagePart.Text -> {
                         // A Text part may carry a `rikkahub.webview` metadata block
@@ -618,6 +612,7 @@ private fun MessagePartsBlock(
                 }
             }
         }
+    }
     }
 
     // Annotations (always rendered at the end)

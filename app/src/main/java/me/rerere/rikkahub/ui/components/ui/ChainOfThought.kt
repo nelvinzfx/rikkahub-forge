@@ -26,8 +26,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -78,9 +81,11 @@ fun <T> ChainOfThought(
     collapsedVisibleCount: Int = 2,
     collapsedAdaptiveWidth: Boolean = false,
     forceExpanded: Boolean = false,
+    stateKey: Any? = null,
+    stepKey: (T) -> Any = { it.hashCode() },
     content: @Composable ChainOfThoughtScope.(T) -> Unit
 ) {
-    var userExpanded by remember { mutableStateOf(false) }
+    var userExpanded by rememberSaveable(stateKey) { mutableStateOf(false) }
     // forceExpanded overrides the user's collapse — used when one of the steps
     // demands attention (e.g. a tool with a pending approval). Without this, on
     // 3+ pending tool calls only the last 2 rows render and the first sits
@@ -159,6 +164,7 @@ fun <T> ChainOfThought(
 
                 val lineColor = MaterialTheme.colorScheme.outlineVariant
                 val scope = remember { ChainOfThoughtScopeImpl() }
+                val stepStateHolder = rememberSaveableStateHolder()
                 Box(
                     modifier = Modifier.drawBehind {
                         val x = 12.dp.toPx()
@@ -173,7 +179,12 @@ fun <T> ChainOfThought(
                 ) {
                     Column {
                         visibleSteps.fastForEach { step ->
-                            scope.content(step)
+                            val identity = stepKey(step)
+                            key(identity) {
+                                stepStateHolder.SaveableStateProvider(identity) {
+                                    scope.content(step)
+                                }
+                            }
                         }
                     }
                 }

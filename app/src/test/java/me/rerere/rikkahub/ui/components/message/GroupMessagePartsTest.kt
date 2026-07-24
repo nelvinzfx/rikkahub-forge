@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.components.message
 
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -93,6 +94,68 @@ class GroupMessagePartsTest {
         assertTrue(result[1] is MessagePartBlock.ThinkingBlock)
         assertEquals(2, (result[2] as MessagePartBlock.ContentBlock).index)
         assertEquals(3, (result[3] as MessagePartBlock.ContentBlock).index)
+    }
+
+    @Test
+    fun `thinking block and step keys remain stable while streamed content changes`() {
+        val first = listOf(
+            reasoning("first chunk"),
+            tool("call-a"),
+            text("answer"),
+        ).groupMessageParts().first() as MessagePartBlock.ThinkingBlock
+        val updated = listOf(
+            reasoning("first chunk plus more streamed text"),
+            tool("call-a"),
+            text("answer"),
+        ).groupMessageParts().first() as MessagePartBlock.ThinkingBlock
+
+        assertEquals("thinking:0", first.stableKey)
+        assertEquals(first.stableKey, updated.stableKey)
+        assertEquals(listOf("reasoning:0", "tool:1"), first.steps.map { it.stableKey })
+        assertEquals(first.steps.map { it.stableKey }, updated.steps.map { it.stableKey })
+    }
+
+    @Test
+    fun `completed tool starts collapsed only when auto collapse applies`() {
+        assertFalse(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = true, pending = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = false, generationLoading = false, executed = true, pending = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = true, executed = true, pending = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = false, pending = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = true, pending = true))
+    }
+
+    @Test
+    fun `tool auto collapse fires only on generation end edge`() {
+        assertTrue(shouldCollapseToolStepOnGenerationEnd(true, true, false, true, false))
+        assertFalse(shouldCollapseToolStepOnGenerationEnd(true, false, false, true, false))
+        assertFalse(shouldCollapseToolStepOnGenerationEnd(true, true, true, true, false))
+        assertFalse(shouldCollapseToolStepOnGenerationEnd(true, true, false, false, false))
+        assertFalse(shouldCollapseToolStepOnGenerationEnd(true, true, false, true, true))
+        assertFalse(shouldCollapseToolStepOnGenerationEnd(false, true, false, true, false))
+    }
+
+    @Test
+    fun `reasoning state changes only on finish edge`() {
+        assertEquals(
+            ReasoningCardState.Collapsed,
+            reasoningStateAfterLoadingTransition(true, true, false, ReasoningCardState.Preview),
+        )
+        assertEquals(
+            ReasoningCardState.Expanded,
+            reasoningStateAfterLoadingTransition(false, true, false, ReasoningCardState.Preview),
+        )
+        assertEquals(
+            ReasoningCardState.Preview,
+            reasoningStateAfterLoadingTransition(true, false, false, ReasoningCardState.Preview),
+        )
+        assertEquals(
+            ReasoningCardState.Preview,
+            reasoningStateAfterLoadingTransition(true, true, true, ReasoningCardState.Preview),
+        )
+        assertEquals(
+            ReasoningCardState.Collapsed,
+            reasoningStateAfterLoadingTransition(true, true, false, ReasoningCardState.Collapsed),
+        )
     }
 
     @Test
