@@ -160,10 +160,11 @@ private const val LOOP_GUARD_REPEAT_THRESHOLD = 3
 // earlier calls must not consume a later tool's timeout before that tool starts.
 
 /**
- * Max number of times the loop guard can trip in a single turn before we force-end the
- * turn entirely. Prevents the "model keeps trying different tools, each gets loop-detected"
+ * Max number of times the loop guard can trip in a single turn before we stop the normal
+ * tool-capable loop. A mandatory no-tools wrap-up still gives the model one chance to report
+ * what happened. Prevents the "model keeps trying different tools, each gets loop-detected"
  * pattern that produced the 27-step / 141K-token disaster: one trip means the model is
- * confused; six trips means it's not coming back.
+ * confused; six trips means further tool-capable turns are no longer justified.
  */
 private const val MAX_LOOP_GUARD_TRIPS_PER_TURN = 6
 
@@ -307,26 +308,26 @@ internal fun buildOrchestratorPreamble(
 }
 
 /**
- * Default budget of NORMAL tool-capable provider turns for one generation call. Kept at
- * the historical 32 so ordinary chat behaviour is unchanged; sub-agent runs override it
- * with their request's maxTrips. Raising the default would only delay silent exhaustion,
- * not fix it — the reserved wrap-up below is the actual fix.
+ * Hard ceiling of NORMAL tool-capable provider turns for ordinary chat. This remains a
+ * last-resort cost guard, but 32 was too small for legitimate repository and device work.
+ * The repeated-call guard, per-tool timeout, context compaction, and the mandatory final
+ * no-tools wrap-up still bound pathological turns.
  */
-internal const val DEFAULT_MAX_GENERATION_STEPS = 32
+internal const val DEFAULT_MAX_GENERATION_STEPS = 128
 
-/** Stable machine-readable reason for step-budget exhaustion with no final text. */
+/** Stable machine-readable reasons for a safety boundary that produced no final text. */
 internal const val REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL = "max_steps_exhausted_after_tool"
+internal const val REASON_LOOP_GUARD_EXHAUSTED = "loop_guard_exhausted"
 
 /**
- * Thrown when the normal step budget was exhausted right after a tool execution AND the
- * reserved no-tools wrap-up turn failed to produce any text. Carries the stable
- * [REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL] reason so callers (SubAgentEngine, UI error
- * surfaces) can distinguish real exhaustion from ordinary success or other failures.
+ * Thrown when a generation safety boundary was reached and the mandatory reserved
+ * no-tools wrap-up turn still failed to produce text. The boundary-specific [reason]
+ * lets UI/error surfaces distinguish cost-budget exhaustion from repeated-loop exhaustion.
  */
 class GenerationStepExhaustedException(
     val reason: String = REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL,
 ) : Exception(
-    "$reason: the normal tool-call budget was exhausted and the reserved final " +
+    "$reason: generation reached a safety boundary and the reserved final " +
         "wrap-up turn produced no text"
 )
 
@@ -346,7 +347,7 @@ internal enum class GenerationLoopExit {
     /** A tool-processing pass produced zero results (all tools were pending). */
     NO_EXECUTED_TOOL_RESULTS,
 
-    /** Loop guard tripped MAX_LOOP_GUARD_TRIPS_PER_TURN times; turn force-ended. */
+    /** Loop guard tripped MAX_LOOP_GUARD_TRIPS_PER_TURN times; tool loop stopped. */
     LOOP_GUARD_EXHAUSTED,
 
     /** The for-loop's last allowed iteration ended right after executing tools — the
@@ -365,27 +366,45 @@ internal enum class WrapUpOutcome {
  */
 internal object FinalWrapUpPolicy {
     /**
-     * The wrap-up runs ONLY when the normal budget was consumed immediately after a tool
-     * execution and the caller opted in. Never after normal completion, approval pauses,
-     * loop-guard force-ends, empty tool passes — and never after cancellation/provider
-     * errors, which propagate as exceptions before this is even consulted.
+     * Every forced generation boundary gets exactly one final provider turn with no tools.
+     * This is an invariant rather than a caller opt-in: a new chat surface cannot accidentally
+     * reintroduce the silent-stop bug by forgetting a flag. Approval pauses, empty tool passes,
+     * normal completion, cancellation, and provider errors do not use this path.
      */
-    fun shouldRun(exit: GenerationLoopExit?, reserveFinalWrapUp: Boolean): Boolean =
-        reserveFinalWrapUp && exit == GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL
+    fun shouldRun(exit: GenerationLoopExit?): Boolean = reasonFor(exit) != null
+
+    fun reasonFor(exit: GenerationLoopExit?): String? = when (exit) {
+        GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL ->
+            REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL
+        GenerationLoopExit.LOOP_GUARD_EXHAUSTED ->
+            REASON_LOOP_GUARD_EXHAUSTED
+        else -> null
+    }
+
+    /**
+     * Transient per-call system addendum for the reserved wrap-up turn. It is not persisted
+     * into history and is not a fake user message; it rides the volatile system section for
+     * exactly one provider request.
+     */
+    fun addendumFor(exit: GenerationLoopExit): String {
+        val reason = requireNotNull(reasonFor(exit)) { "no wrap-up for $exit" }
+        val detail = when (exit) {
+            GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL ->
+                "The normal tool-capable provider-turn budget is exhausted."
+            GenerationLoopExit.LOOP_GUARD_EXHAUSTED ->
+                "The repeated-tool loop guard force-ended normal execution because blocked tool calls kept recurring."
+            else -> error("no wrap-up for $exit")
+        }
+        return """
+            RUNTIME NOTICE — GENERATION SAFETY BOUNDARY: $reason. $detail
+            No tools are available for this final response, and any tool call you attempt will be rejected. Using only the evidence already gathered in this conversation, return the best final answer or a concise summary of what you did and found. Plain text only — this final message is the entire response the caller will see.
+        """.trimIndent()
+    }
 
     /** The wrap-up turn succeeds iff it produced non-blank text. */
     fun outcomeFor(finalText: String): WrapUpOutcome =
         if (finalText.isBlank()) WrapUpOutcome.EXHAUSTED_NO_TEXT else WrapUpOutcome.SUCCESS_WITH_TEXT
 }
-
-/**
- * Transient per-call system addendum for the reserved wrap-up turn. NOT persisted into
- * conversation history and not a fake user message — it rides the existing volatile
- * system-prompt section for exactly one provider request.
- */
-internal val RESERVED_WRAP_UP_ADDENDUM = """
-RUNTIME NOTICE — TOOL BUDGET EXHAUSTED: your normal tool-call budget for this turn is now exhausted. No tools are available for this final response, and any tool call you attempt will be rejected. Using only the evidence already gathered in this conversation, return the best final answer or a concise summary of what you did and found. Plain text only — this final message is the entire response the caller will see.
-""".trim()
 
 class GenerationHandler(
     private val context: Context,
@@ -406,12 +425,9 @@ class GenerationHandler(
         memories: List<AssistantMemory>? = null,
         tools: List<Tool> = emptyList(),
         // NORMAL tool-capable provider-turn budget. Sub-agent callers pass their
-        // request's maxTrips here; ordinary chat keeps the default.
+        // request's maxTrips here; ordinary chat keeps the hard default. Forced exhaustion
+        // always receives one mandatory no-tools wrap-up after this normal budget.
         maxSteps: Int = DEFAULT_MAX_GENERATION_STEPS,
-        // When true and the normal budget is consumed immediately after a tool execution,
-        // run ONE extra provider turn with tools disabled so the model can write its
-        // final answer instead of the turn silently ending on a tool result.
-        reserveFinalWrapUp: Boolean = false,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         // Returns true when the user has pre-approved [toolName] for this turn (e.g.
         // "Allow for this chat" or "Always Allow" granted earlier). When true, the loop
@@ -588,8 +604,8 @@ class GenerationHandler(
         for (stepIndex in 0 until maxSteps) {
             // Repeated loop-guard trips mean the model is flailing: it bumps into the
             // guard, picks a different tool, that one also gets guarded, and so on. After
-            // N trips we just stop — the model is not going to recover, and every extra
-            // step is paid for in tokens.
+            // N trips stop the tool-capable loop; the mandatory no-tools wrap-up below
+            // still gives it one bounded chance to report instead of disappearing.
             if (loopGuardTripCount >= MAX_LOOP_GUARD_TRIPS_PER_TURN) {
                 Log.w(TAG, "generateText: loop-guard tripped $loopGuardTripCount times this turn; force-ending")
                 loopExit = GenerationLoopExit.LOOP_GUARD_EXHAUSTED
@@ -1038,23 +1054,25 @@ class GenerationHandler(
             if (stepIndex == maxSteps - 1) {
                 // The normal budget is now consumed and the last thing that happened was
                 // a tool execution — the model never received the follow-up turn that
-                // would have let it react to these results. This is the ONLY exit that
-                // makes the reserved no-tools wrap-up eligible.
+                // would have let it react to these results. Classify this forced boundary
+                // so the mandatory no-tools wrap-up can produce final text.
                 loopExit = GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL
             }
         }
 
-        if (FinalWrapUpPolicy.shouldRun(loopExit, reserveFinalWrapUp)) {
+        if (FinalWrapUpPolicy.shouldRun(loopExit)) {
+            val exhaustedExit = requireNotNull(loopExit)
+            val exhaustionReason = requireNotNull(FinalWrapUpPolicy.reasonFor(exhaustedExit))
             val exhaustedTools = messages.lastOrNull()?.getTools().orEmpty()
             Log.w(
                 TAG,
-                "generateText: normal step budget ($maxSteps) exhausted after executing " +
+                "generateText: safety boundary $exhaustionReason reached after " +
                     "${exhaustedTools.size} tool(s) [${exhaustedTools.joinToString(", ") { it.toolName }}]; " +
-                    "starting reserved no-tools wrap-up turn"
+                    "starting mandatory reserved no-tools wrap-up turn"
             )
             val wrapUpAddendum = listOfNotNull(
                 systemAddendum?.takeIf { it.isNotBlank() },
-                RESERVED_WRAP_UP_ADDENDUM,
+                FinalWrapUpPolicy.addendumFor(exhaustedExit),
             ).joinToString("\n\n")
             // Exactly ONE extra provider turn, tools disabled. onBeforeProviderRequest
             // (compaction), transformers, streaming updates and overflow recovery all
@@ -1072,7 +1090,7 @@ class GenerationHandler(
                     if (part is UIMessagePart.Tool && !part.isExecuted) {
                         part.copy(
                             approvalState = ToolApprovalState.Denied(
-                                "tools_unavailable_final_turn: the normal tool budget was exhausted; " +
+                                "tools_unavailable_final_turn: $exhaustionReason; " +
                                     "tool calls are not available in the reserved final turn."
                             )
                         )
@@ -1093,16 +1111,10 @@ class GenerationHandler(
                     // Explicit exhaustion: the caller must NOT read this turn as ordinary
                     // success. All partial messages/tool outputs were already emitted and
                     // persist via the normal failure-path save.
-                    Log.w(TAG, "generateText: reserved wrap-up produced no text → $REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL")
-                    throw GenerationStepExhaustedException()
+                    Log.w(TAG, "generateText: reserved wrap-up produced no text → $exhaustionReason")
+                    throw GenerationStepExhaustedException(exhaustionReason)
                 }
             }
-        } else if (loopExit == GenerationLoopExit.STEP_BUDGET_EXHAUSTED_AFTER_TOOL) {
-            Log.w(
-                TAG,
-                "generateText: normal step budget ($maxSteps) exhausted after tool execution " +
-                    "and no reserved wrap-up is enabled; turn ends on tool results"
-            )
         }
 
     }

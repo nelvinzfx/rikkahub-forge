@@ -71,10 +71,12 @@ object SubAgentDefaults {
     // for 4-6 searches + synthesis without premature timeout.
     const val DEFAULT_TIMEOUT_SECONDS = 600
     const val MAX_TIMEOUT_SECONDS = 1800
-    // Phase E tuning: 12 trips was too tight for multi-step research. Each web search
-    // + result read = 2 trips, so 12 = only 6 search cycles. 20 allows 10 cycles.
-    const val DEFAULT_MAX_TRIPS = 20
-    const val MAX_MAX_TRIPS = 30
+    // Complex research and coding workers legitimately need more than the old 20/30
+    // provider-turn limits. Keep a useful default while allowing callers to opt into the
+    // same hard ceiling as ordinary chat; wall-clock, subtree-token, repeated-call, and
+    // per-tool timeout guards remain independent safety boundaries.
+    const val DEFAULT_MAX_TRIPS = 32
+    const val MAX_MAX_TRIPS = 128
     const val MAX_LABEL_LENGTH = 60
     const val GLOBAL_CONCURRENCY_CAP = 16
     const val MIN_PER_ASSISTANT_CAP = 1

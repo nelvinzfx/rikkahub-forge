@@ -13,9 +13,9 @@ import org.junit.Test
  * GenerationHandler's hard default of 32, and when that budget ran out right after a
  * tool call the run ended without final text yet was marked SUCCEEDED.
  *
- * The wiring itself (SubAgentEngine → ChatService.sendMessage(generationMaxSteps,
- * reserveFinalWrapUp) → GenerationHandler) is verified end-to-end by the low-max_trips
- * Kimi worker run; these tests pin the pure decision points against regressions:
+ * The wiring itself (SubAgentEngine → ChatService.sendMessage(generationMaxSteps) →
+ * GenerationHandler) is verified end-to-end by the low-max_trips Kimi worker run; these
+ * tests pin the pure decision points against regressions:
  * request carrying/validation, the terminal-outcome gate, and the stable error reason.
  */
 class SubAgentStepBudgetTest {
@@ -31,20 +31,20 @@ class SubAgentStepBudgetTest {
     @Test
     fun `request defaults to the documented default maxTrips`() {
         assertEquals(SubAgentDefaults.DEFAULT_MAX_TRIPS, SubAgentRequest(task = "x").maxTrips)
-        assertEquals(20, SubAgentDefaults.DEFAULT_MAX_TRIPS)
-        assertEquals(30, SubAgentDefaults.MAX_MAX_TRIPS)
+        assertEquals(32, SubAgentDefaults.DEFAULT_MAX_TRIPS)
+        assertEquals(128, SubAgentDefaults.MAX_MAX_TRIPS)
     }
 
     @Test
     fun `validator accepts boundary maxTrips values`() {
         assertTrue(SubAgentRequestValidator.validate(SubAgentRequest(task = "t", maxTrips = 1)) is SubAgentRequestValidator.Result.Ok)
-        assertTrue(SubAgentRequestValidator.validate(SubAgentRequest(task = "t", maxTrips = 30)) is SubAgentRequestValidator.Result.Ok)
+        assertTrue(SubAgentRequestValidator.validate(SubAgentRequest(task = "t", maxTrips = 128)) is SubAgentRequestValidator.Result.Ok)
     }
 
     @Test
     fun `validator rejects out-of-range maxTrips`() {
         assertTrue(SubAgentRequestValidator.validate(SubAgentRequest(task = "t", maxTrips = 0)) is SubAgentRequestValidator.Result.Reject)
-        assertTrue(SubAgentRequestValidator.validate(SubAgentRequest(task = "t", maxTrips = 31)) is SubAgentRequestValidator.Result.Reject)
+        assertTrue(SubAgentRequestValidator.validate(SubAgentRequest(task = "t", maxTrips = 129)) is SubAgentRequestValidator.Result.Reject)
     }
 
     // ---- Terminal-outcome gate ------------------------------------------------------

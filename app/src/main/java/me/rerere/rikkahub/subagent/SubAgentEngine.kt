@@ -410,14 +410,11 @@ class SubAgentEngine(
                 workerConvId,
                 listOf(UIMessagePart.Text(taskWithWrapup)),
                 reasoningLevelOverride = workerReasoningLevel,
-                // max_trips contract: bounds the worker's NORMAL tool-capable provider
-                // turns. reserveFinalWrapUp grants ONE additional no-tools turn after
-                // exhaustion so the worker can still write its final summary — before
-                // this wiring, maxTrips was accepted/validated/reported but never
-                // reached GenerationHandler, and exhaustion silently ended the run on a
-                // tool result with no harvestable text (the Kimi silent-stop defect).
+                // max_trips bounds the worker's NORMAL tool-capable provider turns.
+                // GenerationHandler always grants one additional no-tools final wrap-up
+                // after forced exhaustion. Before this wiring, maxTrips never reached the
+                // generation layer and an exhausted run could end silently on a tool result.
                 generationMaxSteps = request.maxTrips,
-                reserveFinalWrapUp = true,
             )
             Log.i(TAG, "sub-agent $runId dispatched with maxTrips=${request.maxTrips} normal turn(s) + one reserved no-tools wrap-up")
             // The naive form `withTimeoutOrNull { …first { it == null } }` followed by a

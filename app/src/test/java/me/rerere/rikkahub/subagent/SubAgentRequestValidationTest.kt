@@ -39,7 +39,7 @@ class SubAgentRequestValidationTest {
         assertEquals("invalid_max_trips", (r as SubAgentRequestValidator.Result.Reject).error)
     }
 
-    @Test fun `max trips above 30 rejected`() {
+    @Test fun `max trips above configured maximum rejected`() {
         val r = SubAgentRequestValidator.validate(
             SubAgentRequest(task = "x", maxTrips = SubAgentDefaults.MAX_MAX_TRIPS + 1)
         )
