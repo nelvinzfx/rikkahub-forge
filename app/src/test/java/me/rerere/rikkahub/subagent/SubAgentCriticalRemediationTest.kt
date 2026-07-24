@@ -213,18 +213,20 @@ class SubAgentCriticalRemediationTest {
     @Test
     fun `owner quiescence follows execution completion after terminal status`() =
         kotlinx.coroutines.runBlocking {
-            val registry = SubAgentRegistry()
-            val handle = SubAgentExecutionHandle()
-            registry.addPending(run("quiescence"), handle)
-            assertTrue(registry.transitionTerminal("quiescence", SubAgentStatus.SUCCEEDED) { it })
-            assertTrue(registry.hasActiveOwnerRuns("chat-a"))
+            kotlinx.coroutines.coroutineScope {
+                val registry = SubAgentRegistry()
+                val handle = SubAgentExecutionHandle()
+                registry.addPending(run("quiescence"), handle)
+                assertTrue(registry.transitionTerminal("quiescence", SubAgentStatus.SUCCEEDED) { it })
+                assertTrue(registry.hasActiveOwnerRuns("chat-a"))
 
-            val waiter = kotlinx.coroutines.async { registry.awaitOwnerQuiescent("chat-a") }
-            kotlinx.coroutines.yield()
-            assertFalse(waiter.isCompleted)
-            registry.clearExecution("quiescence")
-            waiter.await()
-            assertFalse(registry.hasActiveOwnerRuns("chat-a"))
+                val waiter = kotlinx.coroutines.async { registry.awaitOwnerQuiescent("chat-a") }
+                kotlinx.coroutines.yield()
+                assertFalse(waiter.isCompleted)
+                registry.clearExecution("quiescence")
+                waiter.await()
+                assertFalse(registry.hasActiveOwnerRuns("chat-a"))
+            }
         }
 
     @Test
