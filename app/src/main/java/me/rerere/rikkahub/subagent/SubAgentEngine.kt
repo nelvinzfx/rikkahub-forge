@@ -123,6 +123,11 @@ class SubAgentEngine(
         val callerRun = callerWorker?.runId?.let(registry::get)
         val childParentRunId = sourceRun?.parentRunId ?: callerWorker?.runId
         val childOwnerChatId = sourceRun?.ownerChatId ?: callerRun?.ownerChatId ?: parentChatId
+        if (registry.isOwnerStopping(childOwnerChatId)) {
+            return@withContext DispatchResult.Reject(
+                "parent_stopping", "the parent conversation is stopping; retry on the next turn"
+            )
+        }
         val parentUuid = runCatching { Uuid.parse(parentAssistantId) }.getOrNull()
             ?: return@withContext DispatchResult.Reject(
                 "invalid_assistant_id", "parent assistant id '$parentAssistantId' is not a valid UUID"
@@ -537,7 +542,7 @@ class SubAgentEngine(
                 Unit
             }
             if (completed == null) {
-                executionHandle.requestGenerationStop()
+                registry.requestTimeout(runId)
                 stopWorkerThenMarkTerminal(
                     runId = runId,
                     workerConvId = workerConvId,
@@ -564,13 +569,23 @@ class SubAgentEngine(
                 // run as useful work. Partial tool outputs/assistant text stay in the
                 // worker conversation; markTerminal's own harvest keeps any walk-back
                 // text it can find.
-                markTerminal(
+                val failed = markTerminal(
                     runId,
                     SubAgentStatus.FAILED,
                     me.rerere.rikkahub.data.ai.REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL +
                         ": worker finished without any final assistant text",
                     continuationBoundary,
                 )
+                if (!failed && executionHandle.stopReason() != null) {
+                    stopWorkerThenMarkTerminal(
+                        runId = runId,
+                        workerConvId = workerConvId,
+                        generationJob = startedGeneration,
+                        status = executionHandle.stopReason()!!.terminalStatus,
+                        error = "stop requested at generation boundary",
+                        boundary = continuationBoundary,
+                    )
+                }
                 if (registry.get(runId)?.notifyParent == true) {
                     notifyParentIfBackground(parentChatId, registry.get(runId))
                 }
@@ -636,9 +651,8 @@ class SubAgentEngine(
             }
         } catch (t: Throwable) {
             Log.w(TAG, "sub-agent run failed", t)
-            val terminal = if (t is CancellationException || executionHandle.isStopRequested()) {
-                SubAgentStatus.CANCELLED
-            } else SubAgentStatus.FAILED
+            val terminal = executionHandle.stopReason()?.terminalStatus
+                ?: if (t is CancellationException) SubAgentStatus.CANCELLED else SubAgentStatus.FAILED
             stopWorkerThenMarkTerminal(
                 runId = runId,
                 workerConvId = workerConvId,
@@ -689,23 +703,29 @@ class SubAgentEngine(
         error: String?,
         boundary: Int,
     ) = withContext(NonCancellable) {
+        registry.markStopping(runId)
         generationJob?.cancel()
         SubAgentTerminalCleanup.stopThenPublish(
             stop = {
-                // stopGeneration detaches the ConversationSession and finalizes persisted
-                // Pending tools. Bound cleanup so a non-cooperative provider/tool cannot
-                // prevent terminal publication forever.
-                runCatching {
-                    withTimeoutOrNull(3_000L) {
+                // Await verified quiescence without a deadline. If a native or third-party
+                // tool ignores cancellation, the run truthfully remains STOPPING.
+                generationJob?.join()
+                // Once execution is quiescent, serialize pending-tool finalization and DB save.
+                // Retry transient cleanup failures without publishing a false terminal state.
+                while (true) {
+                    try {
                         chatService.stopGeneration(workerConvId)
+                        break
+                    } catch (cleanupError: Throwable) {
+                        Log.w(TAG, "worker cleanup failed; run remains STOPPING", cleanupError)
+                        kotlinx.coroutines.delay(1_000L)
                     }
-                }.onFailure { cleanupError ->
-                    Log.w(TAG, "worker cleanup failed before terminal publication", cleanupError)
                 }
             },
             publish = {
-                // Attempt-scoped harvest happens only after the real ChatService cleanup.
-                markTerminal(runId, status, error, boundary)
+                val resolvedStatus = registry.requestedTerminalStatus(runId) ?: status
+                // Attempt-scoped harvest happens only after quiescence + persisted cleanup.
+                markTerminal(runId, resolvedStatus, error, boundary)
             },
         )
     }
@@ -715,7 +735,7 @@ class SubAgentEngine(
         status: SubAgentStatus,
         error: String?,
         boundary: Int = 0,
-    ) {
+    ): Boolean {
         // Harvest any partial work from the worker conversation so the parent can
         // inspect what was completed before the failure and decide whether to
         // continue it rather than re-running the same work from scratch.
@@ -738,7 +758,7 @@ class SubAgentEngine(
                 finishedAtMs = System.currentTimeMillis(),
             )
         }
-        if (!transitioned) return
+        if (!transitioned) return false
         // Phase 24 — mirror the terminal status into the cross-pillar ledger. TIMED_OUT and
         // FAILED both map to `failed`; CANCELLED maps to `cancelled`. (SUCCEEDED never
         // routes through here — it transitions the ledger row inline in executeRun.)
@@ -750,6 +770,7 @@ class SubAgentEngine(
             }
             agentRunRepo.markTerminal(ledgerId, ledgerStatus, error)
         }
+        return true
     }
 
     /**
@@ -772,6 +793,9 @@ class SubAgentEngine(
      */
     private suspend fun notifyParentIfBackground(parentChatId: String?, run: SubAgentRun?) {
         if (parentChatId == null || run == null || !run.runInBackground) return
+        // A parent stop fence suppresses completion wakeups from cancelled descendants;
+        // otherwise sendMessageIfIdle would start a fresh parent generation after /stop.
+        if (registry.isOwnerStopping(parentChatId)) return
         val parentUuid = runCatching { Uuid.parse(parentChatId) }.getOrNull() ?: return
         if (HeadlessConversations.isHeadless(parentUuid)) return
 

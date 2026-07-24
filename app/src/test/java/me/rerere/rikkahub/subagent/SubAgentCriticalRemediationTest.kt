@@ -77,7 +77,7 @@ class SubAgentCriticalRemediationTest {
         }
 
     @Test
-    fun `terminal cleanup still publishes when stop cleanup fails`() =
+    fun `terminal cleanup skips publication when stop cleanup fails`() =
         kotlinx.coroutines.runBlocking {
             val events = mutableListOf<String>()
             try {
@@ -89,9 +89,9 @@ class SubAgentCriticalRemediationTest {
                     publish = { events += "terminal" },
                 )
             } catch (_: IllegalStateException) {
-                // Publication is the invariant under test; production catches/logs cleanup.
+                // Cleanup failure must leave the run non-terminal; publication is skipped.
             }
-            assertEquals(listOf("stopGeneration", "terminal"), events)
+            assertEquals(listOf("stopGeneration"), events)
         }
 
     @Test
@@ -118,7 +118,7 @@ class SubAgentCriticalRemediationTest {
         assertFalse(registry.transitionTerminal("atomic", SubAgentStatus.SUCCEEDED) {
             it.copy(result = "late")
         })
-        assertEquals(SubAgentStatus.RUNNING, registry.get("atomic")?.status)
+        assertEquals(SubAgentStatus.STOPPING, registry.get("atomic")?.status)
     }
 
     @Test
@@ -131,7 +131,18 @@ class SubAgentCriticalRemediationTest {
         assertFalse(registry.transitionTerminal("r", SubAgentStatus.SUCCEEDED) {
             it.copy(result = "too late")
         })
+        // Direct handle use records stop intent but only the registry API publishes STOPPING.
         assertEquals(SubAgentStatus.RUNNING, registry.get("r")?.status)
+    }
+
+    @Test
+    fun `requested terminal reason rejects unrelated failure transition`() {
+        val registry = SubAgentRegistry()
+        val handle = SubAgentExecutionHandle()
+        registry.addPending(run("terminal-reason"), handle)
+        assertTrue(registry.requestCancel("terminal-reason"))
+        assertFalse(registry.transitionTerminal("terminal-reason", SubAgentStatus.FAILED) { it })
+        assertTrue(registry.transitionTerminal("terminal-reason", SubAgentStatus.CANCELLED) { it })
     }
 
     @Test
@@ -172,6 +183,42 @@ class SubAgentCriticalRemediationTest {
         assertNull((SubAgentToolAllowlist.resolve(null, eligible) as ToolAllowlistResult.Ok).names)
         assertEquals(emptySet<String>(),
             (SubAgentToolAllowlist.resolve(emptyList(), eligible) as ToolAllowlistResult.Ok).names)
+    }
+
+    @Test
+    fun `first stop reason wins and stopping remains active`() {
+        val registry = SubAgentRegistry()
+        val handle = SubAgentExecutionHandle()
+        registry.addPending(run("reason"), handle)
+
+        assertTrue(registry.requestTimeout("reason"))
+        assertFalse(registry.requestCancel("reason"))
+        assertEquals(SubAgentStatus.TIMED_OUT, registry.requestedTerminalStatus("reason"))
+        assertEquals(SubAgentStatus.STOPPING, registry.get("reason")?.status)
+        assertEquals(1, registry.list(activeOnly = true).size)
+    }
+
+    @Test
+    fun `parent stop fence blocks new workers and owner lookup survives pruned roots`() {
+        val registry = SubAgentRegistry()
+        val handle = SubAgentExecutionHandle()
+        registry.addPending(run("root"), handle)
+        assertEquals(1, registry.cancelAllForParent("chat-a"))
+        assertTrue(registry.isOwnerStopping("chat-a"))
+        assertFalse(registry.addPending(run("late"), SubAgentExecutionHandle()))
+        registry.clearOwnerStopFence("chat-a")
+        assertTrue(registry.addPending(run("next"), SubAgentExecutionHandle()))
+    }
+
+    @Test
+    fun `owner remains active while any child is stopping`() {
+        val registry = SubAgentRegistry()
+        val handle = SubAgentExecutionHandle()
+        registry.addPending(run("stopping-owner"), handle)
+        assertTrue(registry.requestCancel("stopping-owner"))
+        assertTrue(registry.hasActiveOwnerRuns("chat-a"))
+        assertTrue(registry.transitionTerminal("stopping-owner", SubAgentStatus.CANCELLED) { it })
+        assertFalse(registry.hasActiveOwnerRuns("chat-a"))
     }
 
     @Test
@@ -237,6 +284,28 @@ class SubAgentCriticalRemediationTest {
         assertEquals(2, registry.cancelAllForParent("chat-a"))
         assertTrue(rootGeneration.isCancelled)
         assertTrue(childGeneration.isCancelled)
+    }
+
+    @Test
+    fun `parent cascade finds active descendant after root eviction`() {
+        val registry = SubAgentRegistry()
+        val handle = SubAgentExecutionHandle()
+        val generation = Job()
+        handle.attachGeneration(generation)
+        registry.addPending(
+            run(
+                "orphan-descendant",
+                parentChat = "missing-worker",
+                ownerChat = "chat-a",
+                parentRun = "evicted-root",
+                rootRun = "evicted-root",
+            ),
+            handle,
+        )
+
+        assertEquals(1, registry.cancelAllForParent("chat-a"))
+        assertTrue(generation.isCancelled)
+        assertEquals(SubAgentStatus.STOPPING, registry.get("orphan-descendant")?.status)
     }
 
     @Test

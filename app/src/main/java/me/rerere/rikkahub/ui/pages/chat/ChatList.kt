@@ -901,8 +901,12 @@ private fun SubAgentChipRow(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         runs.forEach { run ->
-            val isTerminal = run.status != me.rerere.rikkahub.subagent.SubAgentStatus.RUNNING &&
-                run.status != me.rerere.rikkahub.subagent.SubAgentStatus.PENDING
+            val isTerminal = run.status == me.rerere.rikkahub.subagent.SubAgentStatus.SUCCEEDED ||
+                run.status == me.rerere.rikkahub.subagent.SubAgentStatus.FAILED ||
+                run.status == me.rerere.rikkahub.subagent.SubAgentStatus.TIMED_OUT ||
+                run.status == me.rerere.rikkahub.subagent.SubAgentStatus.CANCELLED
+            val canCancel = run.status == me.rerere.rikkahub.subagent.SubAgentStatus.PENDING ||
+                run.status == me.rerere.rikkahub.subagent.SubAgentStatus.RUNNING
             val isExpanded = expandedRunId == run.id
             val depthPrefix = if (run.depth > 0) "↳".repeat(run.depth) + " " else ""
             val label = run.label.take(24)
@@ -916,7 +920,8 @@ private fun SubAgentChipRow(
             // Status icon + color
             val statusIcon: @Composable (() -> Unit) = when (run.status) {
                 me.rerere.rikkahub.subagent.SubAgentStatus.PENDING,
-                me.rerere.rikkahub.subagent.SubAgentStatus.RUNNING -> {
+                me.rerere.rikkahub.subagent.SubAgentStatus.RUNNING,
+                me.rerere.rikkahub.subagent.SubAgentStatus.STOPPING -> {
                     {
                         CircularProgressIndicator(
                             modifier = Modifier.size(14.dp),
@@ -977,7 +982,7 @@ private fun SubAgentChipRow(
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
                     }
-                    if (!isTerminal) {
+                    if (canCancel) {
                         Icon(
                             imageVector = HugeIcons.Cancel01,
                             contentDescription = "Cancel sub-agent",

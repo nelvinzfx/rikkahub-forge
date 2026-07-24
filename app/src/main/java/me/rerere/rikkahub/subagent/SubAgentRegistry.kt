@@ -3,39 +3,42 @@ package me.rerere.rikkahub.subagent
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-internal fun SubAgentStatus.isTerminal(): Boolean =
-    this != SubAgentStatus.PENDING && this != SubAgentStatus.RUNNING
+internal fun SubAgentStatus.isTerminal(): Boolean = when (this) {
+    SubAgentStatus.PENDING, SubAgentStatus.RUNNING, SubAgentStatus.STOPPING -> false
+    else -> true
+}
 
 /** The generation and its supervising coroutine are one cancellable run-owned unit. */
 class SubAgentExecutionHandle {
-    private val stopRequested = AtomicBoolean(false)
+    private val stopReason = AtomicReference<SubAgentStopReason?>(null)
     private val supervisor = AtomicReference<Job?>(null)
     private val generation = AtomicReference<Job?>(null)
 
     fun attachSupervisor(job: Job) {
         supervisor.set(job)
-        if (stopRequested.get()) job.cancel()
+        if (stopReason.get() != null) job.cancel()
     }
 
     fun attachGeneration(job: Job) {
         generation.set(job)
-        if (stopRequested.get()) job.cancel()
+        if (stopReason.get() != null) job.cancel()
     }
 
-    fun isStopRequested(): Boolean = stopRequested.get()
+    fun stopReason(): SubAgentStopReason? = stopReason.get()
+    fun isStopRequested(): Boolean = stopReason() != null
 
-    fun requestGenerationStop(): Boolean {
-        if (!stopRequested.compareAndSet(false, true)) return false
+    fun requestGenerationStop(reason: SubAgentStopReason = SubAgentStopReason.TIMED_OUT): Boolean {
+        if (!stopReason.compareAndSet(null, reason)) return false
         generation.get()?.cancel()
         return true
     }
 
-    fun requestStop(): Boolean {
-        if (!stopRequested.compareAndSet(false, true)) return false
+    fun requestStop(reason: SubAgentStopReason = SubAgentStopReason.CANCELLED): Boolean {
+        if (!stopReason.compareAndSet(null, reason)) return false
         generation.get()?.cancel()
         supervisor.get()?.cancel()
         return true
@@ -63,8 +66,12 @@ class SubAgentRegistry {
     val runs: StateFlow<Map<String, SubAgentRun>> = _runs
     private val activeExecutions = ConcurrentHashMap<String, SubAgentExecutionHandle>()
     private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
+    // Owner stop fence: once a parent stop begins, no new worker owned by that chat may
+    // enter until ChatService starts the next generation epoch and clears the fence.
+    private val stoppingOwners = ConcurrentHashMap.newKeySet<String>()
 
     fun addPending(run: SubAgentRun, handle: SubAgentExecutionHandle? = null): Boolean = synchronized(lock) {
+        if (run.ownerChatId != null && run.ownerChatId in stoppingOwners) return@synchronized false
         if (run.conversationId != null && _runs.value.values.any {
                 it.conversationId == run.conversationId && !it.status.isTerminal()
             }) return@synchronized false
@@ -84,9 +91,11 @@ class SubAgentRegistry {
         val updated = transform(existing)
         // Terminal outcome is immutable. Same-status enrichment (for subtree warning flags)
         // remains allowed, while a racing late success cannot replace cancellation/failure.
-        val safe = if (existing.status.isTerminal() && updated.status != existing.status) {
-            existing
-        } else updated
+        val safe = when {
+            existing.status.isTerminal() && updated.status != existing.status -> existing
+            existing.status == SubAgentStatus.STOPPING && updated.status != SubAgentStatus.STOPPING -> existing
+            else -> updated
+        }
         _runs.value = _runs.value + (id to safe)
     }
 
@@ -98,11 +107,22 @@ class SubAgentRegistry {
         require(status.isTerminal())
         val existing = _runs.value[id] ?: return@synchronized false
         if (existing.status.isTerminal()) return@synchronized false
-        if (status == SubAgentStatus.SUCCEEDED &&
-            activeExecutions[id]?.isStopRequested() == true
-        ) return@synchronized false
+        val requestedTerminal = activeExecutions[id]?.stopReason()?.terminalStatus
+        if (requestedTerminal != null && status != requestedTerminal) return@synchronized false
         _runs.value = _runs.value + (id to transform(existing).copy(status = status))
         activeExecutions.remove(id)
+        true
+    }
+
+    fun requestedTerminalStatus(id: String): SubAgentStatus? =
+        activeExecutions[id]?.stopReason()?.terminalStatus
+
+    fun markStopping(id: String): Boolean = synchronized(lock) {
+        val existing = _runs.value[id] ?: return@synchronized false
+        if (existing.status.isTerminal()) return@synchronized false
+        if (existing.status != SubAgentStatus.STOPPING) {
+            _runs.value = _runs.value + (id to existing.copy(status = SubAgentStatus.STOPPING))
+        }
         true
     }
 
@@ -160,20 +180,52 @@ class SubAgentRegistry {
         val run = _runs.value[id] ?: return@synchronized false
         if (run.status.isTerminal()) return@synchronized false
         // Serialize stop intent with transitionTerminal so a racing success cannot publish
-        // between the authorization/status check and the handle's stop flag.
-        activeExecutions[id]?.requestStop() ?: false
+        // between the authorization/status check and the handle's stop reason.
+        val accepted = activeExecutions[id]?.requestStop(SubAgentStopReason.CANCELLED) ?: false
+        if (accepted && run.status != SubAgentStatus.STOPPING) {
+            _runs.value = _runs.value + (id to run.copy(status = SubAgentStatus.STOPPING))
+        }
+        accepted
     }
 
     fun requestCancelScoped(id: String, scope: SubAgentAccessScope): Boolean =
         getScoped(id, scope)?.let { requestCancel(it.id) } ?: false
 
-    fun cancelAllForParent(parentChatId: String): Int {
-        val directRoots = _runs.value.values.filter { it.parentChatId == parentChatId }
-        val ids = directRoots.flatMap { getSubtree(it.id) }
-            .filter { !it.status.isTerminal() }
+    fun requestTimeout(id: String): Boolean = synchronized(lock) {
+        val run = _runs.value[id] ?: return@synchronized false
+        if (run.status.isTerminal()) return@synchronized false
+        val accepted = activeExecutions[id]
+            ?.requestGenerationStop(SubAgentStopReason.TIMED_OUT) ?: false
+        if (accepted && run.status != SubAgentStatus.STOPPING) {
+            _runs.value = _runs.value + (id to run.copy(status = SubAgentStatus.STOPPING))
+        }
+        accepted
+    }
+
+    fun isOwnerStopping(ownerChatId: String?): Boolean =
+        ownerChatId != null && ownerChatId in stoppingOwners
+
+    fun clearOwnerStopFence(ownerChatId: String) {
+        stoppingOwners.remove(ownerChatId)
+    }
+
+    fun cancelAllForParent(parentChatId: String): Int = synchronized(lock) {
+        // Fence first, then snapshot by immutable owner. This closes dispatch-after-snapshot
+        // races and still finds descendants after a terminal root was pruned.
+        stoppingOwners.add(parentChatId)
+        val ids = _runs.value.values
+            .filter { it.ownerChatId == parentChatId && !it.status.isTerminal() }
             .map { it.id }
-            .distinct()
-        return ids.count(::requestCancel)
+        ids.count(::requestCancel)
+    }
+
+    fun hasActiveOwnerRuns(ownerChatId: String): Boolean =
+        _runs.value.values.any { it.ownerChatId == ownerChatId && !it.status.isTerminal() }
+
+    suspend fun awaitOwnerQuiescent(ownerChatId: String) {
+        runs.first { snapshot ->
+            snapshot.values.none { it.ownerChatId == ownerChatId && !it.status.isTerminal() }
+        }
     }
 
     fun clearExecution(id: String) {
@@ -230,6 +282,17 @@ class SubAgentRegistry {
     companion object {
         @Volatile private var globalInstance: SubAgentRegistry? = null
         internal fun onInstanceCreated(registry: SubAgentRegistry) { globalInstance = registry }
+        suspend fun awaitOwnerQuiescentViaGlobalInstance(ownerChatId: String) {
+            globalInstance?.awaitOwnerQuiescent(ownerChatId)
+        }
+
+        fun cancelAllForParentViaGlobalInstance(ownerChatId: String): Int =
+            globalInstance?.cancelAllForParent(ownerChatId) ?: 0
+
+        fun clearOwnerStopFenceViaGlobalInstance(ownerChatId: String) {
+            globalInstance?.clearOwnerStopFence(ownerChatId)
+        }
+
         fun cancelViaGlobalInstance(runId: String): Boolean =
             globalInstance?.requestCancel(runId) ?: false
     }

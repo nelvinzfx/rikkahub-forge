@@ -349,7 +349,7 @@ fun Route.conversationRoutes(
         // POST /api/conversations/{id}/stop - Stop generation
         post("/{id}/stop") {
             val uuid = call.parameters["id"].toUuid("conversation id")
-            chatService.stopGeneration(uuid)
+            chatService.requestStopGenerationAndSubAgents(uuid)
             call.respond(HttpStatusCode.OK, mapOf("status" to "stopped"))
         }
 

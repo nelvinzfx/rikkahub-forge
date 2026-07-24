@@ -317,12 +317,7 @@ class ChatVM(
     }
 
     fun stopGeneration() {
-        viewModelScope.launch {
-            // Match Telegram /stop: stopping a parent turn also requests cancellation of
-            // every active worker in that conversation's orchestration subtree.
-            subAgentRegistry.cancelAllForParent(_conversationId.toString())
-            chatService.stopGeneration(_conversationId)
-        }
+        chatService.requestStopGenerationAndSubAgents(_conversationId)
     }
 
     fun saveConversationAsync() {

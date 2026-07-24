@@ -606,13 +606,11 @@ fun subagentWaitAllTool(
         if (ids.any { registry.getScoped(it, scope) == null }) {
             return@Tool errEnv("unknown_id", "one or more run ids are not accessible")
         }
-        // Poll loop: check every 500ms if all runs are terminal
+        // Poll loop: STOPPING remains active until execution and cleanup are quiescent.
         while (true) {
             val allTerminal = ids.all { id ->
                 val run = registry.getScoped(id, scope)
-                run == null || run.status.let { s ->
-                    s != SubAgentStatus.RUNNING && s != SubAgentStatus.PENDING
-                }
+                run == null || run.status.isTerminal()
             }
             if (allTerminal) break
             if (System.currentTimeMillis() >= deadline) break
@@ -640,9 +638,7 @@ fun subagentWaitAllTool(
             put("runs", arr)
             put("all_terminal", ids.all { id ->
                 val run = registry.getScoped(id, scope)
-                run == null || run.status.let { s ->
-                    s != SubAgentStatus.RUNNING && s != SubAgentStatus.PENDING
-                }
+                run == null || run.status.isTerminal()
             })
         }.toString()))
     },
@@ -744,12 +740,8 @@ fun subagentSubtreeStatusTool(
             put("aggregate_tokens_in", totalIn)
             put("aggregate_tokens_out", totalOut)
             put("aggregate_tokens_total", totalIn + totalOut)
-            put("active_count", runs.count {
-                it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING
-            })
-            put("terminal_count", runs.count {
-                it.status != SubAgentStatus.RUNNING && it.status != SubAgentStatus.PENDING
-            })
+            put("active_count", runs.count { !it.status.isTerminal() })
+            put("terminal_count", runs.count { it.status.isTerminal() })
             put("runs", runArr)
         }.toString()))
     },

@@ -156,7 +156,11 @@ internal suspend fun TelegramBotService.handleResetCommand(chatId: Long) {
     val existing = chatRepo.getByChatId(chatId)
     if (existing != null) {
         runCatching { Uuid.parse(existing.conversationId) }.getOrNull()?.let { convId ->
-            runCatching { chatService.stopGeneration(convId) }
+            runCatching { chatService.awaitStopGenerationAndSubAgents(convId) }
+            // This conversation id is permanently discarded by /new, so its stop fence
+            // no longer protects a future epoch and can be released after verified quiescence.
+            me.rerere.rikkahub.subagent.SubAgentRegistry
+                .clearOwnerStopFenceViaGlobalInstance(convId.toString())
             // /new also drops the old conversation's "Allow for this chat" grants so
             // a fresh conversation starts with a clean approval slate. "Always Allow"
             // grants persist (they live in DataStore, scoped globally — the user
@@ -207,7 +211,7 @@ internal suspend fun TelegramBotService.handleStopCommand(chatId: Long) {
         try { client.sendMessage(chatId, "🛑 Could not resolve the conversation id. Try /new.") } catch (_: Throwable) {}
         return
     }
-    chatService.stopGeneration(convId)
+    val cancelledSubAgents = chatService.requestStopGenerationAndSubAgents(convId)
     // ALSO cancel the handleLlmTurn coroutine if it's parked waiting for a new
     // generation that won't come (typical when /stop is sent during the gap between
     // approval iterations). Without this, the per-chat mutex stays held forever.
@@ -216,13 +220,6 @@ internal suspend fun TelegramBotService.handleStopCommand(chatId: Long) {
     // Drop any unanswered ask_user clarify so the user's next message starts a new turn
     // instead of being consumed as the answer to the stopped turn's question.
     clearClarifyForChat(chatId)
-    // Phase 11: cascading /stop. Cancel every active sub-agent dispatched from this
-    // parent conversation. Spec hard constraint 8: "every model stops" — single tick.
-    val cancelledSubAgents = runCatching {
-        org.koin.java.KoinJavaComponent.getKoin()
-            .get<me.rerere.rikkahub.subagent.SubAgentRegistry>()
-            .cancelAllForParent(convId.toString())
-    }.getOrDefault(0)
     val msg = if (cancelledSubAgents > 0) {
         "🛑 Generation cancelled (also stopped $cancelledSubAgents sub-agent${if (cancelledSubAgents == 1) "" else "s"}). Send a new message when you're ready."
     } else {
@@ -506,7 +503,7 @@ internal suspend fun TelegramBotService.hasInFlightApprovedTool(chatId: Long): B
 internal suspend fun TelegramBotService.autoCancelStuckTurn(chatId: Long) {
     val mapping = chatRepo.getByChatId(chatId) ?: return
     val convId = runCatching { Uuid.parse(mapping.conversationId) }.getOrNull() ?: return
-    chatService.stopGeneration(convId)
+    chatService.requestStopGenerationAndSubAgents(convId)
     turnJobs.remove(chatId)?.let { runCatching { it.cancelAndJoin() } }
     cancelStaleApprovalKeyboards(chatId, reason = "auto-cancelled by new message")
     runCatching {

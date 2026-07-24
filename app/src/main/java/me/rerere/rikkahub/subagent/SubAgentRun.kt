@@ -68,6 +68,8 @@ data class SubAgentRun(
 enum class SubAgentStatus {
     PENDING,
     RUNNING,
+    /** Stop was requested; execution/cleanup is still in flight, so this is non-terminal. */
+    STOPPING,
     SUCCEEDED,
     FAILED,
     TIMED_OUT,
@@ -147,16 +149,20 @@ data class SubAgentRequest(
     val reasoningLevel: me.rerere.ai.core.ReasoningLevel? = null,
 )
 
+internal enum class SubAgentStopReason(val terminalStatus: SubAgentStatus) {
+    CANCELLED(SubAgentStatus.CANCELLED),
+    TIMED_OUT(SubAgentStatus.TIMED_OUT),
+}
+
 internal object SubAgentTerminalCleanup {
     suspend fun stopThenPublish(
         stop: suspend () -> Unit,
         publish: suspend () -> Unit,
     ) {
-        try {
-            stop()
-        } finally {
-            publish()
-        }
+        // Terminal publication is conditional on verified cleanup. Callers that cannot
+        // quiesce execution remain STOPPING rather than reporting a false terminal state.
+        stop()
+        publish()
     }
 }
 
