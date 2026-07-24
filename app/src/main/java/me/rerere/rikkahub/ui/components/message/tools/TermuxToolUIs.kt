@@ -39,15 +39,15 @@ import me.rerere.rikkahub.ui.components.richtext.HighlightCodeBlock
 import me.rerere.rikkahub.ui.components.richtext.parseDiffStats
 import me.rerere.rikkahub.ui.modifier.shimmer
 
-private const val WRITE_SUMMARY_MAX_CHARS = 12 * 1024
-private const val WRITE_SUMMARY_MAX_LINES = 20
-private const val WRITE_PREVIEW_MAX_CHARS = 64 * 1024
-private const val WRITE_PREVIEW_MAX_LINES = 400
-private const val EDIT_SUMMARY_MAX_FILES = 6
-private const val EDIT_SUMMARY_MAX_DIFF_LINES = 12
-private const val EDIT_SUMMARY_MAX_DIFF_CHARS = 12 * 1024
-private const val EDIT_PREVIEW_MAX_DIFF_CHARS = 48 * 1024
-private const val EDIT_PREVIEW_MAX_DIFF_LINES = 600
+private const val WRITE_SUMMARY_MAX_CHARS = 24 * 1024
+private const val WRITE_SUMMARY_MAX_LINES = 40
+private const val WRITE_PREVIEW_MAX_CHARS = 128 * 1024
+private const val WRITE_PREVIEW_MAX_LINES = 800
+private const val EDIT_SUMMARY_MAX_FILES = 20
+private const val EDIT_SUMMARY_SINGLE_DIFF_LINES = 64
+private const val EDIT_SUMMARY_MULTI_DIFF_LINES_PER_FILE = 64
+private const val EDIT_SUMMARY_MAX_TOTAL_DIFF_LINES = 320
+private const val EDIT_PREVIEW_MAX_DIFF_LINES = 1_200
 private const val EDIT_ERROR_MAX_LINES = 20
 private const val EDIT_DIAGNOSTIC_MAX_CHARS = 24 * 1024
 private const val EDIT_DIAGNOSTIC_MAX_LINES = 200
@@ -143,10 +143,15 @@ internal open class TermuxWriteToolUI(
             )
             TermuxBadgeRow(model.badges)
             WriteResultLine(model)
-            HighlightCodeBlock(
-                code = preview.text,
-                language = languageOf(model.path),
-                modifier = Modifier.fillMaxWidth(),
+            LineNumberedSyntaxPreview(
+                text = preview.text,
+                path = model.path,
+                loading = false,
+            )
+            PreviewOverflowFooter(
+                visible = preview.truncated,
+                shownLines = physicalLineCount(preview.text),
+                totalLines = physicalLineCount(model.content),
             )
         }
     }
@@ -213,35 +218,56 @@ internal open class TermuxEditToolUI(
     @Composable
     override fun Summary(context: ToolUIContext) {
         val model = remember(context) { model(context) } ?: return
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            TermuxBadgeRow(model.badges)
+        val files = remember(model.files) { model.files.take(EDIT_SUMMARY_MAX_FILES) }
+        val diffSources = remember(files, model.diff, model.single) {
             if (model.single) {
-                model.files.singleOrNull()?.let { EditFileSummaryRow(it) }
+                listOf(files.singleOrNull()?.diff ?: model.diff)
             } else {
-                model.files.take(EDIT_SUMMARY_MAX_FILES).forEach { EditFileSummaryRow(it) }
-                if (model.files.size > EDIT_SUMMARY_MAX_FILES) {
-                    Text(
-                        text = stringResource(
-                            R.string.tool_ui_termux_more_files,
-                            model.files.size - EDIT_SUMMARY_MAX_FILES,
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                files.map { it.diff }
+            }
+        }
+        val lineBudgets = remember(diffSources, model.single) {
+            if (model.single) {
+                diffSources.map { diff ->
+                    if (diff.isNullOrEmpty()) 0 else minOf(
+                        physicalLineCount(diff),
+                        EDIT_SUMMARY_SINGLE_DIFF_LINES,
                     )
+                }
+            } else {
+                allocateFairDiffPreviewLines(
+                    diffs = diffSources,
+                    maxTotalLines = EDIT_SUMMARY_MAX_TOTAL_DIFF_LINES,
+                    maxLinesPerDiff = EDIT_SUMMARY_MULTI_DIFF_LINES_PER_FILE,
+                )
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TermuxBadgeRow(model.badges)
+            files.forEachIndexed { index, file ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    EditFileSummaryRow(file)
+                    val diff = diffSources.getOrNull(index)
+                    val lineBudget = lineBudgets.getOrElse(index) { 0 }
+                    if (!diff.isNullOrEmpty() && lineBudget > 0) {
+                        DiffView(
+                            diff = diff,
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = lineBudget,
+                            showFileHeader = false,
+                        )
+                    }
                 }
             }
-            model.diff?.let { diff ->
-                val preview = remember(diff) {
-                    boundedTextPreview(diff, EDIT_SUMMARY_MAX_DIFF_CHARS, EDIT_SUMMARY_MAX_DIFF_LINES)
-                }
-                if (preview.text.isNotEmpty()) {
-                    DiffView(
-                        diff = preview.text,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = EDIT_SUMMARY_MAX_DIFF_LINES,
-                        showFileHeader = false,
-                    )
-                }
+            if (model.files.size > EDIT_SUMMARY_MAX_FILES) {
+                Text(
+                    text = stringResource(
+                        R.string.tool_ui_termux_more_files,
+                        model.files.size - EDIT_SUMMARY_MAX_FILES,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             listOfNotNull(model.error, model.detail).joinToString("\n").takeIf(String::isNotEmpty)?.let {
                 Text(
@@ -284,8 +310,12 @@ internal open class TermuxEditToolUI(
             ErrorDetails(model.error, model.detail)
             val hasPerFileDiffs = model.files.any { it.diff != null }
             val diffSource = if (hasPerFileDiffs) model.files.map { it.diff } else listOf(model.diff)
-            val boundedDiffs = remember(diffSource) {
-                boundedDiffPreviews(diffSource, EDIT_PREVIEW_MAX_DIFF_CHARS, EDIT_PREVIEW_MAX_DIFF_LINES)
+            val detailLineBudgets = remember(diffSource) {
+                allocateFairDiffPreviewLines(
+                    diffs = diffSource,
+                    maxTotalLines = EDIT_PREVIEW_MAX_DIFF_LINES,
+                    maxLinesPerDiff = EDIT_PREVIEW_MAX_DIFF_LINES,
+                )
             }
             val diagnosticGroups = remember(model.files) {
                 model.files.map { file -> listOfNotNull(file.error) + file.diagnostics }
@@ -297,7 +327,11 @@ internal open class TermuxEditToolUI(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     EditFileSummaryRow(file)
                     if (hasPerFileDiffs) {
-                        boundedDiffs.previews[index]?.let { BoundedDiffPreview(it) }
+                        val diff = diffSource.getOrNull(index)
+                        val lineBudget = detailLineBudgets.getOrElse(index) { 0 }
+                        if (!diff.isNullOrEmpty() && lineBudget > 0) {
+                            BoundedDiffPreview(diff, lineBudget)
+                        }
                     }
                     boundedDiagnostics.previews[index]?.let { preview ->
                         ErrorDetails(null, preview.text.takeIf(String::isNotEmpty))
@@ -305,7 +339,11 @@ internal open class TermuxEditToolUI(
                 }
             }
             if (!hasPerFileDiffs) {
-                boundedDiffs.previews.singleOrNull()?.let { BoundedDiffPreview(it) }
+                val diff = diffSource.singleOrNull()
+                val lineBudget = detailLineBudgets.singleOrNull() ?: 0
+                if (!diff.isNullOrEmpty() && lineBudget > 0) {
+                    BoundedDiffPreview(diff, lineBudget)
+                }
             }
         }
     }
@@ -333,9 +371,13 @@ private fun BoundedFallbackPreview(context: ToolUIContext) {
 }
 
 @Composable
-private fun BoundedDiffPreview(preview: BoundedTextPreview) {
-    if (preview.text.isNotEmpty()) {
-        DiffView(diff = preview.text, modifier = Modifier.fillMaxWidth())
+private fun BoundedDiffPreview(diff: String, maxLines: Int) {
+    if (diff.isNotEmpty() && maxLines > 0) {
+        DiffView(
+            diff = diff,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = maxLines,
+        )
     }
 }
 

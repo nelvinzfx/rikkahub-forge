@@ -298,6 +298,45 @@ class TermuxToolUIModelsTest {
         assertTrue(chars.previews[1]!!.truncated)
     }
 
+    @Test
+    fun fairInlineDiffBudgetKeepsLaterFilesVisible() {
+        val longFirst = (1..500).joinToString("\n") { "+first$it" }
+        val longSecond = (1..500).joinToString("\n") { "+second$it" }
+
+        assertEquals(
+            listOf(64, 64),
+            allocateFairDiffPreviewLines(
+                diffs = listOf(longFirst, longSecond),
+                maxTotalLines = 320,
+                maxLinesPerDiff = 64,
+            ),
+        )
+        assertEquals(
+            listOf(64, 0, 64),
+            allocateFairDiffPreviewLines(
+                diffs = listOf(longFirst, null, longSecond),
+                maxTotalLines = 128,
+                maxLinesPerDiff = 64,
+            ),
+        )
+    }
+
+    @Test
+    fun fairInlineDiffBudgetDividesConstrainedTotalAcrossFiles() {
+        val diffs = (1..10).map { file ->
+            (1..100).joinToString("\n") { line -> "+file$file-line$line" }
+        }
+        val budgets = allocateFairDiffPreviewLines(
+            diffs = diffs,
+            maxTotalLines = 320,
+            maxLinesPerDiff = 64,
+        )
+
+        assertEquals(320, budgets.sum())
+        assertTrue(budgets.all { it == 32 })
+        assertTrue(budgets.all { it > 0 })
+    }
+
     @Test fun joinedDiagnosticBudgetIsSharedAcrossFiles() {
         val bounded = boundedJoinedPreviews(
             listOf(listOf("a".repeat(80)), listOf("b".repeat(80))),

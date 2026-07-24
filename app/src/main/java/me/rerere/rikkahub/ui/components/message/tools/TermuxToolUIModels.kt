@@ -632,6 +632,29 @@ internal fun boundedTextPreview(
     return BoundedTextPreview(text.substring(0, end), end < text.length)
 }
 
+internal fun allocateFairDiffPreviewLines(
+    diffs: List<String?>,
+    maxTotalLines: Int,
+    maxLinesPerDiff: Int,
+): List<Int> {
+    require(maxTotalLines >= 0)
+    require(maxLinesPerDiff >= 1)
+    var remainingLines = maxTotalLines
+    var remainingDiffs = diffs.count { !it.isNullOrEmpty() }
+    return diffs.map { diff ->
+        if (diff.isNullOrEmpty() || remainingDiffs == 0 || remainingLines == 0) {
+            if (!diff.isNullOrEmpty()) remainingDiffs--
+            0
+        } else {
+            val fairShare = (remainingLines / remainingDiffs).coerceAtLeast(1)
+            val shown = minOf(physicalLineCount(diff), maxLinesPerDiff, fairShare, remainingLines)
+            remainingLines -= shown
+            remainingDiffs--
+            shown
+        }
+    }
+}
+
 internal fun boundedDiffPreviews(
     diffs: List<String?>,
     maxChars: Int,
