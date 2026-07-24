@@ -107,6 +107,18 @@ private fun diagnosticJson(value: TermuxEditDiagnostic) = buildJsonObject {
 }
 
 private const val EDIT_BOUNDARY = "Each file replacement is atomic. A crash between batch renames is not fully atomic without a WAL; an uncooperative same-UID writer can race the final check-to-rename interval."
+
+/**
+ * JsonObjectBuilder.put returns the previous mapping, which is null for a new key.
+ * Never use `value?.let { put(key, it) } ?: put(key, JsonNull)`: the Elvis branch
+ * would run after a successful first put and immediately overwrite it with null.
+ */
+internal fun kotlinx.serialization.json.JsonObjectBuilder.putNullableString(
+    key: String,
+    value: String?,
+) {
+    if (value == null) put(key, JsonNull) else put(key, value)
+}
 private fun editError(
     code: String,
     detail: String? = null,
@@ -122,7 +134,8 @@ private fun preparedJson(item: PreparedTermuxEdit, dryRun: Boolean, published: T
     put("changed", item.outcome.changed); put("applied", published?.state == "published"); put("dry_run", dryRun)
     put("state", when { !item.outcome.success -> "error"; published != null -> published.state; !item.outcome.changed -> "no_change"; dryRun -> "dry_run"; else -> "aborted" })
     put("line_ending", item.source.lineEnding); put("utf8_bom", item.source.bom); put("mode", item.snapshot.mode)
-    put("edits", buildJsonArray { item.outcome.diagnostics.forEach { add(diagnosticJson(it)) } }); item.diff?.let { put("diff", it) } ?: put("diff", JsonNull)
+    put("edits", buildJsonArray { item.outcome.diagnostics.forEach { add(diagnosticJson(it)) } })
+    putNullableString("diff", item.diff)
     published?.rolledBack?.let { put("rollback_restored", it) }; item.outcome.error?.let { put("error", it) }
 }
 
@@ -180,10 +193,16 @@ private fun response(request: TermuxEditRequest, prepared: List<PreparedTermuxEd
     val changed = prepared.any { it.outcome.changed }
     val applied = !dryRun && published?.success == true && published.items.any { it.state == "published" }
     put("ok", success); put("success", success); put("applied", applied); put("changed", changed); put("dry_run", dryRun); put("batch_aborted", !success)
-    put("state", when { !success -> "error"; dryRun -> "dry_run"; applied -> "applied"; else -> "no_change" }); put("diff_truncated", diffTruncated); error?.let { put("error", it) } ?: put("error", JsonNull)
+    put("state", when { !success -> "error"; dryRun -> "dry_run"; applied -> "applied"; else -> "no_change" })
+    put("diff_truncated", diffTruncated)
+    putNullableString("error", error)
     if (request.single) {
         val item = bounded.single(); val pub = published?.items?.single(); put("path", item.request.path); put("actual_path", item.snapshot.actualPath); put("replacements", item.outcome.diagnostics.count { it.status == "applied" })
-        put("source_sha256", item.snapshot.sha256); put("result_sha256", item.resultSha256); item.diff?.let { put("diff", it) } ?: put("diff", JsonNull); put("results", buildJsonArray { item.outcome.diagnostics.forEach { add(diagnosticJson(it)) } }); pub?.rolledBack?.let { put("rollback_restored", it) }
+        put("source_sha256", item.snapshot.sha256)
+        put("result_sha256", item.resultSha256)
+        putNullableString("diff", item.diff)
+        put("results", buildJsonArray { item.outcome.diagnostics.forEach { add(diagnosticJson(it)) } })
+        pub?.rolledBack?.let { put("rollback_restored", it) }
     } else put("files", buildJsonArray { bounded.forEachIndexed { index, item -> add(preparedJson(item, dryRun, published?.items?.get(index))) } })
     if (!dryRun) { put("crash_atomic", false); put("boundary", EDIT_BOUNDARY) }
 }

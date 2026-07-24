@@ -4,10 +4,21 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.Base64
 import java.util.UUID
 
 class TermuxEditProtocolTest {
+    @Test fun nullableStringWriterPreservesValuesAndEmitsExplicitNulls() {
+        val populated = buildJsonObject { putNullableString("diff", "--- a/file\n+++ b/file") }
+        val empty = buildJsonObject { putNullableString("diff", null) }
+
+        assertEquals("--- a/file\n+++ b/file", populated["diff"]?.jsonPrimitive?.content)
+        assertTrue(empty["diff"] is JsonNull)
+    }
+
     @Test fun snapshotParserRequiresCanonicalCorrelationAndBounds() {
         val id = UUID.randomUUID().toString(); val actual = Base64.getEncoder().encodeToString("/tmp/a".toByteArray()); val pathSha = "1".repeat(64); val contentSha = "a".repeat(64)
         val valid = "RIKKAHUB_EDIT_SNAPSHOT_V1\nrequest_id=$id\ncount=1\nitem=0,$actual,$pathSha,$contentSha,640,1:2,3\n"
