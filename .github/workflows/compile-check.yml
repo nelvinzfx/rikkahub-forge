@@ -75,6 +75,8 @@ jobs:
             --tests 'me.rerere.rikkahub.subagent.SubAgentRequestValidationTest' \
             --tests 'me.rerere.rikkahub.subagent.SubAgentCompletionWaitTest' \
             --tests 'me.rerere.rikkahub.subagent.SubAgentRegistryTest' \
+            --tests 'me.rerere.rikkahub.subagent.SubAgentCriticalRemediationTest' \
+            --tests 'me.rerere.rikkahub.data.ai.mcp.McpAssistantToolScopeTest' \
             --tests 'me.rerere.rikkahub.reliability.GitHubReleaseCheckerTest' \
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \

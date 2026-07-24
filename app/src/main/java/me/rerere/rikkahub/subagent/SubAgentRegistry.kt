@@ -3,163 +3,208 @@ package me.rerere.rikkahub.subagent
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+internal fun SubAgentStatus.isTerminal(): Boolean =
+    this != SubAgentStatus.PENDING && this != SubAgentStatus.RUNNING
+
+/** The generation and its supervising coroutine are one cancellable run-owned unit. */
+class SubAgentExecutionHandle {
+    private val stopRequested = AtomicBoolean(false)
+    private val supervisor = AtomicReference<Job?>(null)
+    private val generation = AtomicReference<Job?>(null)
+
+    fun attachSupervisor(job: Job) {
+        supervisor.set(job)
+        if (stopRequested.get()) job.cancel()
+    }
+
+    fun attachGeneration(job: Job) {
+        generation.set(job)
+        if (stopRequested.get()) job.cancel()
+    }
+
+    fun isStopRequested(): Boolean = stopRequested.get()
+
+    fun requestGenerationStop(): Boolean {
+        if (!stopRequested.compareAndSet(false, true)) return false
+        generation.get()?.cancel()
+        return true
+    }
+
+    fun requestStop(): Boolean {
+        if (!stopRequested.compareAndSet(false, true)) return false
+        generation.get()?.cancel()
+        supervisor.get()?.cancel()
+        return true
+    }
+
+    fun clearGeneration(job: Job) {
+        generation.compareAndSet(job, null)
+    }
+}
+
+data class SubAgentAccessScope(
+    val assistantId: String?,
+    val conversationId: String?,
+    val workerRunId: String?,
+)
 
 /**
- * Phase 11 — in-memory store of sub-agent runs + their associated coroutine [Job]s.
- *
- * The map of runs is a [StateFlow] so the chat UI's chip row can collect it; the map of
- * jobs is private since callers shouldn't be cancelling Jobs through random handles.
- * Capped at [SubAgentDefaults.REGISTRY_LRU_CAP] entries — when the cap is reached, the
- * oldest TERMINAL run gets evicted (running runs are never evicted).
- *
- * The registry intentionally does NOT enforce concurrency caps on its own — that's the
- * engine's job, since the engine has access to per-assistant configuration. This object
- * is just a typed mutable map with cancel hooks.
+ * Process-local sub-agent run store. Run status and execution ownership are deliberately
+ * separate: serialisable records feed UI/tools while [SubAgentExecutionHandle] owns both
+ * the supervising coroutine and the actual ChatService generation.
  */
 class SubAgentRegistry {
-
+    private val lock = Any()
     private val _runs = MutableStateFlow<Map<String, SubAgentRun>>(emptyMap())
     val runs: StateFlow<Map<String, SubAgentRun>> = _runs
+    private val activeExecutions = ConcurrentHashMap<String, SubAgentExecutionHandle>()
+    private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
 
-    /**
-     * Side-table of cancellable Jobs for currently RUNNING runs. Removed once the run
-     * reaches a terminal status. Kept separate from the StateFlow because [Job] is not
-     * serialisable and we don't want UI consumers re-collecting on Job-pointer churn.
-     */
-    private val activeJobs: ConcurrentHashMap<String, Job> = ConcurrentHashMap()
-
-    fun addPending(run: SubAgentRun, job: Job? = null) {
-        _runs.update { current ->
-            val pruned = pruneIfNeeded(current)
-            pruned + (run.id to run)
-        }
-        if (job != null) activeJobs[run.id] = job
+    fun addPending(run: SubAgentRun, handle: SubAgentExecutionHandle? = null): Boolean = synchronized(lock) {
+        if (run.conversationId != null && _runs.value.values.any {
+                it.conversationId == run.conversationId && !it.status.isTerminal()
+            }) return@synchronized false
+        _runs.value = pruneIfNeeded(_runs.value) + (run.id to run)
+        if (handle != null) activeExecutions[run.id] = handle
+        true
     }
 
-    fun update(id: String, transform: (SubAgentRun) -> SubAgentRun) {
-        _runs.update { current ->
-            val existing = current[id] ?: return@update current
-            current + (id to transform(existing))
-        }
+    /** Compatibility overload for existing tests/internal callers. */
+    fun addPending(run: SubAgentRun, job: Job?) {
+        val handle = job?.let { SubAgentExecutionHandle().apply { attachSupervisor(it) } }
+        addPending(run, handle)
     }
 
-    fun setJob(id: String, job: Job) {
-        activeJobs[id] = job
+    fun update(id: String, transform: (SubAgentRun) -> SubAgentRun) = synchronized(lock) {
+        val existing = _runs.value[id] ?: return@synchronized
+        val updated = transform(existing)
+        // Terminal outcome is immutable. Same-status enrichment (for subtree warning flags)
+        // remains allowed, while a racing late success cannot replace cancellation/failure.
+        val safe = if (existing.status.isTerminal() && updated.status != existing.status) {
+            existing
+        } else updated
+        _runs.value = _runs.value + (id to safe)
     }
 
-    /**
-     * Update the progress note on a RUNNING run. No-op if the run is terminal or missing.
-     * The note is surfaced via [SubAgentRun.progressNote] and visible to the parent
-     * through subagent_list / subagent_get without polling the worker conversation.
-     */
+    fun transitionTerminal(
+        id: String,
+        status: SubAgentStatus,
+        transform: (SubAgentRun) -> SubAgentRun,
+    ): Boolean = synchronized(lock) {
+        require(status.isTerminal())
+        val existing = _runs.value[id] ?: return@synchronized false
+        if (existing.status.isTerminal()) return@synchronized false
+        if (status == SubAgentStatus.SUCCEEDED &&
+            activeExecutions[id]?.isStopRequested() == true
+        ) return@synchronized false
+        _runs.value = _runs.value + (id to transform(existing).copy(status = status))
+        activeExecutions.remove(id)
+        true
+    }
+
     fun reportProgress(id: String, note: String) {
         update(id) { run ->
-            if (run.status == SubAgentStatus.RUNNING || run.status == SubAgentStatus.PENDING) {
-                run.copy(progressNote = note.take(500))
-            } else run
+            if (!run.status.isTerminal()) run.copy(progressNote = note.take(500)) else run
         }
     }
 
     fun get(id: String): SubAgentRun? = _runs.value[id]
 
-    fun list(activeOnly: Boolean): List<SubAgentRun> {
-        val all = _runs.value.values
-        return if (activeOnly) all.filter { it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING }
-        else all.toList()
+    fun list(activeOnly: Boolean): List<SubAgentRun> = _runs.value.values
+        .filter { !activeOnly || !it.status.isTerminal() }
+
+    fun scopeFor(assistantId: String?, conversationId: String?): SubAgentAccessScope =
+        SubAgentAccessScope(
+            assistantId = assistantId,
+            conversationId = conversationId,
+            workerRunId = conversationId?.let(SubAgentConversationTracker::lookup)?.runId,
+        )
+
+    fun canAccess(scope: SubAgentAccessScope, run: SubAgentRun): Boolean {
+        if (scope.assistantId == null || scope.conversationId == null) return false
+        if (run.parentAssistantId != scope.assistantId) return false
+        val anchorRunId = scope.workerRunId
+        if (anchorRunId != null) return run.id == anchorRunId || isDescendantOf(run, anchorRunId)
+        return run.ownerChatId == scope.conversationId
+    }
+
+    fun getScoped(id: String, scope: SubAgentAccessScope): SubAgentRun? =
+        get(id)?.takeIf { canAccess(scope, it) }
+
+    fun listScoped(activeOnly: Boolean, scope: SubAgentAccessScope): List<SubAgentRun> =
+        list(activeOnly).filter { canAccess(scope, it) }
+
+    private fun isDescendantOf(candidate: SubAgentRun, ancestorId: String): Boolean {
+        var parentId = candidate.parentRunId
+        val seen = mutableSetOf<String>()
+        while (parentId != null && seen.add(parentId)) {
+            if (parentId == ancestorId) return true
+            parentId = _runs.value[parentId]?.parentRunId
+        }
+        return false
     }
 
     fun activeCountForAssistant(parentAssistantId: String): Int =
-        _runs.value.values.count {
-            it.parentAssistantId == parentAssistantId &&
-                (it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING)
-        }
+        _runs.value.values.count { it.parentAssistantId == parentAssistantId && !it.status.isTerminal() }
 
-    fun globalActiveCount(): Int =
-        _runs.value.values.count {
-            it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING
-        }
+    fun globalActiveCount(): Int = _runs.value.values.count { !it.status.isTerminal() }
 
-    /**
-     * Cancel a single run by id. Returns true if a cancellable job existed; false if the
-     * run was already in a terminal state or if the id is unknown. Marking the status to
-     * CANCELLED is the caller's job (typically the engine after the Job's onCompletion
-     * fires) so we don't double-write.
-     */
+    fun hasActiveConversation(conversationId: String): Boolean =
+        _runs.value.values.any { it.conversationId == conversationId && !it.status.isTerminal() }
+
     fun requestCancel(id: String): Boolean {
-        val job = activeJobs.remove(id) ?: return false
-        job.cancel()
-        return true
+        val run = get(id) ?: return false
+        if (run.status.isTerminal()) return false
+        return activeExecutions[id]?.requestStop() ?: false
     }
 
-    /**
-     * Cancel every currently-active run dispatched from [parentChatId]. Hooked into the
-     * Telegram /stop handler and the in-app stop button so a single tick takes down the
-     * parent generation AND all of its sub-agents. Returns the count cancelled.
-     */
+    fun requestCancelScoped(id: String, scope: SubAgentAccessScope): Boolean =
+        getScoped(id, scope)?.let { requestCancel(it.id) } ?: false
+
     fun cancelAllForParent(parentChatId: String): Int {
-        var count = 0
-        val toCancel = _runs.value.values
-            .filter { it.parentChatId == parentChatId && (it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING) }
+        val directRoots = _runs.value.values.filter { it.parentChatId == parentChatId }
+        val ids = directRoots.flatMap { getSubtree(it.id) }
+            .filter { !it.status.isTerminal() }
             .map { it.id }
-        for (runId in toCancel) {
-            if (requestCancel(runId)) count++
-        }
-        return count
+            .distinct()
+        return ids.count(::requestCancel)
     }
 
-    fun clearJob(id: String) {
-        activeJobs.remove(id)
+    fun clearExecution(id: String) {
+        activeExecutions.remove(id)
     }
 
-    /**
-     * Phase C — cancel every active run in the subtree rooted at [rootRunId]. Walks all
-     * runs where orchestratorRunId == rootRunId (direct children and propagated descendants).
-     * Also cancels the root run itself if it is still active. Returns the count cancelled.
-     */
     fun cancelSubtree(rootRunId: String): Int {
-        var count = 0
-        val toCancel = _runs.value.values
-            .filter {
-                (it.orchestratorRunId == rootRunId || it.id == rootRunId) &&
-                    (it.status == SubAgentStatus.RUNNING || it.status == SubAgentStatus.PENDING)
-            }
-            .map { it.id }
-        for (runId in toCancel) {
-            if (requestCancel(runId)) {
-                count++
-            }
-        }
-        return count
+        val ids = getSubtree(rootRunId).filter { !it.status.isTerminal() }.map { it.id }
+        return ids.count(::requestCancel)
     }
 
-    /**
-     * Phase D — return all runs in the subtree rooted at [rootRunId]: the root itself
-     * plus every descendant (runs whose orchestratorRunId matches).
-     */
+    fun cancelSubtreeScoped(rootRunId: String, scope: SubAgentAccessScope): Int? {
+        val root = getScoped(rootRunId, scope) ?: return null
+        return getSubtree(root.id)
+            .filter { canAccess(scope, it) && !it.status.isTerminal() }
+            .count { requestCancel(it.id) }
+    }
+
     fun getSubtree(rootRunId: String): List<SubAgentRun> =
-        _runs.value.values.filter { it.id == rootRunId || it.orchestratorRunId == rootRunId }
+        _runs.value.values.filter {
+            it.id == rootRunId || it.orchestratorRunId == rootRunId || isDescendantOf(it, rootRunId)
+        }
 
-    /**
-     * Phase D — sum tokens across an entire subtree (root + descendants).
-     * Returns (totalIn, totalOut).
-     */
-    fun subtreeTokenSum(rootRunId: String): Pair<Long, Long> {
-        val runs = getSubtree(rootRunId)
-        val totalIn = runs.sumOf { it.tokensIn }
-        val totalOut = runs.sumOf { it.tokensOut }
-        return totalIn to totalOut
+    fun getSubtreeScoped(rootRunId: String, scope: SubAgentAccessScope): List<SubAgentRun>? {
+        val root = getScoped(rootRunId, scope) ?: return null
+        return getSubtree(root.id).filter { canAccess(scope, it) }
     }
 
-    // --- Phase D: per-assistant rate limiting (sliding 60s window) ---
-    private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
+    fun subtreeTokenSum(rootRunId: String): Pair<Long, Long> {
+        val subtree = getSubtree(rootRunId)
+        return subtree.sumOf { it.tokensIn } to subtree.sumOf { it.tokensOut }
+    }
 
-    /**
-     * Check + record a dispatch under the assistant's rate-limit window.
-     * Returns true if the dispatch is allowed, false if the rate limit is exceeded.
-     * [limit] = max dispatches per 60s. 0 = unlimited (always true).
-     */
     fun checkAndRecordRateLimit(assistantId: String, limit: Int): Boolean {
         if (limit <= 0) return true
         val now = System.currentTimeMillis()
@@ -175,34 +220,17 @@ class SubAgentRegistry {
 
     private fun pruneIfNeeded(current: Map<String, SubAgentRun>): Map<String, SubAgentRun> {
         if (current.size < SubAgentDefaults.REGISTRY_LRU_CAP) return current
-        // Evict the oldest TERMINAL run; never evict a running one. If every run is
-        // running, the cap would be exceeded — we accept this since it should be rare
-        // (50 concurrent sub-agents would already have been blocked by the global cap of 16).
-        val terminalSorted = current.values
-            .filter { it.status != SubAgentStatus.RUNNING && it.status != SubAgentStatus.PENDING }
-            .sortedBy { it.finishedAtMs ?: it.startedAtMs }
-        val toEvictId = terminalSorted.firstOrNull()?.id
-        return if (toEvictId != null) current - toEvictId else current
+        val id = current.values.filter { it.status.isTerminal() }
+            .minByOrNull { it.finishedAtMs ?: it.startedAtMs }?.id
+        return if (id == null) current else current - id
     }
 
     companion object {
-        @Volatile
-        private var globalInstance: SubAgentRegistry? = null
-
-        internal fun onInstanceCreated(registry: SubAgentRegistry) {
-            globalInstance = registry
-        }
-
-        /**
-         * Cancel a sub-agent run via the global singleton instance. Used by the UI chip row
-         * which doesn't have direct access to the registry through DI in the composable tree.
-         */
-        fun cancelViaGlobalInstance(runId: String): Boolean {
-            return globalInstance?.requestCancel(runId) ?: false
-        }
+        @Volatile private var globalInstance: SubAgentRegistry? = null
+        internal fun onInstanceCreated(registry: SubAgentRegistry) { globalInstance = registry }
+        fun cancelViaGlobalInstance(runId: String): Boolean =
+            globalInstance?.requestCancel(runId) ?: false
     }
 
-    init {
-        onInstanceCreated(this)
-    }
+    init { onInstanceCreated(this) }
 }

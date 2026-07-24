@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
@@ -22,11 +23,27 @@ private fun errEnv(error: String, detail: String): List<UIMessagePart> {
     return listOf(UIMessagePart.Text(obj.toString()))
 }
 
-private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject = buildJsonObject {
+private val reasoningLevelSchema = buildJsonObject {
+    put("type", "string")
+    put("enum", buildJsonArray {
+        ReasoningLevel.entries.forEach { add(it.name.lowercase()) }
+    })
+    put("description", "Optional reasoning level override")
+}
+
+private fun parseReasoningOrError(value: String?): Pair<ReasoningLevel?, List<UIMessagePart>?> =
+    try {
+        parseSubAgentReasoningLevel(value) to null
+    } catch (error: IllegalArgumentException) {
+        null to errEnv("invalid_reasoning_level", error.message.orEmpty())
+    }
+
+internal fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject = buildJsonObject {
     put("id", run.id)
     put("status", run.status.name)
     put("label", run.label)
     if (run.modelId != null) put("model_id", run.modelId)
+    if (run.tools != null) put("tools", buildJsonArray { run.tools.forEach { add(it) } })
     put("run_in_background", run.runInBackground)
     put("timeout_seconds", run.timeoutSeconds)
     put("max_trips", run.maxTrips)
@@ -49,10 +66,9 @@ private fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject =
 }
 
 /**
- * Phase 11 — sub-agent dispatch + observation tools. The four register only when the
- * assistant has the `Sub-agents` Local Tools toggle on, AND the calling conversation is
- * NOT itself headless (the engine refuses recursive dispatch — these tools are not
- * useful inside a sub-agent run).
+ * Sub-agent dispatch, continuation, observation, and cancellation tools. Availability is
+ * gated by the assistant's Sub-agents toggle; dispatch controls additionally obey the
+ * engine's headless-context, depth, and ownership policies.
  */
 
 fun subagentDispatchTool(
@@ -76,6 +92,9 @@ fun subagentDispatchTool(
         model_id: call subagent_list_models first to find available models across all
         providers, then pass the UUID here. Omit to inherit the current model.
 
+        tools: omit to inherit the assistant's eligible tool snapshot; pass [] for no
+        tools, or explicit names for an exact validated subset. Unknown names are rejected.
+
         timeout_seconds: default 600 (10 min). Set higher (up to 1800) for research tasks
         that need multiple web searches. max_trips: default 32 (max 128). It bounds the
         worker's NORMAL tool-capable turns; when a generation safety boundary is reached,
@@ -84,15 +103,15 @@ fun subagentDispatchTool(
         trip_count field in run records counts assistant messages (telemetry), not exact
         provider requests.
 
-        Concurrency caps: each assistant has its own (default 3, configurable 1-8) and
+        Concurrency caps: each assistant has its own (default 3, configurable 1-10) and
         there's a global cap of 16 across all assistants. Over-cap dispatches fail with
         a clear error — back off and retry, or wait for a slot.
 
         Workers that fail, time out, or are cancelled still harvest whatever text they
         produced before termination — check their result via subagent_get or
         subagent_wait_all before re-running the task. You can also dispatch a follow-up
-        worker targeting the original worker's conversation (use the conversation_id
-        from the run record) to continue its work.
+        continuation targeting the original terminal run (pass its id as source_run_id)
+        to continue its securely resolved worker conversation.
 
         Set notify_parent=true to have the engine post a synthetic user message into the
         parent conversation when the worker finishes. Default false — use subagent_wait_all
@@ -124,6 +143,7 @@ fun subagentDispatchTool(
                 put("include_soul", buildJsonObject { put("type", "boolean") })
                 put("include_recent_chats", buildJsonObject { put("type", "boolean") })
                 put("notify_parent", buildJsonObject { put("type", "boolean") })
+                put("reasoning_level", reasoningLevelSchema)
             },
             required = listOf("task"),
         )
@@ -145,6 +165,10 @@ fun subagentDispatchTool(
         val params = args.jsonObject
         val task = params["task"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool errEnv("invalid_task", "task is required")
+        val (reasoningLevel, reasoningError) = parseReasoningOrError(
+            params["reasoning_level"]?.jsonPrimitive?.contentOrNull
+        )
+        if (reasoningError != null) return@Tool reasoningError
         val request = SubAgentRequest(
             task = task,
             modelId = params["model_id"]?.jsonPrimitive?.contentOrNull,
@@ -161,6 +185,7 @@ fun subagentDispatchTool(
             includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
             includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
             notifyParent = params["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
+            reasoningLevel = reasoningLevel,
         )
         // The engine's recursion guard checks `HeadlessConversations.isHeadless(parentChatId)`
         // — if the calling conversation is itself headless (cron / sub-agent / workflow /
@@ -196,8 +221,9 @@ fun subagentDispatchContinueTool(
         conversation to continue its work. The new worker sees the full history of the
         prior attempt. Use this instead of subagent_dispatch when a worker made partial
         progress before failing — the new worker builds on the existing context rather
-        than restarting from scratch. Pass the conversation_id from the original run
-        record as worker_conversation_id. Accepts the same task/label/model/tools fields
+        than restarting from scratch. Pass the original terminal run id as source_run_id.
+        The engine securely resolves and exclusively leases its worker conversation.
+        Accepts the same task/label/model/tools fields
         as subagent_dispatch. max_trips works exactly as in subagent_dispatch: it bounds
         the new run's normal tool-capable turns, and one extra no-tools wrap-up turn follows
         if a generation safety boundary is reached.
@@ -205,7 +231,7 @@ fun subagentDispatchContinueTool(
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
-                put("worker_conversation_id", buildJsonObject { put("type", "string") })
+                put("source_run_id", buildJsonObject { put("type", "string") })
                 put("task", buildJsonObject { put("type", "string") })
                 put("label", buildJsonObject { put("type", "string") })
                 put("model_id", buildJsonObject { put("type", "string") })
@@ -225,8 +251,9 @@ fun subagentDispatchContinueTool(
                 put("include_soul", buildJsonObject { put("type", "boolean") })
                 put("include_recent_chats", buildJsonObject { put("type", "boolean") })
                 put("notify_parent", buildJsonObject { put("type", "boolean") })
+                put("reasoning_level", reasoningLevelSchema)
             },
-            required = listOf("worker_conversation_id", "task"),
+            required = listOf("source_run_id", "task"),
         )
     },
     needsApproval = { true },
@@ -240,14 +267,18 @@ fun subagentDispatchContinueTool(
             )
         }
         val params = args.jsonObject
-        val workerConversationId = params["worker_conversation_id"]?.jsonPrimitive?.contentOrNull
-            ?: return@Tool errEnv("invalid_id", "worker_conversation_id is required")
+        val sourceRunId = params["source_run_id"]?.jsonPrimitive?.contentOrNull
+            ?: return@Tool errEnv("invalid_id", "source_run_id is required")
         val task = params["task"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool errEnv("invalid_task", "task is required")
+        val (reasoningLevel, reasoningError) = parseReasoningOrError(
+            params["reasoning_level"]?.jsonPrimitive?.contentOrNull
+        )
+        if (reasoningError != null) return@Tool reasoningError
         val result = engine.dispatchContinue(
             parentAssistantId = callerContext.callerAssistantId.orEmpty(),
             parentChatId = callerContext.callerConversationId,
-            workerConversationId = workerConversationId,
+            sourceRunId = sourceRunId,
             task = task,
             label = params["label"]?.jsonPrimitive?.contentOrNull,
             modelId = params["model_id"]?.jsonPrimitive?.contentOrNull,
@@ -263,9 +294,7 @@ fun subagentDispatchContinueTool(
             includeSoul = params["include_soul"]?.jsonPrimitive?.booleanOrNull,
             includeRecentChats = params["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
             notifyParent = params["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
-            reasoningLevel = params["reasoning_level"]?.jsonPrimitive?.contentOrNull?.let {
-                runCatching { me.rerere.ai.core.ReasoningLevel.valueOf(it.uppercase()) }.getOrNull()
-            },
+            reasoningLevel = reasoningLevel,
         )
         when (result) {
             is SubAgentEngine.DispatchResult.Reject ->
@@ -306,9 +335,12 @@ fun subagentReportProgressTool(
             ?: return@Tool errEnv("invalid_note", "note is required")
         val convId = callerContext.callerConversationId
             ?: return@Tool errEnv("no_context", "no calling conversation context")
-        // Find the run whose conversationId matches the caller's conversation.
-        val run = registry.list(activeOnly = false).firstOrNull { it.conversationId == convId }
-            ?: return@Tool errEnv("not_a_worker", "this conversation is not a sub-agent worker")
+        val entry = SubAgentConversationTracker.lookup(convId)
+            ?: return@Tool errEnv("not_a_worker", "this conversation is not an active sub-agent worker")
+        val run = registry.getScoped(
+            entry.runId,
+            registry.scopeFor(callerContext.callerAssistantId, convId),
+        ) ?: return@Tool errEnv("not_a_worker", "this conversation is not an active sub-agent worker")
         registry.reportProgress(run.id, note)
         listOf(UIMessagePart.Text(buildJsonObject {
             put("ok", true)
@@ -317,7 +349,10 @@ fun subagentReportProgressTool(
     },
 )
 
-fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
+fun subagentListTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext,
+): Tool = Tool(
     name = "subagent_list",
     description = """
         List sub-agent runs visible to this assistant. Set active_only=true to omit
@@ -334,7 +369,10 @@ fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
     },
     execute = { args ->
         val activeOnly = args.jsonObject["active_only"]?.jsonPrimitive?.booleanOrNull ?: false
-        val list = registry.list(activeOnly)
+        val list = registry.listScoped(
+            activeOnly,
+            registry.scopeFor(callerContext.callerAssistantId, callerContext.callerConversationId),
+        )
         val arr = buildJsonArray {
             list.forEach { addJsonObject {
                 put("id", it.id)
@@ -352,7 +390,10 @@ fun subagentListTool(registry: SubAgentRegistry): Tool = Tool(
     },
 )
 
-fun subagentGetTool(registry: SubAgentRegistry): Tool = Tool(
+fun subagentGetTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext,
+): Tool = Tool(
     name = "subagent_get",
     description = "Fetch the full run record for a sub-agent by id. Read-only. Failed, timed-out, and cancelled runs include a partial result harvested from the worker conversation — inspect this before deciding to re-run the same task; the worker may have completed substantial work before the failure.".trimIndent(),
     parameters = {
@@ -366,17 +407,23 @@ fun subagentGetTool(registry: SubAgentRegistry): Tool = Tool(
     execute = { args ->
         val id = args.jsonObject["id"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool errEnv("invalid_id", "id is required")
-        val run = registry.get(id)
-            ?: return@Tool errEnv("unknown_id", "no sub-agent run with id $id")
+        val run = registry.getScoped(
+            id,
+            registry.scopeFor(callerContext.callerAssistantId, callerContext.callerConversationId),
+        ) ?: return@Tool errEnv("unknown_id", "no accessible sub-agent run with that id")
         listOf(UIMessagePart.Text(encodeRun(run).toString()))
     },
 )
 
-fun subagentCancelTool(registry: SubAgentRegistry): Tool = Tool(
+fun subagentCancelTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext,
+): Tool = Tool(
     name = "subagent_cancel",
     description = """
-        Cancel a running sub-agent by id. Marks the run CANCELLED; safe to call on
-        already-terminal runs (returns ok=false). Read-only from the user's perspective
+        Request cancellation of an accessible running sub-agent. Terminal status is
+        published only after generation stop and bounded cleanup/harvest. Unknown,
+        unauthorized, and terminal ids return the same error. Read-only from the user's perspective
         — no approval required.
     """.trimIndent().replace("\n", " "),
     parameters = {
@@ -390,10 +437,13 @@ fun subagentCancelTool(registry: SubAgentRegistry): Tool = Tool(
     execute = { args ->
         val id = args.jsonObject["id"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool errEnv("invalid_id", "id is required")
-        val cancelled = registry.requestCancel(id)
-        if (cancelled) {
-            registry.update(id) { it.copy(status = SubAgentStatus.CANCELLED, finishedAtMs = System.currentTimeMillis()) }
+        val scope = registry.scopeFor(
+            callerContext.callerAssistantId, callerContext.callerConversationId
+        )
+        if (registry.getScoped(id, scope) == null || !registry.requestCancelScoped(id, scope)) {
+            return@Tool errEnv("unknown_id", "no accessible active sub-agent run with that id")
         }
+        val cancelled = true
         listOf(UIMessagePart.Text(buildJsonObject {
             put("ok", cancelled)
             put("id", id)
@@ -457,6 +507,10 @@ fun subagentDispatchBatchTool(
                 ?: return@Tool errEnv("invalid_worker", "workers[$index] is not an object")
             val task = obj["task"]?.jsonPrimitive?.contentOrNull
                 ?: return@Tool errEnv("invalid_task", "workers[$index].task is required")
+            val (reasoningLevel, reasoningError) = parseReasoningOrError(
+                obj["reasoning_level"]?.jsonPrimitive?.contentOrNull
+            )
+            if (reasoningError != null) return@Tool reasoningError
             val request = SubAgentRequest(
                 task = task,
                 modelId = obj["model_id"]?.jsonPrimitive?.contentOrNull,
@@ -473,6 +527,7 @@ fun subagentDispatchBatchTool(
                 includeSoul = obj["include_soul"]?.jsonPrimitive?.booleanOrNull,
                 includeRecentChats = obj["include_recent_chats"]?.jsonPrimitive?.booleanOrNull,
                 notifyParent = obj["notify_parent"]?.jsonPrimitive?.booleanOrNull ?: false,
+                reasoningLevel = reasoningLevel,
             )
             when (val res = engine.dispatch(parentAssistantId, parentChatId, request)) {
                 is SubAgentEngine.DispatchResult.Reject ->
@@ -512,7 +567,10 @@ fun subagentDispatchBatchTool(
  * Phase C — wait for multiple sub-agent runs to reach a terminal state. Blocks until all
  * are terminal (or timeout). Cheaper than polling subagent_get in a loop.
  */
-fun subagentWaitAllTool(registry: SubAgentRegistry): Tool = Tool(
+fun subagentWaitAllTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext,
+): Tool = Tool(
     name = "subagent_wait_all",
     description = """
         Wait for one or more sub-agent runs to finish. Blocks until all given run ids
@@ -541,10 +599,16 @@ fun subagentWaitAllTool(registry: SubAgentRegistry): Tool = Tool(
             ?: return@Tool errEnv("invalid_ids", "ids array is required")
         val timeoutSec = params["timeout_seconds"]?.jsonPrimitive?.intOrNull ?: 300
         val deadline = System.currentTimeMillis() + timeoutSec * 1000L
+        val scope = registry.scopeFor(
+            callerContext.callerAssistantId, callerContext.callerConversationId
+        )
+        if (ids.any { registry.getScoped(it, scope) == null }) {
+            return@Tool errEnv("unknown_id", "one or more run ids are not accessible")
+        }
         // Poll loop: check every 500ms if all runs are terminal
         while (true) {
             val allTerminal = ids.all { id ->
-                val run = registry.get(id)
+                val run = registry.getScoped(id, scope)
                 run == null || run.status.let { s ->
                     s != SubAgentStatus.RUNNING && s != SubAgentStatus.PENDING
                 }
@@ -555,7 +619,7 @@ fun subagentWaitAllTool(registry: SubAgentRegistry): Tool = Tool(
         }
         val arr = buildJsonArray {
             ids.forEach { id ->
-                val run = registry.get(id)
+                val run = registry.getScoped(id, scope)
                 addJsonObject {
                     put("id", id)
                     if (run != null) {
@@ -574,7 +638,7 @@ fun subagentWaitAllTool(registry: SubAgentRegistry): Tool = Tool(
         listOf(UIMessagePart.Text(buildJsonObject {
             put("runs", arr)
             put("all_terminal", ids.all { id ->
-                val run = registry.get(id)
+                val run = registry.getScoped(id, scope)
                 run == null || run.status.let { s ->
                     s != SubAgentStatus.RUNNING && s != SubAgentStatus.PENDING
                 }
@@ -587,7 +651,10 @@ fun subagentWaitAllTool(registry: SubAgentRegistry): Tool = Tool(
  * Phase C — cancel all sub-agent runs in a subtree. Takes the root orchestrator run id
  * and cancels every active descendant plus the root itself.
  */
-fun subagentCancelSubtreeTool(registry: SubAgentRegistry): Tool = Tool(
+fun subagentCancelSubtreeTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext,
+): Tool = Tool(
     name = "subagent_cancel_subtree",
     description = """
         Cancel all sub-agent runs in a subtree. Pass the orchestrator run id (the root
@@ -606,7 +673,11 @@ fun subagentCancelSubtreeTool(registry: SubAgentRegistry): Tool = Tool(
     execute = { args ->
         val id = args.jsonObject["orchestrator_run_id"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool errEnv("invalid_id", "orchestrator_run_id is required")
-        val cancelled = registry.cancelSubtree(id)
+        val scope = registry.scopeFor(
+            callerContext.callerAssistantId, callerContext.callerConversationId
+        )
+        val cancelled = registry.cancelSubtreeScoped(id, scope)
+            ?: return@Tool errEnv("unknown_id", "no accessible sub-agent run with that id")
         listOf(UIMessagePart.Text(buildJsonObject {
             put("cancelled", cancelled)
             put("orchestrator_run_id", id)
@@ -619,7 +690,10 @@ fun subagentCancelSubtreeTool(registry: SubAgentRegistry): Tool = Tool(
  * Takes the root orchestrator run id and returns a flat list of all runs in the subtree
  * with their depth, status, tokens, and trip count, plus aggregate totals.
  */
-fun subagentSubtreeStatusTool(registry: SubAgentRegistry): Tool = Tool(
+fun subagentSubtreeStatusTool(
+    registry: SubAgentRegistry,
+    callerContext: me.rerere.rikkahub.data.ai.tools.ToolInvocationContext,
+): Tool = Tool(
     name = "subagent_subtree_status",
     description = """
         Show the full status of a sub-agent subtree. Pass the root orchestrator run id.
@@ -639,14 +713,13 @@ fun subagentSubtreeStatusTool(registry: SubAgentRegistry): Tool = Tool(
     execute = { args ->
         val id = args.jsonObject["orchestrator_run_id"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool errEnv("invalid_id", "orchestrator_run_id is required")
-        val runs = registry.getSubtree(id)
-        if (runs.isEmpty()) {
-            return@Tool listOf(UIMessagePart.Text(buildJsonObject {
-                put("error", "no_runs_found")
-                put("detail", "no sub-agent runs found for orchestrator_run_id '$id'")
-            }.toString()))
-        }
-        val (totalIn, totalOut) = registry.subtreeTokenSum(id)
+        val scope = registry.scopeFor(
+            callerContext.callerAssistantId, callerContext.callerConversationId
+        )
+        val runs = registry.getSubtreeScoped(id, scope)
+            ?: return@Tool errEnv("unknown_id", "no accessible sub-agent run with that id")
+        val totalIn = runs.sumOf { it.tokensIn }
+        val totalOut = runs.sumOf { it.tokensOut }
         val runArr = buildJsonArray {
             runs.sortedBy { it.depth }.forEach { run ->
                 addJsonObject {

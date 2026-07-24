@@ -124,6 +124,16 @@ import kotlin.uuid.Uuid
 private const val TAG = "ChatService"
 private const val STOP_JOIN_GRACE_MS = 1_500L
 
+/** Per-attempt generation settings that must not mutate persisted conversation metadata. */
+internal data class ChatGenerationOverrides(
+    val chatModelId: Uuid?,
+    val customSystemPrompt: String?,
+    val suppressMemory: Boolean,
+    val suppressAssistantPrompt: Boolean,
+    val suppressRecentChats: Boolean,
+    val enforceSubAgentPromptRules: Boolean,
+)
+
 internal fun backgroundTextGenerationParams(
     model: Model,
     reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
@@ -534,6 +544,57 @@ class ChatService(
         return true
     }
 
+    /**
+     * Snapshot the model-facing tool names authorized for a sub-agent attempt. Dispatch
+     * validates explicit names against this pool, then passes the resulting immutable set
+     * back into [sendMessage]. A null request therefore inherits this snapshot, while an
+     * empty request remains exactly empty even if assistant settings change mid-attempt.
+     */
+    internal suspend fun resolveSubAgentToolNames(
+        assistantId: Uuid,
+        modelId: Uuid?,
+        allowDispatchTools: Boolean,
+    ): Set<String> {
+        val settings = settingsStore.settingsFlow.first()
+        val assistant = settings.getAssistantById(assistantId) ?: return emptySet()
+        val model = settings.findModelById(
+            modelId,
+            fallback = assistant.chatModelId ?: settings.chatModelId,
+        ) ?: return emptySet()
+        val syntheticConversationId = Uuid.random()
+        val invocationContext = me.rerere.rikkahub.data.ai.tools.ToolInvocationContext(
+            callerAssistantId = assistantId.toString(),
+            callerConversationId = syntheticConversationId.toString(),
+            isHeadless = true,
+            modelCanSeeImages = Modality.IMAGE in model.inputModalities,
+        )
+        // Workers always need the ownership-scoped observation/progress surface. Child
+        // dispatch tools are removed below when the depth policy disallows another level.
+        val localOptions = assistant.localTools
+            .filterNot { it == me.rerere.rikkahub.data.ai.tools.LocalToolOption.SubAgents }
+            .toMutableList()
+            .apply { add(me.rerere.rikkahub.data.ai.tools.LocalToolOption.SubAgents) }
+        val skills = if (assistant.enabledSkills.isEmpty()) emptyList() else {
+            createSkillTools(assistant.enabledSkills, skillManager.listSkills(), skillManager)
+        }
+        return buildSet {
+            if (settings.enableWebSearch) addAll(createSearchTools(settings).map { it.name })
+            addAll(localTools.getTools(localOptions, invocationContext).map { it.name }.filter { name ->
+                allowDispatchTools || name !in setOf(
+                    "subagent_dispatch", "subagent_dispatch_continue", "subagent_dispatch_batch"
+                )
+            })
+            addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString()).map { it.name })
+            addAll(skills.map { it.name })
+            mcpManager.getAvailableToolsForAssistant(assistant.id)
+                .forEach { (serverId, serverName, tool) ->
+                    add(me.rerere.rikkahub.data.ai.mcp.modelFacingMcpToolName(
+                        serverId, serverName, tool.name
+                    ))
+                }
+        }
+    }
+
     // ---- 发送消息 ----
 
     fun sendMessage(
@@ -542,13 +603,28 @@ class ChatService(
         answer: Boolean = true,
         orchestratorOverride: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
         reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
-        // Per-dispatch NORMAL generation-step budget. Null = the hard ordinary-chat
-        // default. Sub-agent runs pass their request's maxTrips. Every forced exhaustion
-        // receives one mandatory no-tools final wrap-up inside GenerationHandler.
-        // Transient per-call value — never persisted into the Conversation.
         generationMaxSteps: Int? = null,
     ) {
-        if (content.isEmptyInputMessage()) return
+        sendMessageOwned(
+            conversationId, content, answer, orchestratorOverride,
+            reasoningLevelOverride, generationMaxSteps,
+        )
+    }
+
+    /** Internal ownership seam for orchestrated attempts; ordinary chat remains fire-and-forget. */
+    internal fun sendMessageOwned(
+        conversationId: Uuid,
+        content: List<UIMessagePart>,
+        answer: Boolean = true,
+        orchestratorOverride: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
+        reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
+        generationMaxSteps: Int? = null,
+        // Null preserves ordinary chat semantics. A non-null set is an immutable snapshot
+        // of the exact tools authorized for this attempt; empty means no tools.
+        exactToolNames: Set<String>? = null,
+        generationOverrides: ChatGenerationOverrides? = null,
+    ): Job? {
+        if (content.isEmptyInputMessage()) return null
 
         val session = getOrCreateSession(conversationId)
         val previousJob = session.getJob()
@@ -615,7 +691,14 @@ class ChatService(
 
                 // 开始补全 — only if router didn't handle the turn
                 if (answer && !routedHandled) {
-                    handleMessageComplete(conversationId, orchestratorMode = turnOrchestratorMode, reasoningLevelOverride = reasoningLevelOverride, generationMaxSteps = generationMaxSteps)
+                    handleMessageComplete(
+                        conversationId,
+                        orchestratorMode = turnOrchestratorMode,
+                        reasoningLevelOverride = reasoningLevelOverride,
+                        generationMaxSteps = generationMaxSteps,
+                        exactToolNames = exactToolNames,
+                        generationOverrides = generationOverrides,
+                    )
                 }
 
                 _generationDoneFlow.emit(conversationId)
@@ -625,6 +708,7 @@ class ChatService(
             }
         }
         session.setJob(job)
+        return job
     }
 
     /**
@@ -955,6 +1039,8 @@ class ChatService(
         orchestratorMode: me.rerere.rikkahub.data.model.OrchestratorMode? = null,
         reasoningLevelOverride: me.rerere.ai.core.ReasoningLevel? = null,
         generationMaxSteps: Int? = null,
+        exactToolNames: Set<String>? = null,
+        generationOverrides: ChatGenerationOverrides? = null,
     ) {
         val settings = settingsStore.settingsFlow.first()
         // Resolve the assistant from this conversation's own assistantId — the global
@@ -969,8 +1055,11 @@ class ChatService(
         // dispatch carried an explicit model_id (or the assistant's subAgentModelId default).
         // findModelById(uuid, fallback) resolves uuid first and only falls through to fallback
         // when uuid is null or doesn't resolve - exactly the conv -> assistant -> global order.
+        val attemptModelId = if (generationOverrides != null) {
+            generationOverrides.chatModelId
+        } else initialConversation.chatModelId
         val model = settings.findModelById(
-            initialConversation.chatModelId,
+            attemptModelId,
             fallback = assistant.chatModelId ?: settings.chatModelId,
         ) ?: throw IllegalStateException(
                 "No chat model selected. Pick one in Settings → Default models, or send /model in Telegram."
@@ -1006,7 +1095,9 @@ class ChatService(
 
             // memory tool
             if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (settings.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty()) {
+                if (settings.enableWebSearch ||
+                    mcpManager.getAvailableToolsForAssistant(assistant.id).isNotEmpty()
+                ) {
                     addError(
                         IllegalStateException(context.getString(R.string.tools_warning)),
                         conversationId,
@@ -1137,14 +1228,19 @@ class ChatService(
                 },
                 messages = generationMessages,
                 assistant = assistant,
-                conversationSystemPrompt = conversation.customSystemPrompt,
+                conversationSystemPrompt = if (generationOverrides != null) {
+                    generationOverrides.customSystemPrompt
+                } else conversation.customSystemPrompt,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
                 workspaceCwd = conversation.workspaceCwd,
-                suppressMemory = conversation.suppressMemory,
-                suppressAssistantPrompt = conversation.suppressAssistantPrompt,
-                suppressRecentChats = conversation.suppressRecentChats,
-                enforceSubAgentPromptRules = conversation.enforceSubAgentPromptRules,
+                suppressMemory = generationOverrides?.suppressMemory ?: conversation.suppressMemory,
+                suppressAssistantPrompt = generationOverrides?.suppressAssistantPrompt
+                    ?: conversation.suppressAssistantPrompt,
+                suppressRecentChats = generationOverrides?.suppressRecentChats
+                    ?: conversation.suppressRecentChats,
+                enforceSubAgentPromptRules = generationOverrides?.enforceSubAgentPromptRules
+                    ?: conversation.enforceSubAgentPromptRules,
                 orchestratorMode = effectiveOrchestratorMode,
                 reasoningLevelOverride = reasoningLevelOverride,
                 memories = memoryRepository.getCoreMemories(
@@ -1182,13 +1278,18 @@ class ChatService(
                     val localToolOptions = assistant.localTools
                         .filterNot { it == me.rerere.rikkahub.data.ai.tools.LocalToolOption.SubAgents }
                         .toMutableList()
-                    if (effectiveOrchestratorMode != me.rerere.rikkahub.data.model.OrchestratorMode.OFF) {
+                    val exactNeedsSubAgentControls = exactToolNames?.any {
+                        it.startsWith("subagent_")
+                    } == true
+                    if (effectiveOrchestratorMode != me.rerere.rikkahub.data.model.OrchestratorMode.OFF ||
+                        exactNeedsSubAgentControls
+                    ) {
                         localToolOptions += me.rerere.rikkahub.data.ai.tools.LocalToolOption.SubAgents
                     }
                     addAll(localTools.getTools(localToolOptions, invocationCtx))
                     addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
                     addAll(skillTools)
-                    mcpManager.getAllAvailableTools().also { allTools ->
+                    mcpManager.getAvailableToolsForAssistant(assistant.id).also { allTools ->
                         // Upstream name validation: a server name that isn't pure
                         // English+digits would produce an invalid `mcp__<name>__tool`
                         // surface, so surface it as an error rather than emit a tool the
@@ -1220,8 +1321,9 @@ class ChatService(
                         // ^[a-zA-Z0-9_-]+$ limit. The execute lambda below still calls callTool
                         // with the REAL tool.name, since the namespacing exists only on the
                         // model-facing surface.
-                        val serverSlug = serverId.toString().take(8).replace("-", "")
-                        val mcpToolName = "mcp__" + serverSlug + "_" + serverName + "__" + tool.name
+                        val mcpToolName = me.rerere.rikkahub.data.ai.mcp.modelFacingMcpToolName(
+                            serverId, serverName, tool.name
+                        )
                         add(
                             Tool(
                                 name = mcpToolName,
@@ -1246,6 +1348,14 @@ class ChatService(
                             )
                         )
                     }
+                }.let { available ->
+                    exactToolNames?.let { allowed ->
+                        val missing = allowed - available.mapTo(mutableSetOf()) { it.name }
+                        check(missing.isEmpty()) {
+                            "sub-agent tool snapshot became unavailable: ${missing.sorted().joinToString(", ")}"
+                        }
+                        available.filter { it.name in allowed }
+                    } ?: available
                 },
             ).conflateLatest(STREAM_UPDATE_WINDOW_MS).onCompletion {
                 // 取消 Live Update 通知

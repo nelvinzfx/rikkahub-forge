@@ -5,6 +5,22 @@ import kotlinx.serialization.Serializable
 import me.rerere.ai.core.InputSchema
 import kotlin.uuid.Uuid
 
+internal fun modelFacingMcpToolName(serverId: Uuid, serverName: String, toolName: String): String {
+    val serverSlug = serverId.toString().take(8).replace("-", "")
+    return "mcp__${serverSlug}_${serverName}__${toolName}"
+}
+
+internal fun availableMcpToolsForAssistant(
+    servers: List<McpServerConfig>,
+    enabledServerIds: Set<Uuid>,
+): List<Triple<Uuid, String, McpTool>> = servers
+    .filter { it.commonOptions.enable && it.id in enabledServerIds }
+    .flatMap { server ->
+        server.commonOptions.tools
+            .filter { it.enable }
+            .map { tool -> Triple(server.id, server.commonOptions.name, tool) }
+    }
+
 @Serializable
 data class McpCommonOptions(
     val enable: Boolean = true,

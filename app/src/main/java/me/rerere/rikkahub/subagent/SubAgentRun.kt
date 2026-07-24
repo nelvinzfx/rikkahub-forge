@@ -17,6 +17,9 @@ data class SubAgentRun(
     val id: String,
     val parentChatId: String?,         // the parent assistant chat that dispatched this — used for /stop cascade
     val parentAssistantId: String,
+    // Immutable root owner chat. Descendants keep this even when direct parent runs are
+    // evicted from the process-local registry, so authorization never depends on LRU history.
+    val ownerChatId: String? = parentChatId,
     // Hidden worker conversation backing this run. Populated as soon as executeRun creates
     // the conversation so the parent status pill can navigate to it directly.
     val conversationId: String? = null,
@@ -47,6 +50,12 @@ data class SubAgentRun(
     // Phase 30 (Orchestrator Mode Phase C) — subtree identity + depth.
     val depth: Int = 0,
     val orchestratorRunId: String? = null, // null = top-level worker; non-null = descendant
+    // Direct orchestration parent. Unlike orchestratorRunId (subtree root), this preserves
+    // the full ancestry needed for worker-scoped authorization and continuation lineage.
+    val parentRunId: String? = null,
+    // Set only for continuation attempts; points at the terminal run whose conversation
+    // this attempt safely reuses.
+    val sourceRunId: String? = null,
     // Phase D — subtree cost-guard signals.
     val subtreeTokenWarning: Boolean = false, // set when subtree hits 80% of cap
     val subtreeTokenCancelled: Boolean = false, // set when subtree hits 100% of cap
@@ -117,12 +126,10 @@ data class SubAgentRequest(
     val systemPrompt: String? = null,
     val tools: List<String>? = null,
     val runInBackground: Boolean = false,
-    // If non-null, the worker sends its first message into this existing conversation
-    // instead of creating a new one. Used by subagent_dispatch_continue to pick up
-    // where a previous worker left off. HeadlessConversations.mark is NOT set on a
-    // continue target — the call site (SubAgentEngine.executeContinueRun) handles
-    // lifecycle and registration separately.
+    // Internal continuation target. Public callers identify the source run; the engine
+    // resolves this id only after ownership, terminal-state, assistant, and exclusivity checks.
     val workerConversationId: String? = null,
+    val sourceRunId: String? = null,
     val timeoutSeconds: Int = SubAgentDefaults.DEFAULT_TIMEOUT_SECONDS,
     val maxTrips: Int = SubAgentDefaults.DEFAULT_MAX_TRIPS,
     val label: String? = null,
@@ -139,6 +146,97 @@ data class SubAgentRequest(
     // subAgentReasoningLevel, then fall back to ReasoningLevel.AUTO.
     val reasoningLevel: me.rerere.ai.core.ReasoningLevel? = null,
 )
+
+internal object SubAgentTerminalCleanup {
+    suspend fun stopThenPublish(
+        stop: suspend () -> Unit,
+        publish: suspend () -> Unit,
+    ) {
+        try {
+            stop()
+        } finally {
+            publish()
+        }
+    }
+}
+
+internal fun parseSubAgentReasoningLevel(value: String?): me.rerere.ai.core.ReasoningLevel? {
+    if (value == null) return null
+    return me.rerere.ai.core.ReasoningLevel.entries.firstOrNull {
+        it.name.equals(value.trim(), ignoreCase = true)
+    } ?: throw IllegalArgumentException(
+        "reasoning_level must be one of ${me.rerere.ai.core.ReasoningLevel.entries.joinToString { it.name.lowercase() }}"
+    )
+}
+
+internal object SubAgentAttemptBoundary {
+    fun <T> after(items: List<T>, boundary: Int): List<T> = items.drop(boundary.coerceAtLeast(0))
+
+    fun <T> usageAfter(
+        items: List<T>,
+        boundary: Int,
+        usageOf: (T) -> Pair<Long, Long>?,
+        isAssistant: (T) -> Boolean,
+    ): Triple<Long, Long, Int> {
+        var tokensIn = 0L
+        var tokensOut = 0L
+        var trips = 0
+        for (item in after(items, boundary)) {
+            usageOf(item)?.let { (input, output) ->
+                tokensIn += input
+                tokensOut += output
+            }
+            if (isAssistant(item)) trips++
+        }
+        return Triple(tokensIn, tokensOut, trips)
+    }
+}
+
+internal object SubAgentDepthPolicy {
+    /** maxDepth=0 disables workers; maxDepth=1 allows only depth-0 workers. */
+    fun canDispatch(childDepth: Int, maxDepth: Int): Boolean =
+        maxDepth > 0 && childDepth >= 0 && childDepth < maxDepth
+
+    /** Whether a worker already running at [workerDepth] may expose child-dispatch tools. */
+    fun canSpawnChild(workerDepth: Int, maxDepth: Int): Boolean =
+        canDispatch(workerDepth + 1, maxDepth)
+}
+
+internal enum class ContinuationPolicyResult {
+    OK,
+    UNKNOWN_OR_UNAUTHORIZED,
+    SOURCE_NOT_TERMINAL,
+    CONVERSATION_ACTIVE,
+}
+
+internal object SubAgentContinuationPolicy {
+    fun validate(
+        source: SubAgentRun?,
+        authorized: Boolean,
+        conversationActive: Boolean,
+    ): ContinuationPolicyResult = when {
+        source == null || !authorized -> ContinuationPolicyResult.UNKNOWN_OR_UNAUTHORIZED
+        !source.status.isTerminal() -> ContinuationPolicyResult.SOURCE_NOT_TERMINAL
+        conversationActive -> ContinuationPolicyResult.CONVERSATION_ACTIVE
+        else -> ContinuationPolicyResult.OK
+    }
+}
+
+internal sealed class ToolAllowlistResult {
+    data class Ok(val names: Set<String>?) : ToolAllowlistResult()
+    data class Reject(val unknown: Set<String>) : ToolAllowlistResult()
+}
+
+/** Pure exact-allowlist policy shared by dispatch preflight and JVM regressions. */
+internal object SubAgentToolAllowlist {
+    fun resolve(requested: List<String>?, eligible: Set<String>): ToolAllowlistResult {
+        if (requested == null) return ToolAllowlistResult.Ok(null)
+        val normalized = requested.map(String::trim).filter(String::isNotEmpty).toCollection(linkedSetOf())
+        val unknown = normalized - eligible
+        return if (unknown.isEmpty()) ToolAllowlistResult.Ok(normalized)
+        else ToolAllowlistResult.Reject(unknown)
+    }
+}
 
 object SubAgentRequestValidator {
 
