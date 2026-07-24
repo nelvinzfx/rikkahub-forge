@@ -65,6 +65,18 @@ class TermuxToolUIModelsTest {
     }
 
     @Test
+    fun writeInputErrorDoesNotRequireValidInput() {
+        val model = parseTermuxWriteUIModel(
+            "termux_write_file",
+            json("""{"path":7,"content":true}"""),
+            json("""{"success":false,"ok":false,"error":"path_must_be_string","recovery":"Check request."}"""),
+        )!!
+        assertEquals("path_must_be_string", model.error)
+        assertEquals("", model.content)
+        assertEquals(listOf(TermuxUIBadge.ERROR), model.badges)
+    }
+
+    @Test
     fun writeErrorPreservesRecoveryDetailAndCurrentSha() {
         val input = json("""{"path":"a.txt","content":"next"}""")
         val current = "a".repeat(64)

@@ -178,7 +178,7 @@ internal fun parseTermuxWriteUIModel(
         val bytesWritten = output.long("bytes_written") ?: return null
         val totalBytes = output.long("total_bytes") ?: return null
         val expectedBytes = text.toByteArray(Charsets.UTF_8).size.toLong()
-        val valid = operation == if (append) "append" else "write" &&
+        val valid = operation == (if (append) "append" else "write") &&
             pathSha == sha256(path.toByteArray(Charsets.UTF_8)) &&
             contentSha == sha256(text.toByteArray(Charsets.UTF_8)) &&
             resultSha.matches(SHA256_REGEX) && bytesWritten == expectedBytes &&
