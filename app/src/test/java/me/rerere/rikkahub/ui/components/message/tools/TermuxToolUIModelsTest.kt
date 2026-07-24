@@ -133,7 +133,7 @@ class TermuxToolUIModelsTest {
                 }
                 """.trimIndent(),
             ),
-            metadataDiff = "combined",
+            metadataDiff = "--- a/a.kt\n+++ b/a.kt\n-old\n+new\n--- a/b.kt\n+++ b/b.kt\n-x\n+y",
         )!!
         assertFalse(model.single)
         assertEquals("publication_changed", model.error)
@@ -144,6 +144,31 @@ class TermuxToolUIModelsTest {
         assertEquals("#1 replace_match: applied [matched] via fuzzy", model.files[0].diagnostics.single())
         assertTrue(model.diff!!.contains("a/a.kt"))
         assertTrue(model.diff!!.contains("a/b.kt"))
+        assertNull(
+            parseTermuxEditUIModel(
+                "termux_edit_files",
+                json("""{"files":[{"path":"a.kt","edits":[{"mode":"replace_match","match_text":"old","write_text":"new"}]},{"path":"b.kt","edits":[{"mode":"replace_match","match_text":"x","write_text":"y"}]}]}"""),
+                json(
+                    """{"success":false,"ok":false,"applied":false,"changed":true,"dry_run":false,"batch_aborted":true,"state":"error","error":"publication_changed","diff_truncated":false,"files":[{"path":"a.kt","actual_path":"/home/u/a.kt","source_sha256":"$old","result_sha256":"$new","state":"rolled_back","changed":true,"applied":false,"dry_run":false,"rollback_restored":true,"diff":"--- a/a.kt\n+++ b/a.kt\n-old\n+new","edits":[{"index":0,"mode":"replace_match","status":"applied","matched":true,"strategy":"fuzzy"}]},{"path":"b.kt","actual_path":"/home/u/b.kt","source_sha256":"$old","result_sha256":"$new","state":"rollback_failed","changed":true,"applied":false,"dry_run":false,"rollback_restored":false,"diff":"--- a/b.kt\n+++ b/b.kt\n-x\n+y","edits":[{"index":0,"mode":"replace_match","status":"applied","matched":true,"strategy":"exact"}]}]}""",
+                ),
+                null,
+            ),
+        )
+    }
+
+    @Test fun editModelCorrelatesExpectedShaMetadataAndFileCount() {
+        val source = "a".repeat(64)
+        val result = "b".repeat(64)
+        val diff = "--- a/a.txt\n+++ b/a.txt\n-old\n+new"
+        val args = json("""{"path":"a.txt","dry_run":true,"expected_sha256":"$source","edits":[{"mode":"replace_match","match_text":"old","write_text":"new"}]}""")
+        val content = json("""{"success":true,"ok":true,"applied":false,"changed":true,"dry_run":true,"batch_aborted":false,"state":"dry_run","diff_truncated":false,"path":"a.txt","actual_path":"/a.txt","replacements":1,"source_sha256":"$source","result_sha256":"$result","diff":"--- a/a.txt\n+++ b/a.txt\n-old\n+new","results":[{"index":0,"mode":"replace_match","status":"applied","matched":true,"strategy":"exact"}],"error":null}""")
+        assertTrue(parseTermuxEditUIModel("termux_edit_file", args, content, diff) != null)
+        assertNull(parseTermuxEditUIModel("termux_edit_file", args, content, "different"))
+        assertNull(parseTermuxEditUIModel("termux_edit_file", args, content, null))
+        val wrongShaArgs = json("""{"path":"a.txt","dry_run":true,"expected_sha256":"${"c".repeat(64)}","edits":[{"mode":"replace_match","match_text":"old","write_text":"new"}]}""")
+        assertNull(parseTermuxEditUIModel("termux_edit_file", wrongShaArgs, content, diff))
+        val tooMany = (0..20).joinToString(",") { "{\"path\":\"$it\",\"edits\":[{\"mode\":\"replace_match\",\"match_text\":\"a\",\"write_text\":\"b\"}]}" }
+        assertNull(parseTermuxEditUIModel("termux_edit_files", json("""{"files":[$tooMany]}"""), null, null))
     }
 
     @Test
@@ -191,6 +216,14 @@ class TermuxToolUIModelsTest {
         )!!
         assertNull(targeted.files[0].state)
         assertEquals("error", targeted.files[1].state)
+
+        val malformedDryRun = parseTermuxEditUIModel(
+            "termux_edit_file",
+            json("""{"path":"a.kt","dry_run":"true"}"""),
+            json("""{"success":false,"ok":false,"applied":false,"changed":false,"dry_run":false,"state":"error","path":"a.kt","error":"dry_run_must_be_boolean"}"""),
+            null,
+        )!!
+        assertEquals("dry_run_must_be_boolean", malformedDryRun.error)
     }
 
     @Test
@@ -263,6 +296,18 @@ class TermuxToolUIModelsTest {
         assertEquals(100, chars.previews[0]!!.text.length)
         assertEquals(20, chars.previews[1]!!.text.length)
         assertTrue(chars.previews[1]!!.truncated)
+    }
+
+    @Test fun joinedDiagnosticBudgetIsSharedAcrossFiles() {
+        val bounded = boundedJoinedPreviews(
+            listOf(listOf("a".repeat(80)), listOf("b".repeat(80))),
+            maxChars = 100,
+            maxLines = 10,
+        )
+        assertTrue(bounded.truncated)
+        assertEquals(80, bounded.previews[0]!!.text.length)
+        assertEquals(20, bounded.previews[1]!!.text.length)
+        assertTrue(bounded.previews[1]!!.truncated)
     }
 
     @Test

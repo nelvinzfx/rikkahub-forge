@@ -42,9 +42,12 @@ private const val WRITE_PREVIEW_MAX_CHARS = 64 * 1024
 private const val WRITE_PREVIEW_MAX_LINES = 400
 private const val EDIT_SUMMARY_MAX_FILES = 6
 private const val EDIT_SUMMARY_MAX_DIFF_LINES = 12
+private const val EDIT_SUMMARY_MAX_DIFF_CHARS = 12 * 1024
 private const val EDIT_PREVIEW_MAX_DIFF_CHARS = 48 * 1024
 private const val EDIT_PREVIEW_MAX_DIFF_LINES = 600
 private const val EDIT_ERROR_MAX_LINES = 20
+private const val EDIT_DIAGNOSTIC_MAX_CHARS = 24 * 1024
+private const val EDIT_DIAGNOSTIC_MAX_LINES = 200
 
 internal object TermuxWriteFileToolUI : TermuxWriteToolUI("termux_write_file")
 internal object TermuxAppendFileToolUI : TermuxWriteToolUI("termux_append_file")
@@ -189,12 +192,18 @@ internal open class TermuxEditToolUI(
                 }
             }
             model.diff?.let { diff ->
-                DiffView(
-                    diff = diff,
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = EDIT_SUMMARY_MAX_DIFF_LINES,
-                    showFileHeader = false,
-                )
+                val preview = remember(diff) {
+                    boundedTextPreview(diff, EDIT_SUMMARY_MAX_DIFF_CHARS, EDIT_SUMMARY_MAX_DIFF_LINES)
+                }
+                if (preview.truncated) TermuxBadgeRow(listOf(TermuxUIBadge.TRUNCATED))
+                if (preview.text.isNotEmpty()) {
+                    DiffView(
+                        diff = preview.text,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = EDIT_SUMMARY_MAX_DIFF_LINES,
+                        showFileHeader = false,
+                    )
+                }
             }
             listOfNotNull(model.error, model.detail).joinToString("\n").takeIf(String::isNotEmpty)?.let {
                 Text(
@@ -240,13 +249,22 @@ internal open class TermuxEditToolUI(
             val boundedDiffs = remember(diffSource) {
                 boundedDiffPreviews(diffSource, EDIT_PREVIEW_MAX_DIFF_CHARS, EDIT_PREVIEW_MAX_DIFF_LINES)
             }
+            val diagnosticGroups = remember(model.files) {
+                model.files.map { file -> listOfNotNull(file.error) + file.diagnostics }
+            }
+            val boundedDiagnostics = remember(diagnosticGroups) {
+                boundedJoinedPreviews(diagnosticGroups, EDIT_DIAGNOSTIC_MAX_CHARS, EDIT_DIAGNOSTIC_MAX_LINES)
+            }
             model.files.forEachIndexed { index, file ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     EditFileSummaryRow(file)
                     if (hasPerFileDiffs) {
                         boundedDiffs.previews[index]?.let { BoundedDiffPreview(it) }
                     }
-                    ErrorDetails(file.error, file.diagnostics.takeIf { it.isNotEmpty() }?.joinToString("\n"))
+                    boundedDiagnostics.previews[index]?.let { preview ->
+                        ErrorDetails(null, preview.text.takeIf(String::isNotEmpty))
+                        if (preview.truncated) TermuxBadgeRow(listOf(TermuxUIBadge.TRUNCATED))
+                    }
                 }
             }
             if (!hasPerFileDiffs) {

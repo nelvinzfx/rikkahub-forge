@@ -102,7 +102,7 @@ class TermuxJobProtocolTest {
 
     @Test fun capturedEnvelope_decodesHeadsAndCounts() {
         val protocol = """
-            RIKKAHUB_JOB_V1
+            RIKKAHUB_JOB_V2
             job_id=$jobId
             status=completed
             exit_code=17
@@ -110,6 +110,8 @@ class TermuxJobProtocolTest {
             stderr_total_bytes=3
             stdout_head_bytes=3
             stderr_head_bytes=3
+            stdout_output_limited=0
+            stderr_output_limited=0
             stdout_head_b64=${Base64.getEncoder().encodeToString("abc".toByteArray())}
             stderr_head_b64=${Base64.getEncoder().encodeToString("bad".toByteArray())}
         """.trimIndent()
@@ -120,7 +122,7 @@ class TermuxJobProtocolTest {
     }
 
     @Test fun protocolFailsClosedOnMismatchCorruptionAndImpossibleCounts() {
-        val wrong = parseCapturedOutputEnvelope("RIKKAHUB_JOB_V1\njob_id=$jobId", "223e4567-e89b-42d3-a456-426614174000")
+        val wrong = parseCapturedOutputEnvelope("RIKKAHUB_JOB_V2\njob_id=$jobId", "223e4567-e89b-42d3-a456-426614174000")
         assertTrue(wrong is ProtocolParseResult.Error)
         val corrupt = parseReadOutputEnvelope(
             "RIKKAHUB_READ_V1\njob_id=$jobId\nstream=stdout\noffset=0\nactual_length=9\ntotal_bytes=9\ndata_b64=@@@",
@@ -143,7 +145,7 @@ class TermuxJobProtocolTest {
         val oversized = "RIKKAHUB_READ_V1\n" + "x".repeat(100_001)
         assertTrue(parseReadOutputEnvelope(oversized, jobId, "stdout") is ProtocolParseResult.Error)
         val impossibleHead = """
-            RIKKAHUB_JOB_V1
+            RIKKAHUB_JOB_V2
             job_id=$jobId
             status=completed
             exit_code=+1
@@ -151,10 +153,61 @@ class TermuxJobProtocolTest {
             stderr_total_bytes=0
             stdout_head_bytes=49153
             stderr_head_bytes=0
+            stdout_output_limited=0
+            stderr_output_limited=0
             stdout_head_b64=
             stderr_head_b64=
         """.trimIndent()
         assertTrue(parseCapturedOutputEnvelope(impossibleHead, jobId) is ProtocolParseResult.Error)
+        val contradictoryLimit = impossibleHead
+            .replace("exit_code=+1", "exit_code=1")
+            .replace("stdout_total_bytes=49153", "stdout_total_bytes=0")
+            .replace("stdout_head_bytes=49153", "stdout_head_bytes=0")
+            .replace("stdout_output_limited=0", "stdout_output_limited=1")
+        assertTrue(parseCapturedOutputEnvelope(contradictoryLimit, jobId) is ProtocolParseResult.Error)
+    }
+
+    @Test fun outputLimitEnvelope_isExplicitAndCorrelated() {
+        val protocol = """
+            RIKKAHUB_JOB_V2
+            job_id=$jobId
+            status=output_limited
+            exit_code=143
+            stdout_total_bytes=$MAX_RETAINED_OUTPUT_STREAM_BYTES
+            stderr_total_bytes=0
+            stdout_head_bytes=0
+            stderr_head_bytes=0
+            stdout_output_limited=1
+            stderr_output_limited=0
+            stdout_head_b64=
+            stderr_head_b64=
+        """.trimIndent()
+        val parsed = parseCapturedOutputEnvelope(protocol, jobId) as ProtocolParseResult.Ok
+        assertEquals("output_limited", parsed.value.status)
+        assertTrue(parsed.value.stdoutOutputLimited)
+        assertFalse(parsed.value.stderrOutputLimited)
+        val wrongSize = protocol.replace("stdout_total_bytes=$MAX_RETAINED_OUTPUT_STREAM_BYTES", "stdout_total_bytes=7")
+        assertTrue(parseCapturedOutputEnvelope(wrongSize, jobId) is ProtocolParseResult.Error)
+    }
+
+    @Test fun timeoutMayAlsoReportRetainedOutputCap() {
+        val protocol = """
+            RIKKAHUB_JOB_V2
+            job_id=$jobId
+            status=timed_out
+            exit_code=124
+            stdout_total_bytes=$MAX_RETAINED_OUTPUT_STREAM_BYTES
+            stderr_total_bytes=0
+            stdout_head_bytes=0
+            stderr_head_bytes=0
+            stdout_output_limited=1
+            stderr_output_limited=0
+            stdout_head_b64=
+            stderr_head_b64=
+        """.trimIndent()
+        val parsed = parseCapturedOutputEnvelope(protocol, jobId) as ProtocolParseResult.Ok
+        assertEquals("timed_out", parsed.value.status)
+        assertTrue(parsed.value.stdoutOutputLimited)
     }
 
     @Test fun byteRangeUtf8Split_usesReplacementCharacter() {
@@ -189,13 +242,18 @@ class TermuxJobProtocolTest {
 
     @Test fun scriptsExposeLockedTombstoneAndFilesystemContracts() {
         assertFalse(SPOOL_CAPTURE_SCRIPT.contains(jobId))
-        assertTrue(SPOOL_CAPTURE_SCRIPT.contains("head -c"))
+        assertTrue(SPOOL_OUTPUT_LIMITER_SCRIPT.contains("truncate -s"))
+        assertTrue(SPOOL_CAPTURE_SCRIPT.contains("stdout_limited"))
+        assertTrue(SPOOL_CAPTURE_SCRIPT.indexOf("stdout_pipe=") < SPOOL_CAPTURE_SCRIPT.indexOf("if [ \"${'$'}managed\" = 1 ]"))
+        assertTrue(SPOOL_CAPTURE_SCRIPT.contains("close_escaped_fifo_holders"))
+        assertTrue(SPOOL_CAPTURE_SCRIPT.contains("holder_start"))
+        assertTrue(SPOOL_CAPTURE_SCRIPT.contains("stdout_closer"))
         assertTrue(SPOOL_CAPTURE_SCRIPT.contains("stdout_limit + stderr_limit"))
         assertTrue(SPOOL_CAPTURE_SCRIPT.contains("flock -x 9"))
         assertTrue(SPOOL_CAPTURE_SCRIPT.contains("tombstone=true"))
-        assertTrue(SPOOL_CAPTURE_LEADER_SCRIPT.indexOf("stop_file") < SPOOL_CAPTURE_LEADER_SCRIPT.indexOf("exec \"${'$'}@\""))
-        assertTrue(SPOOL_CAPTURE_SCRIPT.contains("member_pgrp"))
-        assertTrue(SPOOL_CAPTURE_SCRIPT.indexOf("member_found=false") < SPOOL_CAPTURE_SCRIPT.indexOf("completed_at="))
+        assertTrue(SPOOL_CAPTURE_LEADER_SCRIPT.indexOf("stop_file") < SPOOL_CAPTURE_LEADER_SCRIPT.indexOf("\"${'$'}@\" &"))
+        assertTrue(SPOOL_CAPTURE_LEADER_SCRIPT.contains("member_pgrp"))
+        assertTrue(SPOOL_CAPTURE_LEADER_SCRIPT.contains("trap ':' TERM"))
         assertTrue(SPOOL_CLEANUP_SCRIPT.contains("stop_reason.tmp"))
         assertTrue(SPOOL_CLEANUP_SCRIPT.contains("mkdir -m 700"))
         assertTrue(READ_OUTPUT_SCRIPT.contains("flock -x 9"))

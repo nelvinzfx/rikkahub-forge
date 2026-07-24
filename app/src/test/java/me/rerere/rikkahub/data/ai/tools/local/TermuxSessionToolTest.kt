@@ -269,8 +269,9 @@ class TermuxSessionToolTest {
         assertEquals("/tmp/exe;touch /tmp/injected", launch.arguments[5])
         assertEquals(listOf("a b", "$(touch nope)", "'quoted'"), launch.arguments.drop(6))
         assertTrue(DIRECT_CAPTURE_SCRIPT.contains("${'$'}HOME/.cache/rikkahub/run-command"))
-        assertTrue(DIRECT_CAPTURE_LEADER_SCRIPT.indexOf("mv -f --") < DIRECT_CAPTURE_LEADER_SCRIPT.indexOf("exec \"${'$'}@\""))
-        assertTrue(DIRECT_CAPTURE_CLEANUP_SCRIPT.contains("member_found=false"))
+        assertTrue(DIRECT_CAPTURE_LEADER_SCRIPT.indexOf("mv -f --") < DIRECT_CAPTURE_LEADER_SCRIPT.indexOf("\"${'$'}@\" &"))
+        assertTrue(DIRECT_CAPTURE_LEADER_SCRIPT.contains("trap ':' TERM"))
+        assertTrue(DIRECT_CAPTURE_CLEANUP_SCRIPT.contains("live_start"))
         assertTrue(DIRECT_CAPTURE_CLEANUP_SCRIPT.contains("kill -TERM -- \"-${'$'}pid\""))
         assertEquals("123e4567-e89b-42d3-a456-426614174000", directCleanupArguments("123e4567-e89b-42d3-a456-426614174000").last())
         assertEquals("123e4567-e89b-42d3-a456-426614174000", directReleaseArguments("123e4567-e89b-42d3-a456-426614174000").last())
@@ -291,9 +292,10 @@ class TermuxSessionToolTest {
         assertEquals(SPOOL_CAPTURE_SCRIPT, launch.arguments[1])
         assertEquals(JOB_RETENTION_LOCKED_SCRIPT, launch.arguments[8])
         assertEquals(SPOOL_CAPTURE_LEADER_SCRIPT, launch.arguments[9])
-        assertEquals("0", launch.arguments[10])
-        assertEquals("/usr/bin/bash", launch.arguments[11])
-        assertEquals(listOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"), launch.arguments.drop(12))
+        assertEquals(SPOOL_OUTPUT_LIMITER_SCRIPT, launch.arguments[10])
+        assertEquals("0", launch.arguments[11])
+        assertEquals("/usr/bin/bash", launch.arguments[12])
+        assertEquals(listOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"), launch.arguments.drop(13))
     }
 
     @Test
@@ -303,6 +305,36 @@ class TermuxSessionToolTest {
         assertEquals("好", takeLastUtf8Bytes("你好", 4))
     }
 
+
+    @Test fun strictRunCommandParser_boundsBinderInputAndTypes() {
+        val valid = parseTermuxRunCommandRequest(
+            kotlinx.serialization.json.Json.parseToJsonElement(
+                """{"executable":"/bin/echo","arguments":["a b"],"timeout_seconds":1}""",
+            ),
+        ) as PublicInputResult.Ok
+        assertEquals("/bin/echo", valid.value.executable)
+        assertEquals(listOf("a b"), valid.value.arguments.toList())
+        assertEquals(1_000L, valid.value.timeoutMs)
+
+        fun code(raw: String) = (parseTermuxRunCommandRequest(
+            kotlinx.serialization.json.Json.parseToJsonElement(raw),
+        ) as PublicInputResult.Error).value.code
+        assertEquals("interactive_must_be_boolean", code("""{"command":"x","interactive":"true"}"""))
+        assertEquals("arguments[0]_must_be_string", code("""{"executable":"/bin/echo","arguments":[1]}"""))
+        assertEquals("arguments_require_executable_mode", code("""{"command":"x","arguments":[]}"""))
+        assertEquals("background_requires_command_mode", code("""{"executable":"/bin/echo","background":true}"""))
+        assertEquals("timeout_seconds_out_of_range", code("""{"command":"x","timeout_seconds":601}"""))
+        assertEquals("unknown_fields:extra", code("""{"command":"x","extra":1}"""))
+        assertEquals("command_must_not_be_blank", code("""{"command":" ","executable":"/bin/echo"}"""))
+        assertEquals("executable_must_not_be_blank", code("""{"executable":""}"""))
+        val tooLarge = kotlinx.serialization.json.buildJsonObject {
+            put("command", kotlinx.serialization.json.JsonPrimitive("x".repeat(64 * 1024 + 1)))
+        }
+        assertEquals(
+            "command_too_large_or_invalid_utf8",
+            (parseTermuxRunCommandRequest(tooLarge) as PublicInputResult.Error).value.code,
+        )
+    }
 
     @Test
     fun tmuxInstallTimeout_isReportedAsStopped() {

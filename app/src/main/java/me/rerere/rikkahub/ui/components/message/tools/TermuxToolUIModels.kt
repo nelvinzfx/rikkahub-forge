@@ -92,6 +92,7 @@ private val WRITE_TOOL_NAMES = setOf("termux_write_file", "termux_append_file")
 private val EDIT_TOOL_NAMES = setOf("termux_edit_file", "termux_edit_files")
 private val TOP_LEVEL_EDIT_STATES = setOf("applied", "dry_run", "no_change", "error")
 private val SHA256_REGEX = Regex("^[0-9a-f]{64}$")
+private const val MAX_TERMUX_EDIT_UI_FILES = 20
 private val FILE_EDIT_STATES = setOf(
     "published",
     "dry_run",
@@ -243,12 +244,14 @@ private fun parseEarlyTermuxEditError(
     val single = toolName == "termux_edit_file"
     val outputDryRun = output.boolean("dry_run")!!
     val inputDryRun = input?.get("dry_run")?.let { input.boolean("dry_run") }
-    if (input?.get("dry_run") != null && inputDryRun == null || inputDryRun != null && inputDryRun != outputDryRun) return null
+    if (inputDryRun != null && inputDryRun != outputDryRun) return null
+    if (input?.get("dry_run") != null && inputDryRun == null && outputDryRun) return null
     val reportedPath = output.strictString("path")
     val inputPaths = if (single) {
         listOfNotNull(input?.strictString("path"))
     } else {
-        (input?.get("files") as? JsonArray).orEmpty().mapNotNull {
+        val rawFiles = input?.get("files") as? JsonArray
+        if (rawFiles != null && rawFiles.size > MAX_TERMUX_EDIT_UI_FILES) emptyList() else rawFiles.orEmpty().mapNotNull {
             (it as? JsonObject)?.strictString("path")
         }
     }
@@ -296,10 +299,17 @@ internal fun parseTermuxEditUIModel(
         listOf(input)
     } else {
         val specs = input["files"] as? JsonArray ?: return null
-        if (specs.isEmpty()) return null
+        if (specs.size !in 1..MAX_TERMUX_EDIT_UI_FILES) return null
         specs.map { it as? JsonObject ?: return null }
     }
     val inputPaths = inputSpecs.map { it.strictString("path") ?: return null }
+    val inputExpectedShas = inputSpecs.map { spec ->
+        val raw = spec["expected_sha256"]
+        when (raw) {
+            null, JsonNull -> null
+            else -> spec.strictString("expected_sha256")?.takeIf { it.matches(SHA256_REGEX) } ?: return null
+        }
+    }
     val requestedDryRun = when {
         input["dry_run"] == null -> false
         else -> input.boolean("dry_run") ?: return null
@@ -366,13 +376,15 @@ internal fun parseTermuxEditUIModel(
             val replacements = output.long("replacements") ?: return null
             if (actualPath.isEmpty() || !sourceSha.matches(SHA256_REGEX) ||
                 !resultSha.matches(SHA256_REGEX) || replacements < 0 ||
-                changed != (sourceSha != resultSha)
+                changed != (sourceSha != resultSha) ||
+                inputExpectedShas.single()?.let { it != sourceSha } == true
             ) return null
         }
         val diagnostics = parseEditDiagnostics(output["results"], expectedEdits.single()) ?: return null
         val replacements = output.long("replacements")
         if (isFullResponse && replacements != diagnostics.count { it.status == "applied" }.toLong()) return null
-        val diff = output.strictString("diff") ?: metadataDiff
+        val diff = output.strictString("diff")
+        if (metadataDiff != diff) return null
         listOf(
             TermuxEditFileUIModel(
                 path = reportedPath ?: inputPaths.single(),
@@ -394,6 +406,7 @@ internal fun parseTermuxEditUIModel(
                 element as? JsonObject ?: return null,
                 inputPaths[index],
                 expectedEdits[index],
+                inputExpectedShas[index],
                 success,
                 dryRun,
             )
@@ -404,6 +417,7 @@ internal fun parseTermuxEditUIModel(
     if (files.mapNotNull { it.changed }.any { it } != changed) return null
     if (files.any { TermuxUIBadge.APPLIED in it.badges } != applied) return null
     val perFileDiff = files.mapNotNull { it.diff }.joinToString("\n").takeIf(String::isNotEmpty)
+    if (metadataDiff != perFileDiff) return null
     val badges = badgesForState(state, rollbackRestored).toMutableList().apply {
         if (state == "dry_run" && !changed) add(TermuxUIBadge.NO_CHANGE)
         if (diffTruncated == true) add(TermuxUIBadge.TRUNCATED)
@@ -414,7 +428,7 @@ internal fun parseTermuxEditUIModel(
         state = state,
         error = error,
         detail = detail,
-        diff = perFileDiff ?: metadataDiff,
+        diff = perFileDiff,
         badges = badges,
     )
 }
@@ -423,6 +437,7 @@ private fun parseEditFile(
     item: JsonObject,
     expectedPath: String,
     expectedEdits: List<ExpectedEdit>,
+    expectedSourceSha: String?,
     success: Boolean,
     topDryRun: Boolean,
 ): TermuxEditFileUIModel? {
@@ -437,7 +452,7 @@ private fun parseEditFile(
     val sourceSha = item.strictString("source_sha256") ?: return null
     val resultSha = item.strictString("result_sha256") ?: return null
     if (!sourceSha.matches(SHA256_REGEX) || !resultSha.matches(SHA256_REGEX) ||
-        changed != (sourceSha != resultSha)
+        changed != (sourceSha != resultSha) || expectedSourceSha?.let { it != sourceSha } == true
     ) return null
     val applied = item.boolean("applied") ?: return null
     val dryRun = item.boolean("dry_run") ?: return null
@@ -639,6 +654,43 @@ internal fun boundedDiffPreviews(
         }
     }
     return BoundedDiffPreviews(previews, truncated)
+}
+
+internal fun boundedJoinedPreviews(
+    groups: List<List<String>>,
+    maxChars: Int,
+    maxLines: Int,
+): BoundedDiffPreviews {
+    require(maxChars >= 0)
+    require(maxLines >= 1)
+    var remainingChars = maxChars
+    var remainingLines = maxLines
+    var anyTruncated = false
+    val previews = groups.map { values ->
+        if (values.isEmpty()) return@map null
+        val joined = StringBuilder()
+        var itemTruncated = false
+        loop@ for ((index, value) in values.withIndex()) {
+            val prefix = if (index == 0) "" else "\n"
+            if (remainingChars < prefix.length || remainingLines == 0) {
+                itemTruncated = true
+                break
+            }
+            joined.append(prefix)
+            remainingChars -= prefix.length
+            val preview = boundedTextPreview(value, remainingChars, remainingLines)
+            joined.append(preview.text)
+            remainingChars -= preview.text.length
+            remainingLines -= minOf(remainingLines, physicalLineCount(value))
+            if (preview.truncated) {
+                itemTruncated = true
+                break@loop
+            }
+        }
+        anyTruncated = anyTruncated || itemTruncated
+        BoundedTextPreview(joined.toString(), itemTruncated)
+    }
+    return BoundedDiffPreviews(previews, anyTruncated)
 }
 
 private fun physicalLineCount(text: String): Int {

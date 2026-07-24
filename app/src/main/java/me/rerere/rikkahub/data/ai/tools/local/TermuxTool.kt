@@ -10,14 +10,16 @@ import android.os.Bundle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
@@ -72,7 +74,24 @@ internal val DIRECT_CAPTURE_LEADER_SCRIPT = """
     tmp=${'$'}state_file.${'$'}pid
     printf 'group %s %s\n' "${'$'}pid" "${'$'}start" > "${'$'}tmp" &&
         mv -f -- "${'$'}tmp" "${'$'}state_file" || { rm -f -- "${'$'}tmp"; exit 125; }
-    exec "${'$'}@"
+    trap ':' TERM
+    "${'$'}@" &
+    command_pid=${'$'}!
+    wait "${'$'}command_pid"; exit_code=${'$'}?
+    while kill -0 "${'$'}command_pid" 2>/dev/null; do wait "${'$'}command_pid"; exit_code=${'$'}?; done
+    while :; do
+        member_found=false
+        for stat in /proc/[0-9]*/stat; do
+            [ -r "${'$'}stat" ] || continue
+            member_pid=${'$'}{stat#/proc/}; member_pid=${'$'}{member_pid%/stat}
+            [ "${'$'}member_pid" = "${'$'}pid" ] && continue
+            member_pgrp=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3] }' "${'$'}stat" 2>/dev/null)
+            if [ "${'$'}member_pgrp" = "${'$'}pid" ]; then member_found=true; break; fi
+        done
+        [ "${'$'}member_found" = true ] || break
+        sleep 0.05
+    done
+    exit "${'$'}exit_code"
 """.trimIndent()
 
 internal val DIRECT_CAPTURE_CLEANUP_SCRIPT = """
@@ -90,23 +109,12 @@ internal val DIRECT_CAPTURE_CLEANUP_SCRIPT = """
     [ -z "${'$'}extra" ] && [ "${'$'}pid" -gt 1 ] 2>/dev/null && [ "${'$'}root_start" -gt 0 ] 2>/dev/null || reject_state
     live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
     live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
-    if [ -n "${'$'}live_info" ]; then
-        [ "${'$'}live_start" = "${'$'}root_start" ] && [ "${'$'}live_pgrp" = "${'$'}pid" ] || reject_state
-    else
-        member_found=false
-        for stat in /proc/[0-9]*/stat; do
-            [ -r "${'$'}stat" ] || continue
-            member_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "${'$'}stat" 2>/dev/null)
-            member_pgrp=${'$'}{member_info%% *}; member_start=${'$'}{member_info#* }
-            case "${'$'}member_pgrp" in *[!0-9]*|'') continue ;; esac
-            case "${'$'}member_start" in *[!0-9]*|'') continue ;; esac
-            if [ "${'$'}member_pgrp" = "${'$'}pid" ] && [ "${'$'}member_start" -ge "${'$'}root_start" ] 2>/dev/null; then member_found=true; break; fi
-        done
-        [ "${'$'}member_found" = true ] || reject_state
-    fi
+    [ -n "${'$'}live_info" ] && [ "${'$'}live_start" = "${'$'}root_start" ] && [ "${'$'}live_pgrp" = "${'$'}pid" ] || reject_state
     kill -TERM -- "-${'$'}pid" 2>/dev/null
     sleep 0.5
-    kill -KILL -- "-${'$'}pid" 2>/dev/null
+    live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
+    live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
+    if [ "${'$'}live_pgrp" = "${'$'}pid" ] && [ "${'$'}live_start" = "${'$'}root_start" ]; then kill -KILL -- "-${'$'}pid" 2>/dev/null; fi
     rm -f -- "${'$'}state_file"
 """.trimIndent()
 
@@ -169,8 +177,8 @@ internal fun buildSpoolCaptureLaunch(
             "-c", SPOOL_CAPTURE_SCRIPT, "rikka-spool", jobId,
             TermuxRuntime.maxStdoutBytes.toString(), TermuxRuntime.maxStderrBytes.toString(),
             TermuxRuntime.maxRetainedOutputJobs.toString(), TermuxRuntime.outputTtlMs.div(1000L).toString(),
-            JOB_RETENTION_LOCKED_SCRIPT, SPOOL_CAPTURE_LEADER_SCRIPT, if (managed) "1" else "0",
-            executable, *arguments,
+            JOB_RETENTION_LOCKED_SCRIPT, SPOOL_CAPTURE_LEADER_SCRIPT, SPOOL_OUTPUT_LIMITER_SCRIPT,
+            if (managed) "1" else "0", executable, *arguments,
         ),
         jobId,
         spooled = true,
@@ -348,6 +356,8 @@ internal sealed class CaptureResult {
         val stderrTotalBytes: Long = stderr.toByteArray(Charsets.UTF_8).size.toLong(),
         val stdoutHeadBytes: Int = stdout.toByteArray(Charsets.UTF_8).size,
         val stderrHeadBytes: Int = stderr.toByteArray(Charsets.UTF_8).size,
+        val stdoutOutputLimited: Boolean = false,
+        val stderrOutputLimited: Boolean = false,
     ) : CaptureResult()
     data class Timeout(val jobId: String?) : CaptureResult()
     data object Denied : CaptureResult()
@@ -375,6 +385,8 @@ internal fun completedSpooledCommandResult(protocol: String, expectedJobId: Stri
                 stderrTotalBytes = envelope.stderrTotalBytes,
                 stdoutHeadBytes = envelope.stdoutHeadBytes,
                 stderrHeadBytes = envelope.stderrHeadBytes,
+                stdoutOutputLimited = envelope.stdoutOutputLimited,
+                stderrOutputLimited = envelope.stderrOutputLimited,
             )
         }
     }
@@ -585,6 +597,134 @@ internal suspend fun runCommandCapture(
  * for the legacy "open visible Termux session" mode where the user sees output live but
  * the bot cannot read it.
  */
+private const val MAX_TERMUX_RUN_ARGUMENTS = 256
+private const val MAX_TERMUX_RUN_FIELD_BYTES = 64 * 1024
+private const val MAX_TERMUX_RUN_REQUEST_BYTES = 96 * 1024
+
+internal data class TermuxRunCommandRequest(
+    val command: String?,
+    val executable: String?,
+    val arguments: Array<String>,
+    val workingDir: String,
+    val interactive: Boolean,
+    val background: Boolean,
+    val timeoutMs: Long,
+)
+
+private fun strictRunString(root: JsonObject, key: String): String? {
+    val value = root[key] ?: return null
+    return (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+}
+
+private fun strictRunBoolean(root: JsonObject, key: String): Boolean? {
+    val value = root[key] ?: return false
+    return (value as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+}
+
+private fun boundedRunFieldBytes(value: String): Int? {
+    if ('\u0000' in value) return null
+    return when (val encoded = encodeUtf8StrictBounded(value, MAX_TERMUX_RUN_FIELD_BYTES)) {
+        is BoundedUtf8Result.Ok -> encoded.bytes.size
+        BoundedUtf8Result.InvalidUtf8, BoundedUtf8Result.TooLarge -> null
+    }
+}
+
+internal fun parseTermuxRunCommandRequest(input: JsonElement): PublicInputResult<TermuxRunCommandRequest> {
+    val root = input as? JsonObject
+        ?: return PublicInputResult.Error(PublicInputError("request_must_be_object"))
+    val allowed = setOf("command", "executable", "arguments", "working_dir", "interactive", "background", "timeout_seconds")
+    val unknown = root.keys - allowed
+    if (unknown.isNotEmpty()) {
+        return PublicInputResult.Error(PublicInputError("unknown_fields:${unknown.sorted().joinToString(",")}"))
+    }
+
+    fun optionalString(key: String): PublicInputResult<String?> {
+        if (root[key] == null) return PublicInputResult.Ok(null)
+        val value = strictRunString(root, key)
+            ?: return PublicInputResult.Error(PublicInputError("${key}_must_be_string"))
+        if (boundedRunFieldBytes(value) == null) {
+            return PublicInputResult.Error(PublicInputError("${key}_too_large_or_invalid_utf8"))
+        }
+        return PublicInputResult.Ok(value)
+    }
+
+    val command = when (val parsed = optionalString("command")) {
+        is PublicInputResult.Error -> return parsed
+        is PublicInputResult.Ok -> parsed.value
+    }
+    val executable = when (val parsed = optionalString("executable")) {
+        is PublicInputResult.Error -> return parsed
+        is PublicInputResult.Ok -> parsed.value
+    }
+    val workingDir = when (val parsed = optionalString("working_dir")) {
+        is PublicInputResult.Error -> return parsed
+        is PublicInputResult.Ok -> parsed.value ?: TermuxRuntime.defaultWorkingDir
+    }
+
+    val arguments = when (val raw = root["arguments"]) {
+        null -> emptyArray()
+        is JsonArray -> {
+            if (raw.size > MAX_TERMUX_RUN_ARGUMENTS) {
+                return PublicInputResult.Error(PublicInputError("arguments_count_out_of_range"))
+            }
+            raw.mapIndexed { index, element ->
+                val value = (element as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    ?: return PublicInputResult.Error(PublicInputError("arguments[$index]_must_be_string"))
+                if (boundedRunFieldBytes(value) == null) {
+                    return PublicInputResult.Error(PublicInputError("arguments[$index]_too_large_or_invalid_utf8"))
+                }
+                value
+            }.toTypedArray()
+        }
+        else -> return PublicInputResult.Error(PublicInputError("arguments_must_be_array"))
+    }
+
+    val interactive = strictRunBoolean(root, "interactive")
+        ?: return PublicInputResult.Error(PublicInputError("interactive_must_be_boolean"))
+    val background = strictRunBoolean(root, "background")
+        ?: return PublicInputResult.Error(PublicInputError("background_must_be_boolean"))
+    val timeoutSeconds = when (val raw = root["timeout_seconds"]) {
+        null -> 0
+        is JsonPrimitive -> raw.takeIf { !it.isString }?.intOrNull
+            ?: return PublicInputResult.Error(PublicInputError("timeout_seconds_must_be_integer"))
+        else -> return PublicInputResult.Error(PublicInputError("timeout_seconds_must_be_integer"))
+    }
+    if (timeoutSeconds !in 0..TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS) {
+        return PublicInputResult.Error(PublicInputError("timeout_seconds_out_of_range"))
+    }
+    if (command != null && command.isBlank()) {
+        return PublicInputResult.Error(PublicInputError("command_must_not_be_blank"))
+    }
+    if (executable != null && executable.isBlank()) {
+        return PublicInputResult.Error(PublicInputError("executable_must_not_be_blank"))
+    }
+    if ((command != null) == (executable != null)) {
+        return PublicInputResult.Error(PublicInputError("exactly_one_of_command_or_executable_required"))
+    }
+    if (command != null && root["arguments"] != null) {
+        return PublicInputResult.Error(PublicInputError("arguments_require_executable_mode"))
+    }
+    if (executable != null && background) {
+        return PublicInputResult.Error(PublicInputError("background_requires_command_mode"))
+    }
+    if (interactive && background) {
+        return PublicInputResult.Error(PublicInputError("interactive_background_conflict"))
+    }
+    val aggregateBytes = listOfNotNull(command, executable, workingDir).sumOf { boundedRunFieldBytes(it)!!.toLong() } +
+        arguments.sumOf { boundedRunFieldBytes(it)!!.toLong() }
+    if (aggregateBytes > MAX_TERMUX_RUN_REQUEST_BYTES) {
+        return PublicInputResult.Error(PublicInputError("request_too_large"))
+    }
+    val timeoutMs = if (timeoutSeconds == 0) {
+        TermuxRuntime.commandTimeoutMs
+    } else {
+        timeoutSeconds.toLong() * 1_000L
+    }
+    return PublicInputResult.Ok(
+        TermuxRunCommandRequest(command, executable, arguments, workingDir, interactive, background, timeoutMs)
+    )
+}
+
 fun termuxRunCommandTool(context: Context): Tool = Tool(
     name = "termux_run_command",
     description = """
@@ -604,14 +744,17 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
                 put("command", buildJsonObject {
                     put("type", "string")
                     put("description", "Shell command line, e.g. 'pkg update && pkg upgrade -y'. Mutually exclusive with executable+arguments.")
+                    put("minLength", 1)
                 })
                 put("executable", buildJsonObject {
                     put("type", "string")
                     put("description", "Absolute path to executable, e.g. /data/data/com.termux/files/usr/bin/bash. Pairs with arguments[].")
+                    put("minLength", 1)
                 })
                 put("arguments", buildJsonObject {
                     put("type", "array")
                     put("description", "Argument list when using executable mode")
+                    put("maxItems", MAX_TERMUX_RUN_ARGUMENTS)
                     put("items", buildJsonObject { put("type", "string") })
                 })
                 put("working_dir", buildJsonObject {
@@ -629,44 +772,29 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
                 put("timeout_seconds", buildJsonObject {
                     put("type", "integer")
                     put("description", "Capture-mode timeout in seconds. Omit or pass 0 to use the user-configured default (Settings -> Termux). Max ${TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS} s.")
+                    put("minimum", 0)
+                    put("maximum", TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS)
                 })
-            }
+            },
+            additionalProperties = false,
         )
     },
     execute = { input ->
-        val rawCommand = input.jsonObject["command"]?.jsonPrimitive?.contentOrNull
-        val executable = input.jsonObject["executable"]?.jsonPrimitive?.contentOrNull
-        val argumentsArr = input.jsonObject["arguments"]?.jsonArray
-        val workingDir = input.jsonObject["working_dir"]?.jsonPrimitive?.contentOrNull
-            ?: TermuxRuntime.defaultWorkingDir
-        val interactive = input.jsonObject["interactive"]?.jsonPrimitive?.contentOrNull
-            ?.toBooleanStrictOrNull() ?: false
-        val background = input.jsonObject["background"]?.jsonPrimitive?.contentOrNull
-            ?.toBooleanStrictOrNull() ?: false
-        // Read the user-configured default command timeout at call time. The LLM can override
-        // per-call with timeout_seconds (0 = use runtime default, otherwise capped at
-        // MAX_COMMAND_TIMEOUT_SECONDS = 600 s, raised from the old 300 s ceiling).
-        val configuredTimeoutMs = TermuxRuntime.commandTimeoutMs
-        val rawTimeout = input.jsonObject["timeout_seconds"]?.jsonPrimitive?.intOrNull
-        val timeoutMs = when {
-            rawTimeout == null || rawTimeout == 0 -> configuredTimeoutMs
-            else -> rawTimeout.coerceIn(1, TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS).toLong() * 1000
-        }
-
-        if (rawCommand.isNullOrBlank() && executable.isNullOrBlank()) {
-            return@Tool listOf(
-                UIMessagePart.Text(
-                    buildJsonObject { put("error", "either 'command' or 'executable' is required") }.toString()
+        val request = when (val parsed = parseTermuxRunCommandRequest(input)) {
+            is PublicInputResult.Error -> {
+                return@Tool listOf(
+                    UIMessagePart.Text(buildJsonObject { put("error", parsed.value.code) }.toString())
                 )
-            )
+            }
+            is PublicInputResult.Ok -> parsed.value
         }
-        if (!rawCommand.isNullOrBlank() && !executable.isNullOrBlank()) {
-            return@Tool listOf(
-                UIMessagePart.Text(
-                    buildJsonObject { put("error", "command and executable are mutually exclusive") }.toString()
-                )
-            )
-        }
+        val rawCommand = request.command
+        val executable = request.executable
+        val resolvedInputArguments = request.arguments
+        val workingDir = request.workingDir
+        val interactive = request.interactive
+        val background = request.background
+        val timeoutMs = request.timeoutMs
 
         // Pre-flight: Termux installed?
         when (TermuxIntegration.state(context)) {
@@ -719,10 +847,7 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
             val body = if (background) wrapDetachedCommand(rawCommand) else rawCommand
             "$TERMUX_BIN_DIR/bash" to arrayOf("-c", preamble + body)
         } else {
-            val args = argumentsArr?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                ?.toTypedArray()
-                ?: emptyArray()
-            executable!! to args
+            executable!! to resolvedInputArguments
         }
 
         if (interactive) {
@@ -798,6 +923,8 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
                 put("stderr_truncated", stderrTruncated)
                 put("stdout_total_bytes", res.stdoutTotalBytes)
                 put("stderr_total_bytes", res.stderrTotalBytes)
+                put("stdout_output_limited", res.stdoutOutputLimited)
+                put("stderr_output_limited", res.stderrOutputLimited)
                 put("stdout_next_offset", if (stdoutTruncated) kotlinx.serialization.json.JsonPrimitive(res.stdoutHeadBytes) else kotlinx.serialization.json.JsonNull)
                 put("stderr_next_offset", if (stderrTruncated) kotlinx.serialization.json.JsonPrimitive(res.stderrHeadBytes) else kotlinx.serialization.json.JsonNull)
                 if (res.exitCode != 0) put("note", "Non-zero exit code; check stderr.")

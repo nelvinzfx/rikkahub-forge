@@ -132,16 +132,33 @@ private const val MAX_TERMUX_DIFF_WORK_UNITS = 2_000_000L
 
 private data class BoundedDiff(val text: String?, val omitted: Boolean)
 
+internal fun takeTermuxEditDiffPrefix(text: String, maxChars: Int): String {
+    if (maxChars <= 0) return ""
+    var end = minOf(text.length, maxChars)
+    if (end in 1 until text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end--
+    return text.substring(0, end)
+}
+
 internal fun isSafeTermuxEditDiffPath(path: String): Boolean = path.none { it == '\n' || it == '\r' }
 
 private fun boundedEditDiff(oldText: String, newText: String, path: String): BoundedDiff {
     if (oldText == newText) return BoundedDiff(null, false)
     if (!isSafeTermuxEditDiffPath(path)) return BoundedDiff(null, true)
     if (oldText.length.toLong() + newText.length > MAX_TERMUX_DIFF_INPUT_CHARS) return BoundedDiff(null, true)
-    var oldLines = 1L
-    var newLines = 1L
-    oldText.forEach { if (it == '\n' || it == '\r') oldLines++ }
-    newText.forEach { if (it == '\n' || it == '\r') newLines++ }
+    fun physicalLines(text: String): Long {
+        var lines = 1L
+        var index = 0
+        while (index < text.length) {
+            when (text[index]) {
+                '\r' -> { lines++; if (index + 1 < text.length && text[index + 1] == '\n') index++ }
+                '\n' -> lines++
+            }
+            index++
+        }
+        return lines
+    }
+    val oldLines = physicalLines(oldText)
+    val newLines = physicalLines(newText)
     if (oldLines > MAX_TERMUX_DIFF_LINES || newLines > MAX_TERMUX_DIFF_LINES) return BoundedDiff(null, true)
     if (oldLines * newLines > MAX_TERMUX_DIFF_WORK_UNITS) return BoundedDiff(null, true)
     val diff = me.rerere.rikkahub.utils.generateUnifiedDiff(oldText, newText, path)
@@ -153,7 +170,7 @@ private fun truncateDiffs(prepared: List<PreparedTermuxEdit>): Pair<List<Prepare
     return prepared.map { item ->
         val diff = item.diff
         if (diff == null || remaining == 0) { if (diff != null) truncated = true; item.copy(diff = null) } else {
-            val kept = diff.take(remaining); if (kept.length < diff.length) truncated = true; remaining -= kept.length; item.copy(diff = kept)
+            val kept = takeTermuxEditDiffPrefix(diff, remaining); if (kept.length < diff.length) truncated = true; remaining -= kept.length; item.copy(diff = kept)
         }
     } to truncated
 }
@@ -220,10 +237,24 @@ private fun fileSpecSchema() = buildJsonObject { put("type", "object"); put("pro
 fun termuxEditFileTool(context: Context): Tool = Tool(
     name = "termux_edit_file", description = "Atomically edit one existing strict UTF-8 Termux file without creating it. Matches are unique exact, Unicode-normalized, or indent-insensitive spans resolved against the original source. Dry-run validates and returns a bounded unified diff. Apply preserves mode, BOM, mixed LF/CRLF/CR separators outside edited spans, and final-newline state with source SHA revalidation.",
     parameters = { InputSchema.Obj(buildJsonObject { put("path", buildJsonObject { put("type", "string") }); put("edits", editsArraySchema()); put("dry_run", buildJsonObject { put("type", "boolean"); put("default", false) }); put("expected_sha256", expectedShaSchema()) }, listOf("path", "edits"), additionalProperties = false) },
-    execute = { input -> when (val parsed = parseTermuxEditRequest(input, true)) { is PublicInputResult.Error -> listOf(UIMessagePart.Text(editError(parsed.value.code, path = parsed.value.path).toString())); is PublicInputResult.Ok -> executeTermuxEdit(context, parsed.value) } },
+    execute = { input ->
+        val requestedDryRun = (input as? kotlinx.serialization.json.JsonObject)?.get("dry_run")
+            ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { value -> !value.isString }?.content?.toBooleanStrictOrNull() } == true
+        when (val parsed = parseTermuxEditRequest(input, true)) {
+            is PublicInputResult.Error -> listOf(UIMessagePart.Text(editError(parsed.value.code, path = parsed.value.path, dryRun = requestedDryRun).toString()))
+            is PublicInputResult.Ok -> executeTermuxEdit(context, parsed.value)
+        }
+    },
 )
 fun termuxEditFilesTool(context: Context): Tool = Tool(
     name = "termux_edit_files", description = "Transactionally edit 1 to 20 existing strict UTF-8 Termux files. All files validate and stage before publication; each replacement is atomic and a later publication failure triggers verified best-effort rollback of earlier replacements.",
     parameters = { InputSchema.Obj(buildJsonObject { put("files", buildJsonObject { put("type", "array"); put("minItems", 1); put("maxItems", MAX_TERMUX_EDIT_FILES); put("items", fileSpecSchema()) }); put("dry_run", buildJsonObject { put("type", "boolean"); put("default", false) }) }, listOf("files"), additionalProperties = false) },
-    execute = { input -> when (val parsed = parseTermuxEditRequest(input, false)) { is PublicInputResult.Error -> listOf(UIMessagePart.Text(editError(parsed.value.code, path = parsed.value.path).toString())); is PublicInputResult.Ok -> executeTermuxEdit(context, parsed.value) } },
+    execute = { input ->
+        val requestedDryRun = (input as? kotlinx.serialization.json.JsonObject)?.get("dry_run")
+            ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { value -> !value.isString }?.content?.toBooleanStrictOrNull() } == true
+        when (val parsed = parseTermuxEditRequest(input, false)) {
+            is PublicInputResult.Error -> listOf(UIMessagePart.Text(editError(parsed.value.code, path = parsed.value.path, dryRun = requestedDryRun).toString()))
+            is PublicInputResult.Ok -> executeTermuxEdit(context, parsed.value)
+        }
+    },
 )

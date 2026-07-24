@@ -2,33 +2,51 @@ name: Release Build (arm64)
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact commit SHA that must be built
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Verify immutable source
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          printf 'source_sha=%s\n' "$EXPECTED_SHA" | tee release-source.txt
+
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
       - name: Set up bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: latest
 
       - name: Gradle cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.gradle/caches
@@ -36,19 +54,65 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
       - name: Prepare build files
+        env:
+          KEY_BASE64: ${{ secrets.KEY_BASE64 }}
+          SIGNING_CONFIG: ${{ secrets.SIGNING_CONFIG }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
-          echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
-          echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
-          echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          set -euo pipefail
+          test -n "$KEY_BASE64"
+          test -n "$SIGNING_CONFIG"
+          test -n "$GOOGLE_SERVICES_JSON"
+          umask 077
+          printf '%s' "$KEY_BASE64" | base64 -d > app/app.key
+          printf '%s\n' "$SIGNING_CONFIG" > local.properties
+          printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          test -s app/app.key
+          grep -q '^storeFile=' local.properties
+          grep -q '^storePassword=' local.properties
+          grep -q '^keyAlias=' local.properties
+          grep -q '^keyPassword=' local.properties
+          python3 -m json.tool app/google-services.json >/dev/null
 
       - name: Gradle Build (arm64-v8a only, no universal)
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease -PabiFilters=arm64-v8a -PuniversalApk=false
 
+      - name: Verify signed arm64 artifact
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*arm64-v8a*.apk' -print)
+          test "${#apks[@]}" -eq 1
+          apk="${apks[0]}"
+          sdk_dir="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          build_tools="$(find "$sdk_dir/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk" | tee release-certificates.txt
+          expected_cert='9dc3d0968c6546a6d93b2a036894c4ee30b167c246e0ad3bc384a93b5bce0e7b'
+          actual_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' release-certificates.txt | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$actual_cert" = "$expected_cert"
+          mapfile -t apk_entries < <(unzip -Z1 "$apk")
+          abis="$(printf '%s\n' "${apk_entries[@]}" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)"
+          test "$abis" = 'arm64-v8a'
+          [[ "${apk_entries[*]}" == *'lib/arm64-v8a/'* ]]
+          cp "$apk" app/build/outputs/apk/release/rikkahub-${EXPECTED_SHA}-arm64-v8a.apk
+          sha256sum app/build/outputs/apk/release/rikkahub-${EXPECTED_SHA}-arm64-v8a.apk | tee SHA256SUMS
+
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f app/app.key local.properties app/google-services.json
+
       - name: Upload arm64 APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: success()
         with:
-          name: rikkahub-arm64
-          path: app/build/outputs/apk/release/*arm64-v8a*.apk
+          name: rikkahub-arm64-${{ inputs.expected_sha }}
+          path: |
+            app/build/outputs/apk/release/rikkahub-${{ inputs.expected_sha }}-arm64-v8a.apk
+            SHA256SUMS
+            release-source.txt
+            release-certificates.txt
+          if-no-files-found: error
+          retention-days: 30

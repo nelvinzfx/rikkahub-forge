@@ -222,6 +222,13 @@ class TermuxEditEngineTest {
         ]}""", single = false))
     }
 
+    @Test fun diffPrefixNeverSplitsSurrogatePairs() {
+        val value = "a\uD83D\uDE00b"
+        assertEquals("a", takeTermuxEditDiffPrefix(value, 2))
+        assertEquals("a\uD83D\uDE00", takeTermuxEditDiffPrefix(value, 3))
+        assertEquals("", takeTermuxEditDiffPrefix(value, 0))
+    }
+
     @Test fun parserEnforcesArrayAndAggregateBoundsAndStrictUtf8() {
         val emptyFiles = JsonObject(mapOf("files" to JsonArray(emptyList())))
         assertEquals("files_count_out_of_range", (parseTermuxEditRequest(emptyFiles, false) as PublicInputResult.Error).value.code)
