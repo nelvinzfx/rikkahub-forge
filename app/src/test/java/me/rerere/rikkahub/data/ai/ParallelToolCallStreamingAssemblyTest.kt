@@ -74,6 +74,36 @@ class ParallelToolCallStreamingAssemblyTest {
         tools.forEach { json.parseToJsonElement(it.input).jsonObject }
     }
 
+    @Test
+    fun `provider echoing the tool name in every delta still yields a single name`() {
+        var messages = listOf(UIMessage.user("start a server"))
+        messages = messages.handleMessageChunk(
+            chunk(tool(id = "call-0", name = "termux_run_command", input = ""))
+        )
+
+        // Some relays re-emit function.name on every continuation delta instead of only the
+        // first. Assembly must keep the first name and never concatenate it.
+        val fragments = listOf(
+            "{\"command\":\"cd ~/app ",
+            "&& PORT=18765 ",
+            "exec python3 app.py\",",
+            "\"background\":true}",
+        )
+        fragments.forEach { fragment ->
+            messages = messages.handleMessageChunk(
+                chunk(tool(id = "call-0", name = "termux_run_command", input = fragment))
+            )
+        }
+
+        val tool = messages.last().parts.filterIsInstance<UIMessagePart.Tool>().single()
+        assertEquals("termux_run_command", tool.toolName)
+        assertEquals(
+            "{\"command\":\"cd ~/app && PORT=18765 exec python3 app.py\",\"background\":true}",
+            tool.input,
+        )
+        json.parseToJsonElement(tool.input).jsonObject
+    }
+
     private fun tool(
         id: String = "",
         name: String = "",

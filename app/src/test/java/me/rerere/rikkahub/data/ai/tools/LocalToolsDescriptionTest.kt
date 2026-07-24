@@ -154,4 +154,35 @@ class LocalToolsDescriptionTest {
 
         assertEquals("ok", result.text)
     }
+
+    @Test
+    fun `addHumanErrorEnvelopes leaves null error success envelopes unchanged`() = runBlocking {
+        val text =
+            """{"error":null,"actual_path":"/tmp/a.txt","content":"ok","truncated":false}"""
+        val tool = Tool(
+            name = "termux_read_file",
+            description = "Read file.",
+            execute = { listOf(UIMessagePart.Text(text)) },
+        )
+
+        val result = addHumanErrorEnvelopes(tool).execute(Json.parseToJsonElement("{}")).single()
+            as UIMessagePart.Text
+
+        assertEquals(text, result.text)
+    }
+
+    @Test
+    fun `addHumanErrorEnvelopes leaves blank error envelopes unchanged`() = runBlocking {
+        val text = """{"error":"","detail":"no failure"}"""
+        val tool = Tool(
+            name = "termux_read_file",
+            description = "Read file.",
+            execute = { listOf(UIMessagePart.Text(text)) },
+        )
+
+        val result = addHumanErrorEnvelopes(tool).execute(Json.parseToJsonElement("{}")).single()
+            as UIMessagePart.Text
+
+        assertEquals(text, result.text)
+    }
 }

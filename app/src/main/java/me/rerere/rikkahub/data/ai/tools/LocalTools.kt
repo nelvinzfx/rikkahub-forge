@@ -232,7 +232,11 @@ internal fun appendHumanErrorToToolResult(part: UIMessagePart): UIMessagePart {
     val jsonObject = runCatching {
         Json.parseToJsonElement(part.text).jsonObject
     }.getOrNull() ?: return part
-    if ("error" !in jsonObject) return part
+    val errorElement = jsonObject["error"] ?: return part
+    // Success envelopes may still carry an explicit null or blank error field;
+    // only a non-blank value marks a real failure.
+    if (errorElement is JsonNull) return part
+    if (errorElement.jsonPrimitive.contentOrNull?.isBlank() == true) return part
 
     val detail = jsonObject["detail"] ?: jsonObject["reason"]
     val recovery = jsonObject["recovery"]

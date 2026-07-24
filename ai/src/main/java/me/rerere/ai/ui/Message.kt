@@ -419,7 +419,8 @@ sealed class UIMessagePart {
         fun merge(other: ToolCall): ToolCall {
             return ToolCall(
                 toolCallId = toolCallId,
-                toolName = toolName + other.toolName,
+                // Some relays echo the name on every delta; keep the first, never concatenate.
+                toolName = toolName.ifBlank { other.toolName },
                 arguments = arguments + other.arguments,
                 approvalState = approvalState,
                 metadata = if (other.metadata != null) other.metadata else metadata,
@@ -485,7 +486,8 @@ sealed class UIMessagePart {
         fun merge(other: Tool): Tool {
             return Tool(
                 toolCallId = toolCallId,
-                toolName = toolName + other.toolName,
+                // Some relays echo the name on every delta; keep the first, never concatenate.
+                toolName = toolName.ifBlank { other.toolName },
                 input = input + other.input,
                 output = output + other.output,
                 approvalState = approvalState,
