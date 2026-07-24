@@ -2388,6 +2388,7 @@ class ChatService(
             } finally {
                 if (cancelledJob != null) stoppingGenerationJobs.remove(conversationId, cancelledJob)
                 gate.complete(Unit)
+                stoppingGenerationCleanups.remove(conversationId, gate)
             }
         }
         return cancelled

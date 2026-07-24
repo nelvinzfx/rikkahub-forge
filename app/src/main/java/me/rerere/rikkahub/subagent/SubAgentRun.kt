@@ -149,7 +149,7 @@ data class SubAgentRequest(
     val reasoningLevel: me.rerere.ai.core.ReasoningLevel? = null,
 )
 
-internal enum class SubAgentStopReason(val terminalStatus: SubAgentStatus) {
+enum class SubAgentStopReason(val terminalStatus: SubAgentStatus) {
     CANCELLED(SubAgentStatus.CANCELLED),
     TIMED_OUT(SubAgentStatus.TIMED_OUT),
 }
