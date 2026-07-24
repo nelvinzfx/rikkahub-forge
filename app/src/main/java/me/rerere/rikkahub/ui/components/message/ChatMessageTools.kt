@@ -78,6 +78,9 @@ private const val ASK_USER_TOOL_NAME = "ask_user"
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     loading: Boolean = false,
+    /** True while the owning message is still generating (any step). Auto-collapse
+     * waits for this to go false instead of firing at each tool's execution edge. */
+    generationLoading: Boolean = false,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String, scope: me.rerere.rikkahub.service.ChatService.ApprovalScope, toolName: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
 ) {
@@ -111,11 +114,13 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isDenied = tool.approvalState is ToolApprovalState.Denied
 
-    // Auto-collapse once the tool finishes (setting-gated). Fires only on the
-    // loading/executed edge, so a manual re-expand afterwards is not overridden.
+    // Auto-collapse when the WHOLE generation ends (setting-gated), not at each
+    // tool's execution edge: edit diffs and short previews only exist once their
+    // tool completes, so per-edge collapse hid them instantly. Fires again only
+    // on the generation edge, so a manual re-expand afterwards is not overridden.
     val displaySetting = LocalSettings.current.displaySetting
-    LaunchedEffect(loading, tool.isExecuted) {
-        if (displaySetting.autoCollapseToolSteps && !loading && tool.isExecuted && !isPending) {
+    LaunchedEffect(generationLoading, tool.isExecuted) {
+        if (displaySetting.autoCollapseToolSteps && !generationLoading && tool.isExecuted && !isPending) {
             expanded = false
         }
     }

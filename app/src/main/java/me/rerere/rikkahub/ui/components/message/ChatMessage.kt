@@ -371,6 +371,7 @@ private fun MessagePartsBlock(
                                     ChatMessageToolStep(
                                         tool = step.tool,
                                         loading = loading && !step.tool.isExecuted,
+                                        generationLoading = loading,
                                         onToolApproval = onToolApproval,
                                         onToolAnswer = onToolAnswer,
                                     )
