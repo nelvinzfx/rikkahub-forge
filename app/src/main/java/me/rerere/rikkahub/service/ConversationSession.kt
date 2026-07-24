@@ -78,10 +78,30 @@ class ConversationSession(
         // getJob() returns B; stopGeneration only cancels B; A leaks until completion.
         val previous = _generationJob.getAndUpdate { job }
         previous?.cancel()
+        job?.let(::watchJob)
+    }
+
+    /**
+     * Claim the generation slot only when no active job owns it. Used by background wakeups
+     * so a user turn that won the race is never cancelled. Inactive stale references may be
+     * replaced safely; their identity completion callback cannot clear the new job.
+     */
+    fun trySetJobIfIdle(job: Job): Boolean {
+        while (true) {
+            val current = _generationJob.value
+            if (current?.isActive == true) return false
+            if (_generationJob.compareAndSet(current, job)) {
+                watchJob(job)
+                return true
+            }
+        }
+    }
+
+    private fun watchJob(job: Job) {
         // Identity-checked completion handler: only null the StateFlow if the value is
         // STILL the same job we just set. Without this an out-of-order setJob(B) →
         // A.invokeOnCompletion → clobber-B race could null out the live job.
-        job?.invokeOnCompletion {
+        job.invokeOnCompletion {
             _generationJob.compareAndSet(job, null)
             if (refCount.get() <= 0) {
                 scheduleIdleCheck()

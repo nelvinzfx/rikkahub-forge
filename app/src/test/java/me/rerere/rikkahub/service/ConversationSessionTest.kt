@@ -68,6 +68,26 @@ class ConversationSessionTest {
     }
 
     @Test
+    fun `idle claim is atomic and never cancels the winner`() = runBlocking {
+        val id = Uuid.random()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = ConversationSession(id, Conversation.ofId(id), scope) {}
+        val winner = Job()
+        val loser = Job()
+
+        assertTrue(session.trySetJobIfIdle(winner))
+        assertFalse(session.trySetJobIfIdle(loser))
+        assertSame(winner, session.getJob())
+        assertFalse(winner.isCancelled)
+        assertFalse(loser.isCancelled)
+
+        loser.cancel()
+        winner.cancel()
+        joinAll(loser, winner)
+        scope.cancel()
+    }
+
+    @Test
     fun `applyConversationSnapshotIfIdle loads a cold idle session`() = runBlocking {
         val id = Uuid.random()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

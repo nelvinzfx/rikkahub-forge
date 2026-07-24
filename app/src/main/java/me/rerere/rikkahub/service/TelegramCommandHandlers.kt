@@ -155,7 +155,16 @@ internal suspend fun TelegramBotService.handleResetCommand(chatId: Long) {
     // they got a clean slate while the model is still churning on the previous prompt.
     val existing = chatRepo.getByChatId(chatId)
     if (existing != null) {
-        runCatching { Uuid.parse(existing.conversationId) }.getOrNull()?.let { convId ->
+        val convId = try {
+            Uuid.parse(existing.conversationId)
+        } catch (failure: Throwable) {
+            Log.e(TAG, "handleResetCommand: corrupt conversation id; refusing reset", failure)
+            runCatching {
+                client.sendMessage(chatId, "⚠️ The saved conversation id is invalid. /new was aborted to avoid losing an active run.")
+            }
+            return
+        }
+        run {
             try {
                 chatService.awaitStopGenerationAndSubAgents(convId)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {

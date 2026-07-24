@@ -11,6 +11,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -545,12 +546,12 @@ class ChatService(
         conversationId: Uuid,
         content: List<UIMessagePart>,
         answer: Boolean = true,
-    ): Boolean {
-        val session = sessions[conversationId] ?: return false
-        if (session.getJob()?.isActive == true) return false
-        sendMessage(conversationId, content, answer)
-        return true
-    }
+    ): Boolean = sendMessageOwned(
+        conversationId = conversationId,
+        content = content,
+        answer = answer,
+        onlyIfIdle = true,
+    ) != null
 
     /**
      * Snapshot the model-facing tool names authorized for a sub-agent attempt. Dispatch
@@ -631,14 +632,17 @@ class ChatService(
         // of the exact tools authorized for this attempt; empty means no tools.
         exactToolNames: Set<String>? = null,
         generationOverrides: ChatGenerationOverrides? = null,
+        onlyIfIdle: Boolean = false,
     ): Job? {
         if (content.isEmptyInputMessage()) return null
 
         val session = getOrCreateSession(conversationId)
-        val previousJob = session.getJob()
-        previousJob?.cancel()
+        val previousJob = if (onlyIfIdle) null else session.getJob()
+        if (!onlyIfIdle) previousJob?.cancel()
 
-        val job = appScope.launch {
+        // Lazy construction lets the session slot be claimed atomically before any message
+        // mutation begins. A losing background wake is cancelled without ever running.
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
             try {
                 runCatching { previousJob?.join() }
                 awaitParentStopEpochs(conversationId)
@@ -716,7 +720,17 @@ class ChatService(
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
         }
-        session.setJob(job)
+        val installed = if (onlyIfIdle) {
+            session.trySetJobIfIdle(job)
+        } else {
+            session.setJob(job)
+            true
+        }
+        if (!installed) {
+            job.cancel()
+            return null
+        }
+        job.start()
         return job
     }
 
