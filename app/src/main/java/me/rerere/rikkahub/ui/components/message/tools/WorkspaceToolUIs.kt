@@ -436,7 +436,7 @@ private fun formatBytes(bytes: Long): String = when {
 private const val FILE_SUMMARY_MAX_LINES = 10
 
 /** 由文件扩展名推断语法高亮语言 */
-private fun languageOf(path: String?): String = when (
+internal fun languageOf(path: String?): String = when (
     path?.substringAfterLast('.', "")?.lowercase().orEmpty()
 ) {
     "kt", "kts" -> "kotlin"

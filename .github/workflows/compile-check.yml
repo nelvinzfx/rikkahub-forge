@@ -57,6 +57,7 @@ jobs:
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditEngineTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditProtocolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditShellSimulationTest' \
+            --tests 'me.rerere.rikkahub.ui.components.message.tools.TermuxToolUIModelsTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.ToolSchemaArrayItemsTest' \
             --tests 'me.rerere.rikkahub.service.TelegramAgentContextTest' \
             --tests 'me.rerere.rikkahub.service.ConflateLatestTest' \
