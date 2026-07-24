@@ -301,13 +301,6 @@ class SubAgentEngine(
             }
         }
         executionHandle.attachSupervisor(executionJob)
-        executionJob.invokeOnCompletion { cause ->
-            if (cause is CancellationException) {
-                appScope.launch(NonCancellable) {
-                    finalizeStartupCancellation(runId)
-                }
-            }
-        }
         if (cleaned.runInBackground) {
             // Return immediately; final status delivered via registry observation.
             DispatchResult.Ok(registry.get(runId) ?: initialRun)
@@ -672,7 +665,8 @@ class SubAgentEngine(
                 generationJob?.let(executionHandle::clearGeneration)
                 HeadlessConversations.unmark(workerConvId)
                 SubAgentConversationTracker.unregister(workerConvId.toString())
-                registry.clearExecution(runId)
+                // Execution completion is published by the outer supervisor finally, after
+                // this cleanup and any completion notification have fully returned.
             }
         }
     }

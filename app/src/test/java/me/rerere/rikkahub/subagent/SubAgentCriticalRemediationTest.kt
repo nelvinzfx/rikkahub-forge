@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.subagent
 
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
