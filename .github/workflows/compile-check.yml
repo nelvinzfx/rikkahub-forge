@@ -78,6 +78,8 @@ jobs:
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \
             --tests 'me.rerere.ai.provider.providers.LosslessCallbackFlowTest' \
+            --tests 'me.rerere.ai.provider.providers.openai.ChatCompletionsParallelToolImageOrderingTest' \
+            --tests 'me.rerere.ai.provider.providers.openai.ResponseAPIParallelToolImageOrderingTest' \
             --tests 'me.rerere.ai.core.InputSchemaSerializationTest' \
             --no-daemon --stacktrace
 

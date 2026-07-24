@@ -599,7 +599,8 @@ class ChatCompletionsAPI(
                     contentBuffer.clear()
                     reasoningPart = null // 清空，下一个 group 可能有新的 reasoning
 
-                    // 紧跟 tool 结果消息
+                    // Keep every response to this assistant tool_calls message contiguous.
+                    // Strict OpenAI-compatible providers reject any intervening user message.
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("role", "tool")
@@ -609,11 +610,12 @@ class ChatCompletionsAPI(
                                 "content",
                                 tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text })
                         })
-                        // Image lift: ChatCompletions tool messages are text-only, so any
-                        // UIMessagePart.Image returned by the tool would be invisible to a
-                        // vision-capable model otherwise. Emit a follow-up user message that
-                        // carries those images so the model actually sees them on its next
-                        // turn (e.g. take_screenshot, take_photo, etc.).
+                    }
+
+                    // Chat Completions tool messages are text-only. Lift images only after
+                    // every parallel tool response has been emitted, preserving the required
+                    // assistant(tool_calls) -> tool* sequence.
+                    group.tools.forEach { tool ->
                         val toolImages = tool.output.filterIsInstance<UIMessagePart.Image>()
                         if (toolImages.isNotEmpty()) {
                             add(buildJsonObject {

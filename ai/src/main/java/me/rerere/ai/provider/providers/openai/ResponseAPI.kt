@@ -353,7 +353,8 @@ class ResponseAPI(
                         contentBuffer.clear()
                     }
 
-                    // 输出 function_call + function_call_output
+                    // Emit every function call and its output before adding user-role image
+                    // fallbacks. This keeps a parallel tool batch free of intervening messages.
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("type", "function_call")
@@ -395,10 +396,11 @@ class ResponseAPI(
                                 )
                             }
                         })
-                        // Image lift: function_call_output is text-only, so a tool that
-                        // returns UIMessagePart.Image (take_screenshot, take_photo, etc.)
-                        // would otherwise be invisible to vision-capable models. Inject
-                        // those images as a follow-up user content item.
+                    }
+
+                    // Preserve the compatibility image lift, but defer it until every
+                    // function_call_output in the parallel batch has been emitted.
+                    group.tools.forEach { tool ->
                         val toolImages = tool.output.filterIsInstance<UIMessagePart.Image>()
                         if (toolImages.isNotEmpty()) {
                             addContentItem(
