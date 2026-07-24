@@ -19,6 +19,83 @@ class TermuxEditProtocolTest {
         assertTrue(empty["diff"] is JsonNull)
     }
 
+    @Test fun workBudgetFallbackKeepsRenderableDiffMetadataFor1500LineFile() {
+        // 1,500² exceeds MAX_TERMUX_DIFF_WORK_UNITS. This matches the real
+        // GenerationHandler.kt failure: below the 2,000-line cap, yet the old producer
+        // returned BoundedDiff(null, omitted=true), so no DiffMetadata/card existed.
+        val oldLines = (1..1_500).map { "line$it" }
+        val newLines = oldLines.toMutableList().also { it[749] = "changed750" }
+        val diff = boundedEditDiff(
+            oldText = oldLines.joinToString("\n"),
+            newText = newLines.joinToString("\n"),
+            path = "/tmp/large.kt",
+        )
+        val text = requireNotNull(diff.text)
+
+        assertFalse(diff.omitted)
+        assertTrue(text.startsWith("--- a//tmp/large.kt\n+++ b//tmp/large.kt\n"))
+        assertTrue(text.contains("@@ -747,7 +747,7 @@"))
+        assertTrue(text.contains("-line750\n+changed750"))
+        assertTrue(text.contains(" line753"))
+    }
+
+    @Test fun linearFallbackIsBoundedButNeverDropsTheWholeDiff() {
+        val oldText = (1..1_000).joinToString("\n") { "old$it" }
+        val newText = (1..1_000).joinToString("\n") { "new$it" }
+        val diff = generateLinearTermuxEditDiff(oldText, newText, "large.txt", maxChars = 128)
+        val text = requireNotNull(diff.text)
+
+        assertTrue(diff.omitted)
+        assertTrue(text.isNotEmpty())
+        assertTrue(text.length <= 128)
+        assertTrue(text.startsWith("--- a/large.txt\n+++ b/large.txt\n@@"))
+    }
+
+    @Test fun linearFallbackShowsSafeNoticeForUnsafePath() {
+        val diff = generateLinearTermuxEditDiff("old", "new", "bad\npath")
+        val text = requireNotNull(diff.text)
+
+        assertTrue(diff.omitted)
+        assertTrue(text.contains("--- a/[path-omitted]"))
+        assertTrue(text.contains("path contains line separators"))
+        assertFalse(text.contains("bad\npath"))
+    }
+
+    @Test fun lineEndingOnlyChangeStillProducesVisibleDiffNotice() {
+        val diff = boundedEditDiff("first\r\nsecond", "first\nsecond", "line-endings.txt")
+        val text = requireNotNull(diff.text)
+
+        assertTrue(diff.omitted)
+        assertTrue(text.contains("line-invisible representation"))
+    }
+
+    @Test fun lineCountFallbackAlsoKeepsAVisibleDiff() {
+        val oldLines = (1..2_100).map { "line$it" }
+        val newLines = oldLines.toMutableList().also { it[1_049] = "changed1050" }
+        val diff = boundedEditDiff(
+            oldLines.joinToString("\n"),
+            newLines.joinToString("\n"),
+            "over-2000.kt",
+        )
+        val text = requireNotNull(diff.text)
+
+        assertFalse(diff.omitted)
+        assertTrue(text.contains("-line1050\n+changed1050"))
+    }
+
+    @Test fun extremeLineCountUsesVisibleBoundedNotice() {
+        val oldLines = MutableList(20_001) { "x" }
+        val oldText = oldLines.joinToString("\n")
+        oldLines[0] = "y"
+        val newText = oldLines.joinToString("\n")
+        val diff = boundedEditDiff(oldText, newText, "extreme.txt")
+        val text = requireNotNull(diff.text)
+
+        assertTrue(diff.omitted)
+        assertTrue(text.contains("20,000-line fallback limit"))
+        assertTrue(text.length <= TERMUX_EDIT_DIFF_MAX_CHARS)
+    }
+
     @Test fun snapshotParserRequiresCanonicalCorrelationAndBounds() {
         val id = UUID.randomUUID().toString(); val actual = Base64.getEncoder().encodeToString("/tmp/a".toByteArray()); val pathSha = "1".repeat(64); val contentSha = "a".repeat(64)
         val valid = "RIKKAHUB_EDIT_SNAPSHOT_V1\nrequest_id=$id\ncount=1\nitem=0,$actual,$pathSha,$contentSha,640,1:2,3\n"

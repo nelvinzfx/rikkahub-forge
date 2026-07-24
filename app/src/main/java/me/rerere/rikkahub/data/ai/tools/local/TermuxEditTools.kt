@@ -142,8 +142,9 @@ private fun preparedJson(item: PreparedTermuxEdit, dryRun: Boolean, published: T
 private const val MAX_TERMUX_DIFF_INPUT_CHARS = 256 * 1024
 private const val MAX_TERMUX_DIFF_LINES = 2_000
 private const val MAX_TERMUX_DIFF_WORK_UNITS = 2_000_000L
+private const val MAX_TERMUX_LINEAR_DIFF_LINES = 20_000L
 
-private data class BoundedDiff(val text: String?, val omitted: Boolean)
+internal data class BoundedDiff(val text: String?, val omitted: Boolean)
 
 internal fun takeTermuxEditDiffPrefix(text: String, maxChars: Int): String {
     if (maxChars <= 0) return ""
@@ -154,28 +155,159 @@ internal fun takeTermuxEditDiffPrefix(text: String, maxChars: Int): String {
 
 internal fun isSafeTermuxEditDiffPath(path: String): Boolean = path.none { it == '\n' || it == '\r' }
 
-private fun boundedEditDiff(oldText: String, newText: String, path: String): BoundedDiff {
-    if (oldText == newText) return BoundedDiff(null, false)
-    if (!isSafeTermuxEditDiffPath(path)) return BoundedDiff(null, true)
-    if (oldText.length.toLong() + newText.length > MAX_TERMUX_DIFF_INPUT_CHARS) return BoundedDiff(null, true)
-    fun physicalLines(text: String): Long {
-        var lines = 1L
-        var index = 0
-        while (index < text.length) {
-            when (text[index]) {
-                '\r' -> { lines++; if (index + 1 < text.length && text[index + 1] == '\n') index++ }
-                '\n' -> lines++
-            }
-            index++
+private fun physicalTermuxDiffLines(text: String): Long {
+    var lines = 1L
+    var index = 0
+    while (index < text.length) {
+        when (text[index]) {
+            '\r' -> { lines++; if (index + 1 < text.length && text[index + 1] == '\n') index++ }
+            '\n' -> lines++
         }
-        return lines
+        index++
     }
-    val oldLines = physicalLines(oldText)
-    val newLines = physicalLines(newText)
-    if (oldLines > MAX_TERMUX_DIFF_LINES || newLines > MAX_TERMUX_DIFF_LINES) return BoundedDiff(null, true)
-    if (oldLines * newLines > MAX_TERMUX_DIFF_WORK_UNITS) return BoundedDiff(null, true)
+    return lines
+}
+
+private fun omittedTermuxEditDiffNotice(
+    path: String,
+    detail: String,
+    maxChars: Int = TERMUX_EDIT_DIFF_MAX_CHARS,
+): BoundedDiff {
+    if (maxChars <= 0) return BoundedDiff(null, true)
+    val safePath = path.takeIf(::isSafeTermuxEditDiffPath) ?: "[path-omitted]"
+    val notice = """
+        --- a/$safePath
+        +++ b/$safePath
+        @@ -0,0 +0,0 @@
+        \ Diff preview truncated: $detail
+    """.trimIndent()
+    return BoundedDiff(
+        takeTermuxEditDiffPrefix(notice, maxChars).takeIf(String::isNotEmpty),
+        true,
+    )
+}
+
+/**
+ * Linear-space fallback for files that exceed the Myers diff work budget. It emits one
+ * accurate unified hunk spanning the first through last changed line, with bounded context.
+ * Output is capped while being built, so a large file can still populate DiffMetadata and
+ * render a useful card without allocating an unbounded diff or returning diff=null.
+ */
+internal fun generateLinearTermuxEditDiff(
+    oldText: String,
+    newText: String,
+    path: String,
+    maxChars: Int = TERMUX_EDIT_DIFF_MAX_CHARS,
+    contextLines: Int = 3,
+): BoundedDiff {
+    if (oldText == newText) return BoundedDiff(null, false)
+    if (!isSafeTermuxEditDiffPath(path)) {
+        return omittedTermuxEditDiffNotice(
+            path = path,
+            detail = "the path contains line separators and was omitted from the diff header.",
+            maxChars = maxChars,
+        )
+    }
+    if (maxChars <= 0) return BoundedDiff(null, true)
+
+    val oldLineCount = physicalTermuxDiffLines(oldText)
+    val newLineCount = physicalTermuxDiffLines(newText)
+    if (oldLineCount > MAX_TERMUX_LINEAR_DIFF_LINES || newLineCount > MAX_TERMUX_LINEAR_DIFF_LINES) {
+        return omittedTermuxEditDiffNotice(
+            path = path,
+            detail = "file exceeds the safe $MAX_TERMUX_LINEAR_DIFF_LINES-line fallback limit.",
+            maxChars = maxChars,
+        )
+    }
+
+    val oldLines = oldText.lines()
+    val newLines = newText.lines()
+    val sharedLimit = minOf(oldLines.size, newLines.size)
+    var prefix = 0
+    while (prefix < sharedLimit && oldLines[prefix] == newLines[prefix]) prefix++
+
+    var suffix = 0
+    while (
+        suffix < oldLines.size - prefix &&
+        suffix < newLines.size - prefix &&
+        oldLines[oldLines.lastIndex - suffix] == newLines[newLines.lastIndex - suffix]
+    ) {
+        suffix++
+    }
+    if (prefix == oldLines.size && prefix == newLines.size) {
+        return omittedTermuxEditDiffNotice(
+            path = path,
+            detail = "text changed only in line separators or another line-invisible representation.",
+            maxChars = maxChars,
+        )
+    }
+
+    val contextStart = maxOf(0, prefix - contextLines.coerceAtLeast(0))
+    val oldChangeEnd = oldLines.size - suffix
+    val newChangeEnd = newLines.size - suffix
+    val suffixContext = minOf(contextLines.coerceAtLeast(0), suffix)
+    val oldHunkEnd = oldChangeEnd + suffixContext
+    val newHunkEnd = newChangeEnd + suffixContext
+    val oldCount = oldHunkEnd - contextStart
+    val newCount = newHunkEnd - contextStart
+
+    val builder = StringBuilder(minOf(maxChars, 4 * 1024))
+    fun appendDiffLine(line: String): Boolean {
+        val separatorLength = if (builder.isEmpty()) 0 else 1
+        val available = maxChars - builder.length - separatorLength
+        if (available < 0 || (available == 0 && line.isNotEmpty())) return false
+        if (separatorLength != 0) builder.append('\n')
+        if (line.length <= available) {
+            builder.append(line)
+            return true
+        }
+        builder.append(takeTermuxEditDiffPrefix(line, available))
+        return false
+    }
+
+    val oldStart = if (oldCount == 0) contextStart else contextStart + 1
+    val newStart = if (newCount == 0) contextStart else contextStart + 1
+    val headerLines = listOf(
+        "--- a/$path",
+        "+++ b/$path",
+        "@@ -$oldStart,$oldCount +$newStart,$newCount @@",
+    )
+    for (line in headerLines) if (!appendDiffLine(line)) return BoundedDiff(builder.toString(), true)
+    for (index in contextStart until prefix) {
+        if (!appendDiffLine(" " + oldLines[index])) return BoundedDiff(builder.toString(), true)
+    }
+    for (index in prefix until oldChangeEnd) {
+        if (!appendDiffLine("-" + oldLines[index])) return BoundedDiff(builder.toString(), true)
+    }
+    for (index in prefix until newChangeEnd) {
+        if (!appendDiffLine("+" + newLines[index])) return BoundedDiff(builder.toString(), true)
+    }
+    for (offset in 0 until suffixContext) {
+        if (!appendDiffLine(" " + oldLines[oldChangeEnd + offset])) return BoundedDiff(builder.toString(), true)
+    }
+    return BoundedDiff(builder.toString(), false)
+}
+
+internal fun boundedEditDiff(oldText: String, newText: String, path: String): BoundedDiff {
+    if (oldText == newText) return BoundedDiff(null, false)
+    if (!isSafeTermuxEditDiffPath(path)) {
+        return omittedTermuxEditDiffNotice(
+            path = path,
+            detail = "the path contains line separators and was omitted from the diff header.",
+        )
+    }
+    val oldLines = physicalTermuxDiffLines(oldText)
+    val newLines = physicalTermuxDiffLines(newText)
+    val needsLinearFallback = oldText.length.toLong() + newText.length > MAX_TERMUX_DIFF_INPUT_CHARS ||
+        oldLines > MAX_TERMUX_DIFF_LINES || newLines > MAX_TERMUX_DIFF_LINES ||
+        oldLines * newLines > MAX_TERMUX_DIFF_WORK_UNITS
+    if (needsLinearFallback) return generateLinearTermuxEditDiff(oldText, newText, path)
     val diff = me.rerere.rikkahub.utils.generateUnifiedDiff(oldText, newText, path)
-    return if (diff == null) BoundedDiff(null, false) else BoundedDiff(diff, false)
+    return if (diff == null) {
+        generateLinearTermuxEditDiff(oldText, newText, path)
+    } else {
+        BoundedDiff(diff, false)
+    }
 }
 
 private fun truncateDiffs(prepared: List<PreparedTermuxEdit>): Pair<List<PreparedTermuxEdit>, Boolean> {
