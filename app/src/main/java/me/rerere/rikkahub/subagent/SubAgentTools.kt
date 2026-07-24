@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.subagent
 
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray

@@ -109,6 +109,19 @@ class SubAgentCriticalRemediationTest {
     }
 
     @Test
+    fun `registry cancellation atomically blocks late success`() {
+        val registry = SubAgentRegistry()
+        val handle = SubAgentExecutionHandle()
+        registry.addPending(run("atomic"), handle)
+
+        assertTrue(registry.requestCancel("atomic"))
+        assertFalse(registry.transitionTerminal("atomic", SubAgentStatus.SUCCEEDED) {
+            it.copy(result = "late")
+        })
+        assertEquals(SubAgentStatus.RUNNING, registry.get("atomic")?.status)
+    }
+
+    @Test
     fun `cancellation intent blocks racing success transition`() {
         val registry = SubAgentRegistry()
         val handle = SubAgentExecutionHandle()

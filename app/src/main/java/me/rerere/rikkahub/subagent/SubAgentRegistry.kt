@@ -156,10 +156,12 @@ class SubAgentRegistry {
     fun hasActiveConversation(conversationId: String): Boolean =
         _runs.value.values.any { it.conversationId == conversationId && !it.status.isTerminal() }
 
-    fun requestCancel(id: String): Boolean {
-        val run = get(id) ?: return false
-        if (run.status.isTerminal()) return false
-        return activeExecutions[id]?.requestStop() ?: false
+    fun requestCancel(id: String): Boolean = synchronized(lock) {
+        val run = _runs.value[id] ?: return@synchronized false
+        if (run.status.isTerminal()) return@synchronized false
+        // Serialize stop intent with transitionTerminal so a racing success cannot publish
+        // between the authorization/status check and the handle's stop flag.
+        activeExecutions[id]?.requestStop() ?: false
     }
 
     fun requestCancelScoped(id: String, scope: SubAgentAccessScope): Boolean =
