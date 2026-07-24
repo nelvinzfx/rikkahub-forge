@@ -301,6 +301,17 @@ class SubAgentEngine(
             }
         }
         executionHandle.attachSupervisor(executionJob)
+        executionJob.invokeOnCompletion { cause ->
+            if (cause is CancellationException) {
+                // A coroutine cancelled before its body starts never executes the body finally.
+                // This fallback is idempotent with that finally and publishes execution
+                // completion only after startup cancellation has been terminalized.
+                appScope.launch(NonCancellable) {
+                    finalizeStartupCancellation(runId)
+                    registry.clearExecution(runId)
+                }
+            }
+        }
         if (cleaned.runInBackground) {
             // Return immediately; final status delivered via registry observation.
             DispatchResult.Ok(registry.get(runId) ?: initialRun)
