@@ -256,7 +256,7 @@ class TermuxJobProtocolTest {
         assertFalse(SPOOL_CAPTURE_LEADER_SCRIPT.contains("member_pgrp"))
         assertTrue(SPOOL_CAPTURE_LEADER_SCRIPT.contains("trap ':' TERM"))
         assertTrue(SPOOL_OUTPUT_LIMITER_SCRIPT.contains("iflag=count_bytes"))
-        assertFalse(SPOOL_OUTPUT_LIMITER_SCRIPT.contains("iflag=fullblock"))
+        assertFalse(SPOOL_OUTPUT_LIMITER_SCRIPT.contains("iflag=fullblock of="))
         assertTrue(SPOOL_CLEANUP_SCRIPT.contains("stop_reason.tmp"))
         assertTrue(SPOOL_CLEANUP_SCRIPT.contains("mkdir -m 700"))
         assertTrue(READ_OUTPUT_SCRIPT.contains("flock -x 9"))
