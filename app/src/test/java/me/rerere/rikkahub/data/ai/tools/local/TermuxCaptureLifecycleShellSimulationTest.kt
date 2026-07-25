@@ -67,7 +67,7 @@ class TermuxCaptureLifecycleShellSimulationTest {
             val process = launch(
                 home,
                 jobId,
-                """echo ${'$'}${'$'} > "${'$'}HOME/root.pid"; sleep 30 & echo ${'$'}! > "${'$'}HOME/child.pid"; wait"""
+                """echo ${'$'}${'$'} > "${'$'}HOME/root.pid"; sleep 30 & echo ${'$'}! > "${'$'}HOME/child.pid"; echo before-timeout; wait"""
             )
             val state = File(home, ".cache/rikkahub/jobs/$jobId/state")
             val childFile = File(home, "child.pid")
@@ -86,6 +86,7 @@ class TermuxCaptureLifecycleShellSimulationTest {
             val meta = File(home, ".cache/rikkahub/jobs/$jobId/meta").readText()
             assertTrue(meta.contains("status=timed_out"))
             assertTrue(meta.contains("exit_code=124"))
+            assertTrue(File(home, ".cache/rikkahub/jobs/$jobId/stdout").readText().contains("before-timeout"))
         }
     }
 

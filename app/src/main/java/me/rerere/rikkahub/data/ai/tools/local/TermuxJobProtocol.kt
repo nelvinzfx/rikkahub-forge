@@ -302,7 +302,14 @@ internal val SPOOL_OUTPUT_LIMITER_SCRIPT = """
     cleanup_limiter_files() {
         n=0
         while [ ! -f "${'$'}release_file" ] && [ ! -f "${'$'}stop_file" ] && [ "${'$'}n" -lt 500 ]; do sleep 0.02; n=${'$'}((n + 1)); done
-        rm -f -- "${'$'}output_file" "${'$'}fifo_file"
+        if [ -f "${'$'}release_file" ] && [ ! -L "${'$'}release_file" ]; then
+            # Successful root completion already snapshotted immutable output; the drain copy
+            # can now disappear when inherited writers finally close.
+            rm -f -- "${'$'}output_file" "${'$'}fifo_file"
+        else
+            # Timeout/cancel parent still needs this bounded live file for its partial snapshot.
+            rm -f -- "${'$'}fifo_file"
+        fi
     }
     trap cleanup_limiter_files EXIT
     # count_bytes enforces the exact cap while plain dd streams every partial pipe read.
