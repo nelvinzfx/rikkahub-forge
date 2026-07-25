@@ -207,8 +207,16 @@ internal val JOB_RETENTION_LOCKED_SCRIPT = """
         job_id=${'$'}{job_dir##*/}
         [[ ${'$'}job_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] || continue
         unsafe=false
-        for f in state meta stdout stderr stop_reason; do [ -L "${'$'}job_dir/${'$'}f" ] && unsafe=true; done
+        for f in state meta stdout stderr stdout.live stderr.live stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do [ -L "${'$'}job_dir/${'$'}f" ] && unsafe=true; done
         [ "${'$'}unsafe" = false ] || continue
+        # A terminal result can still have inherited writers being drained through bounded FIFOs.
+        # Keep it out of count-based retention while those readers are active; TTL remains the
+        # upper bound for abandoned descendants.
+        if { [ -p "${'$'}job_dir/stdout.pipe" ] || [ -p "${'$'}job_dir/stderr.pipe" ]; } &&
+            [ "${'$'}job_id" != "${'$'}protected_job" ]; then
+            drain_stamp=${'$'}(stat -c %Y -- "${'$'}job_dir" 2>/dev/null)
+            if [[ ${'$'}drain_stamp =~ ^(0|[1-9][0-9]*)${'$'} ]] && [ "${'$'}((now - drain_stamp))" -le "${'$'}ttl_seconds" ]; then continue; fi
+        fi
         live=false
         if [ -f "${'$'}job_dir/state" ]; then
             read -r mode pid root_start extra < "${'$'}job_dir/state"
@@ -249,14 +257,14 @@ internal val JOB_RETENTION_LOCKED_SCRIPT = """
 
 internal val SPOOL_CAPTURE_LEADER_SCRIPT = """
     set +e
-    state_file=${'$'}1; stop_file=${'$'}2; lock_file=${'$'}3
-    shift 3
+    state_file=${'$'}1; stop_file=${'$'}2; lock_file=${'$'}3; done_file=${'$'}4; release_file=${'$'}5
+    shift 5
     pid=${'$'}${'$'}
     info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
     pgrp=${'$'}{info%% *}; start=${'$'}{info#* }
     [[ ${'$'}pid =~ ^[1-9][0-9]*${'$'} ]] && [[ ${'$'}pgrp =~ ^[1-9][0-9]*${'$'} ]] && [[ ${'$'}start =~ ^[1-9][0-9]*${'$'} ]] || exit 125
     [ "${'$'}pgrp" = "${'$'}pid" ] || exit 125
-    [ ! -L "${'$'}state_file" ] && [ ! -e "${'$'}state_file" ] || exit 125
+    for f in "${'$'}state_file" "${'$'}done_file" "${'$'}release_file"; do [ ! -L "${'$'}f" ] && [ ! -e "${'$'}f" ] || exit 125; done
     tmp=${'$'}state_file.${'$'}pid
     printf 'group %s %s\n' "${'$'}pid" "${'$'}start" > "${'$'}tmp" && chmod 600 -- "${'$'}tmp" && mv -f -- "${'$'}tmp" "${'$'}state_file" || exit 125
     exec 8>>"${'$'}lock_file" || exit 125
@@ -269,28 +277,38 @@ internal val SPOOL_CAPTURE_LEADER_SCRIPT = """
     command_pid=${'$'}!
     wait "${'$'}command_pid"; exit_code=${'$'}?
     while kill -0 "${'$'}command_pid" 2>/dev/null; do wait "${'$'}command_pid"; exit_code=${'$'}?; done
-    while :; do
-        member_found=false
-        for stat in /proc/[0-9]*/stat; do
-            [ -r "${'$'}stat" ] || continue
-            member_pid=${'$'}{stat#/proc/}; member_pid=${'$'}{member_pid%/stat}
-            [ "${'$'}member_pid" = "${'$'}pid" ] && continue
-            member_pgrp=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3] }' "${'$'}stat" 2>/dev/null)
-            if [ "${'$'}member_pgrp" = "${'$'}pid" ]; then member_found=true; break; fi
-        done
-        [ "${'$'}member_found" = true ] || break
-        sleep 0.05
+    # Cleanup may arrive while the root command is exiting. Never publish completion after a
+    # correlated timeout/cancel tombstone, and never wait forever for a release that will not come.
+    if [ -f "${'$'}stop_file" ] && [ ! -L "${'$'}stop_file" ]; then exit 124; fi
+    done_tmp=${'$'}done_file.${'$'}pid
+    printf '%s\n' "${'$'}exit_code" > "${'$'}done_tmp" && chmod 600 -- "${'$'}done_tmp" && mv -f -- "${'$'}done_tmp" "${'$'}done_file" || exit 125
+    # Stay alive as the validated process-group authority until the parent has snapshotted
+    # root output. Timeout/cancellation can still signal the correlated group in this window.
+    while [ ! -f "${'$'}release_file" ]; do
+        if [ -f "${'$'}stop_file" ] && [ ! -L "${'$'}stop_file" ]; then exit 124; fi
+        sleep 0.02
     done
+    [ ! -L "${'$'}release_file" ] || exit 125
     exit "${'$'}exit_code"
 """.trimIndent()
 
 internal val SPOOL_OUTPUT_LIMITER_SCRIPT = """
     set +e
     state_file=${'$'}1; output_file=${'$'}2; cap=${'$'}3; limited_file=${'$'}4
+    release_file=${'$'}5; stop_file=${'$'}6; fifo_file=${'$'}7
     [[ ${'$'}cap =~ ^[1-9][0-9]*${'$'} ]] && [ "${'$'}cap" -le ${MAX_RETAINED_OUTPUT_STREAM_BYTES} ] || exit 125
     [ -f "${'$'}output_file" ] && [ ! -L "${'$'}output_file" ] && [ ! -L "${'$'}limited_file" ] || exit 125
-    block_size=65536; blocks=${'$'}(((cap + block_size) / block_size))
-    dd bs="${'$'}block_size" count="${'$'}blocks" iflag=fullblock of="${'$'}output_file" status=none || exit 125
+    [ -p "${'$'}fifo_file" ] && [ ! -L "${'$'}fifo_file" ] && [ ! -L "${'$'}release_file" ] && [ ! -L "${'$'}stop_file" ] || exit 125
+    cleanup_limiter_files() {
+        n=0
+        while [ ! -f "${'$'}release_file" ] && [ ! -f "${'$'}stop_file" ] && [ "${'$'}n" -lt 500 ]; do sleep 0.02; n=${'$'}((n + 1)); done
+        rm -f -- "${'$'}output_file" "${'$'}fifo_file"
+    }
+    trap cleanup_limiter_files EXIT
+    # count_bytes enforces the exact cap while plain dd streams every partial pipe read.
+    # Never use iflag=fullblock here: it delays short output until FIFO EOF and recreates
+    # the false-timeout defect when a descendant inherits the writer.
+    dd bs=65536 count="${'$'}((cap + 1))" iflag=count_bytes of="${'$'}output_file" status=none || exit 125
     captured=${'$'}(stat -c %s -- "${'$'}output_file") || exit 125
     if [ "${'$'}captured" -gt "${'$'}cap" ]; then
         truncate -s "${'$'}cap" -- "${'$'}output_file" || exit 125
@@ -301,8 +319,7 @@ internal val SPOOL_OUTPUT_LIMITER_SCRIPT = """
                 live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
                 live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
                 if [ "${'$'}live_pgrp" = "${'$'}pid" ] && [ "${'$'}live_start" = "${'$'}root_start" ]; then
-                    kill -TERM -- "-${'$'}pid" 2>/dev/null
-                    sleep 0.5
+                    kill -TERM -- "-${'$'}pid" 2>/dev/null; sleep 0.5
                     live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
                     live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
                     if [ "${'$'}live_pgrp" = "${'$'}pid" ] && [ "${'$'}live_start" = "${'$'}root_start" ]; then kill -KILL -- "-${'$'}pid" 2>/dev/null; fi
@@ -336,113 +353,99 @@ internal val SPOOL_CAPTURE_SCRIPT = """
     if [ -e "${'$'}job_dir" ]; then
         [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || exit 125
         [ -f "${'$'}job_dir/stop_reason" ] && [ ! -L "${'$'}job_dir/stop_reason" ] || exit 125
-        chmod 700 -- "${'$'}job_dir" || exit 125
-        chmod 600 -- "${'$'}job_dir/stop_reason" || exit 125
-        extras=${'$'}(find "${'$'}job_dir" -mindepth 1 -maxdepth 1 ! -name stop_reason -print -quit)
-        [ -z "${'$'}extras" ] || exit 125
-        read -r stop_reason extra < "${'$'}job_dir/stop_reason"
-        case "${'$'}stop_reason:${'$'}extra" in timed_out:|cancelled:) tombstone=true ;; *) exit 125 ;; esac
+        chmod 700 -- "${'$'}job_dir" || exit 125; chmod 600 -- "${'$'}job_dir/stop_reason" || exit 125
+        extras=${'$'}(find "${'$'}job_dir" -mindepth 1 -maxdepth 1 ! -name stop_reason -print -quit); [ -z "${'$'}extras" ] || exit 125
+        read -r stop_reason extra < "${'$'}job_dir/stop_reason"; case "${'$'}stop_reason:${'$'}extra" in timed_out:|cancelled:) tombstone=true ;; *) exit 125 ;; esac
     else
         mkdir -m 700 -- "${'$'}job_dir" || exit 125
     fi
-    for f in stdout stderr meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited; do [ -L "${'$'}job_dir/${'$'}f" ] && exit 125; done
-    : > "${'$'}job_dir/stdout" && : > "${'$'}job_dir/stderr" || exit 125
-    chmod 600 -- "${'$'}job_dir/stdout" "${'$'}job_dir/stderr" || exit 125
-    rm -f -- "${'$'}job_dir/stdout_limited" "${'$'}job_dir/stderr_limited"
+    for f in stdout stderr stdout.live stderr.live meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do [ -L "${'$'}job_dir/${'$'}f" ] && exit 125; done
+    : > "${'$'}job_dir/stdout" && : > "${'$'}job_dir/stderr" && : > "${'$'}job_dir/stdout.live" && : > "${'$'}job_dir/stderr.live" || exit 125
+    chmod 600 -- "${'$'}job_dir/stdout" "${'$'}job_dir/stderr" "${'$'}job_dir/stdout.live" "${'$'}job_dir/stderr.live" || exit 125
+    rm -f -- "${'$'}job_dir/stdout_limited" "${'$'}job_dir/stderr_limited" "${'$'}job_dir/root_done" "${'$'}job_dir/release"
     flock -u 9
-    stdout_file=${'$'}job_dir/stdout; stderr_file=${'$'}job_dir/stderr; state_file=${'$'}job_dir/state; stop_file=${'$'}job_dir/stop_reason
-    stdout_pipe=; stderr_pipe=; stdout_limiter=; stderr_limiter=; leader_pid=
+    stdout_file=${'$'}job_dir/stdout; stderr_file=${'$'}job_dir/stderr; stdout_live=${'$'}job_dir/stdout.live; stderr_live=${'$'}job_dir/stderr.live
+    state_file=${'$'}job_dir/state; stop_file=${'$'}job_dir/stop_reason; done_file=${'$'}job_dir/root_done; release_file=${'$'}job_dir/release
+    stdout_pipe=${'$'}job_dir/stdout.pipe; stderr_pipe=${'$'}job_dir/stderr.pipe
+    stdout_limiter=; stderr_limiter=; leader_pid=; runtime_handed_off=false
     cleanup_runtime() {
-        out_pid=${'$'}stdout_limiter; err_pid=${'$'}stderr_limiter
-        stdout_limiter=; stderr_limiter=
-        [ -z "${'$'}out_pid" ] || kill "${'$'}out_pid" 2>/dev/null
-        [ -z "${'$'}err_pid" ] || kill "${'$'}err_pid" 2>/dev/null
-        [ -z "${'$'}stdout_pipe" ] || rm -f -- "${'$'}stdout_pipe"
-        [ -z "${'$'}stderr_pipe" ] || rm -f -- "${'$'}stderr_pipe"
+        [ "${'$'}runtime_handed_off" = false ] || return
+        [ -z "${'$'}stdout_limiter" ] || kill "${'$'}stdout_limiter" 2>/dev/null
+        [ -z "${'$'}stderr_limiter" ] || kill "${'$'}stderr_limiter" 2>/dev/null
+        rm -f -- "${'$'}stdout_pipe" "${'$'}stderr_pipe" "${'$'}stdout_live" "${'$'}stderr_live"
     }
     trap cleanup_runtime EXIT
     trap 'trap - EXIT HUP INT TERM; cleanup_runtime; exit 130' HUP INT TERM
-    close_escaped_fifo_holders() {
-        for fifo in "${'$'}stdout_pipe" "${'$'}stderr_pipe"; do
-            for fd in /proc/[0-9]*/fd/*; do
-                [ -L "${'$'}fd" ] || continue
-                holder=${'$'}{fd#/proc/}; holder=${'$'}{holder%%/*}
-                holder_fd=${'$'}{fd##*/}
-                case "${'$'}holder" in "${'$'}${'$'}"|"${'$'}leader_pid"|"${'$'}stdout_limiter"|"${'$'}stderr_limiter") continue ;; esac
-                [[ ${'$'}holder =~ ^[1-9][0-9]*${'$'} ]] || continue
-                holder_start=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[20] }' "/proc/${'$'}holder/stat" 2>/dev/null)
-                [[ ${'$'}holder_start =~ ^[1-9][0-9]*${'$'} ]] || continue
-                fd_flags=${'$'}(awk '/^flags:/{print ${'$'}2}' "/proc/${'$'}holder/fdinfo/${'$'}holder_fd" 2>/dev/null)
-                [[ ${'$'}fd_flags =~ ^[0-7]+${'$'} ]] || continue
-                [ "${'$'}((8#${'$'}fd_flags & 3))" -ne 0 ] || continue
-                [ "${'$'}(readlink -- "${'$'}fd" 2>/dev/null)" = "${'$'}fifo" ] || continue
-                current_start=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[20] }' "/proc/${'$'}holder/stat" 2>/dev/null)
-                [ "${'$'}current_start" = "${'$'}holder_start" ] || continue
-                kill -TERM "${'$'}holder" 2>/dev/null
-                sleep 0.05
-                current_start=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[20] }' "/proc/${'$'}holder/stat" 2>/dev/null)
-                if [ "${'$'}current_start" = "${'$'}holder_start" ]; then kill -KILL "${'$'}holder" 2>/dev/null; fi
-            done
-        done
+    snapshot_output() {
+        head -c ${MAX_RETAINED_OUTPUT_STREAM_BYTES} -- "${'$'}stdout_live" > "${'$'}stdout_file" || return 1
+        head -c ${MAX_RETAINED_OUTPUT_STREAM_BYTES} -- "${'$'}stderr_live" > "${'$'}stderr_file" || return 1
+        chmod 600 -- "${'$'}stdout_file" "${'$'}stderr_file" || return 1
     }
-    exit_code=0
+    drain_root_output() {
+        last_out=-1; last_err=-1; stable=0; n=0
+        while [ "${'$'}n" -lt 40 ]; do
+            out_size=${'$'}(stat -c %s -- "${'$'}stdout_live") || return 1; err_size=${'$'}(stat -c %s -- "${'$'}stderr_live") || return 1
+            if [ "${'$'}out_size" = "${'$'}last_out" ] && [ "${'$'}err_size" = "${'$'}last_err" ]; then stable=${'$'}((stable + 1)); else stable=0; fi
+            [ "${'$'}stable" -ge 3 ] && return 0
+            last_out=${'$'}out_size; last_err=${'$'}err_size; n=${'$'}((n + 1)); sleep 0.05
+        done
+        return 0
+    }
+    exit_code=0; root_completed=false
     if [ "${'$'}tombstone" = true ]; then
         exit_code=124
     else
-        stdout_pipe=${'$'}job_dir/stdout.pipe; stderr_pipe=${'$'}job_dir/stderr.pipe
-        mkfifo -- "${'$'}stdout_pipe" "${'$'}stderr_pipe" || exit 125
-        chmod 600 -- "${'$'}stdout_pipe" "${'$'}stderr_pipe" || exit 125
-        bash -c "${'$'}limiter" rikka-output-limit "${'$'}state_file" "${'$'}stdout_file" ${MAX_RETAINED_OUTPUT_STREAM_BYTES} "${'$'}job_dir/stdout_limited" < "${'$'}stdout_pipe" & stdout_limiter=${'$'}!
-        bash -c "${'$'}limiter" rikka-output-limit "${'$'}state_file" "${'$'}stderr_file" ${MAX_RETAINED_OUTPUT_STREAM_BYTES} "${'$'}job_dir/stderr_limited" < "${'$'}stderr_pipe" & stderr_limiter=${'$'}!
+        mkfifo -- "${'$'}stdout_pipe" "${'$'}stderr_pipe" || exit 125; chmod 600 -- "${'$'}stdout_pipe" "${'$'}stderr_pipe" || exit 125
+        bash -c "${'$'}limiter" rikka-output-limit "${'$'}state_file" "${'$'}stdout_live" ${MAX_RETAINED_OUTPUT_STREAM_BYTES} "${'$'}job_dir/stdout_limited" "${'$'}release_file" "${'$'}stop_file" "${'$'}stdout_pipe" < "${'$'}stdout_pipe" >/dev/null 2>&1 & stdout_limiter=${'$'}!
+        bash -c "${'$'}limiter" rikka-output-limit "${'$'}state_file" "${'$'}stderr_live" ${MAX_RETAINED_OUTPUT_STREAM_BYTES} "${'$'}job_dir/stderr_limited" "${'$'}release_file" "${'$'}stop_file" "${'$'}stderr_pipe" < "${'$'}stderr_pipe" >/dev/null 2>&1 & stderr_limiter=${'$'}!
         if [ "${'$'}managed" = 1 ]; then
-            command -v setsid >/dev/null 2>&1 || {
-                : > "${'$'}stdout_pipe" & stdout_closer=${'$'}!
-                printf '%s\n' 'managed capture requires setsid (install util-linux)' > "${'$'}stderr_pipe"
-                wait "${'$'}stdout_closer" 2>/dev/null
-                exit_code=125
-            }
+            command -v setsid >/dev/null 2>&1 || { : > "${'$'}stdout_pipe" & closer=${'$'}!; printf '%s\n' 'managed capture requires setsid (install util-linux)' > "${'$'}stderr_pipe"; wait "${'$'}closer"; exit_code=125; }
             if [ "${'$'}exit_code" = 0 ]; then
-                setsid bash -c "${'$'}leader" rikka-spool-leader "${'$'}state_file" "${'$'}stop_file" "${'$'}lock_file" "${'$'}@" > "${'$'}stdout_pipe" 2> "${'$'}stderr_pipe" &
+                setsid bash -c "${'$'}leader" rikka-spool-leader "${'$'}state_file" "${'$'}stop_file" "${'$'}lock_file" "${'$'}done_file" "${'$'}release_file" "${'$'}@" > "${'$'}stdout_pipe" 2> "${'$'}stderr_pipe" &
                 leader_pid=${'$'}!
-                wait "${'$'}leader_pid"; exit_code=${'$'}?
-                leader_pid=
-                close_escaped_fifo_holders
+                while [ ! -f "${'$'}done_file" ] && kill -0 "${'$'}leader_pid" 2>/dev/null; do sleep 0.02; done
+                if [ -f "${'$'}done_file" ] && [ ! -L "${'$'}done_file" ] && [ ! -e "${'$'}stop_file" ]; then
+                    read -r exit_code extra < "${'$'}done_file"
+                    if [ -z "${'$'}extra" ] && [[ ${'$'}exit_code =~ ^-?(0|[1-9][0-9]*)${'$'} ]]; then drain_root_output && snapshot_output && root_completed=true; else exit_code=125; fi
+                fi
+                if [ "${'$'}root_completed" = true ]; then
+                    release_tmp=${'$'}release_file.${'$'}${'$'}; : > "${'$'}release_tmp" && chmod 600 -- "${'$'}release_tmp" && mv -f -- "${'$'}release_tmp" "${'$'}release_file" || exit 125
+                    wait "${'$'}leader_pid" 2>/dev/null; leader_pid=; runtime_handed_off=true
+                else
+                    wait "${'$'}leader_pid"; leader_rc=${'$'}?; leader_pid=; [ -e "${'$'}stop_file" ] || exit_code=${'$'}leader_rc
+                fi
             fi
         else
-            # Detached ownership is transferred at dispatch. Timeout cleanup is intentionally not
-            # requested for managed=0; the wrapped launch must still stay within spool quotas.
             "${'$'}@" > "${'$'}stdout_pipe" 2> "${'$'}stderr_pipe"; exit_code=${'$'}?
         fi
-        wait "${'$'}stdout_limiter"; stdout_limiter_rc=${'$'}?; stdout_limiter=
-        wait "${'$'}stderr_limiter"; stderr_limiter_rc=${'$'}?; stderr_limiter=
-        [ "${'$'}stdout_limiter_rc" -eq 0 ] && [ "${'$'}stderr_limiter_rc" -eq 0 ] || exit_code=125
-        rm -f -- "${'$'}stdout_pipe" "${'$'}stderr_pipe"; stdout_pipe=; stderr_pipe=
+        if [ "${'$'}root_completed" != true ]; then
+            wait "${'$'}stdout_limiter"; out_rc=${'$'}?; stdout_limiter=; wait "${'$'}stderr_limiter"; err_rc=${'$'}?; stderr_limiter=
+            [ "${'$'}out_rc" -eq 0 ] && [ "${'$'}err_rc" -eq 0 ] || exit_code=125; snapshot_output || exit_code=125
+            rm -f -- "${'$'}stdout_pipe" "${'$'}stderr_pipe" "${'$'}stdout_live" "${'$'}stderr_live"
+        fi
     fi
     flock -x 9 || exit 125
     [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || exit 125
     for f in stdout stderr; do [ -f "${'$'}job_dir/${'$'}f" ] && [ ! -L "${'$'}job_dir/${'$'}f" ] || exit 125; done
-    status=completed
-    stdout_output_limited=0; stderr_output_limited=0
+    status=completed; stdout_output_limited=0; stderr_output_limited=0
     [ -f "${'$'}job_dir/stdout_limited" ] && [ ! -L "${'$'}job_dir/stdout_limited" ] && stdout_output_limited=1
     [ -f "${'$'}job_dir/stderr_limited" ] && [ ! -L "${'$'}job_dir/stderr_limited" ] && stderr_output_limited=1
     if [ -e "${'$'}stop_file" ]; then
-        [ -f "${'$'}stop_file" ] && [ ! -L "${'$'}stop_file" ] || exit 125
-        read -r status extra < "${'$'}stop_file"; case "${'$'}status:${'$'}extra" in timed_out:|cancelled:) ;; *) exit 125 ;; esac
-    elif [ "${'$'}stdout_output_limited" = 1 ] || [ "${'$'}stderr_output_limited" = 1 ]; then
-        status=output_limited
-    fi
+        [ -f "${'$'}stop_file" ] && [ ! -L "${'$'}stop_file" ] || exit 125; read -r status extra < "${'$'}stop_file"
+        case "${'$'}status:${'$'}extra" in timed_out:) exit_code=124 ;; cancelled:) exit_code=130 ;; *) exit 125 ;; esac
+    elif [ "${'$'}stdout_output_limited" = 1 ] || [ "${'$'}stderr_output_limited" = 1 ]; then status=output_limited; fi
     completed_at=${'$'}(date +%s); stdout_total=${'$'}(stat -c %s -- "${'$'}stdout_file") || exit 125; stderr_total=${'$'}(stat -c %s -- "${'$'}stderr_file") || exit 125
     [ "${'$'}stdout_total" -le ${MAX_RETAINED_OUTPUT_STREAM_BYTES} ] && [ "${'$'}stderr_total" -le ${MAX_RETAINED_OUTPUT_STREAM_BYTES} ] || exit 125
     stdout_head_bytes=${'$'}stdout_total; [ "${'$'}stdout_head_bytes" -gt "${'$'}stdout_limit" ] && stdout_head_bytes=${'$'}stdout_limit
     stderr_head_bytes=${'$'}stderr_total; [ "${'$'}stderr_head_bytes" -gt "${'$'}stderr_limit" ] && stderr_head_bytes=${'$'}stderr_limit
     meta_tmp=${'$'}job_dir/meta.tmp.${'$'}${'$'}
     printf 'version=2\njob_id=%s\nstatus=%s\nexit_code=%s\ncompleted_at=%s\nstdout_bytes=%s\nstderr_bytes=%s\nstdout_output_limited=%s\nstderr_output_limited=%s\n' "${'$'}job_id" "${'$'}status" "${'$'}exit_code" "${'$'}completed_at" "${'$'}stdout_total" "${'$'}stderr_total" "${'$'}stdout_output_limited" "${'$'}stderr_output_limited" > "${'$'}meta_tmp" && chmod 600 -- "${'$'}meta_tmp" && mv -f -- "${'$'}meta_tmp" "${'$'}job_dir/meta" || exit 125
-    rm -f -- "${'$'}state_file"
+    # Keep the release marker until retention. A limiter can reach its EXIT trap after metadata
+    # publication; retaining this immutable marker prevents a missed wake and 10-second cleanup lag.
+    rm -f -- "${'$'}state_file" "${'$'}done_file"
     bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1
-    stdout_b64=${'$'}(head -c "${'$'}stdout_head_bytes" -- "${'$'}stdout_file" | base64 -w 0) || exit 125
-    stderr_b64=${'$'}(head -c "${'$'}stderr_head_bytes" -- "${'$'}stderr_file" | base64 -w 0) || exit 125
-    flock -u 9
-    trap - EXIT HUP INT TERM
+    stdout_b64=${'$'}(head -c "${'$'}stdout_head_bytes" -- "${'$'}stdout_file" | base64 -w 0) || exit 125; stderr_b64=${'$'}(head -c "${'$'}stderr_head_bytes" -- "${'$'}stderr_file" | base64 -w 0) || exit 125
+    flock -u 9; trap - EXIT HUP INT TERM
     printf 'RIKKAHUB_JOB_V2\njob_id=%s\nstatus=%s\nexit_code=%s\nstdout_total_bytes=%s\nstderr_total_bytes=%s\nstdout_head_bytes=%s\nstderr_head_bytes=%s\nstdout_output_limited=%s\nstderr_output_limited=%s\nstdout_head_b64=%s\nstderr_head_b64=%s\n' "${'$'}job_id" "${'$'}status" "${'$'}exit_code" "${'$'}stdout_total" "${'$'}stderr_total" "${'$'}stdout_head_bytes" "${'$'}stderr_head_bytes" "${'$'}stdout_output_limited" "${'$'}stderr_output_limited" "${'$'}stdout_b64" "${'$'}stderr_b64"
     exit "${'$'}exit_code"
 """.trimIndent()
@@ -460,8 +463,8 @@ internal val SPOOL_CLEANUP_SCRIPT = """
     exec 9>>"${'$'}lock_file" || exit 0; chmod 600 -- "${'$'}lock_file"; flock -x 9 || exit 0
     if [ -e "${'$'}job_dir" ]; then [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || exit 0; else mkdir -m 700 -- "${'$'}job_dir" || exit 0; fi
     chmod 700 -- "${'$'}job_dir" || exit 0
-    for f in stdout stderr meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited; do [ -L "${'$'}job_dir/${'$'}f" ] && exit 0; done
-    unknown=${'$'}(find "${'$'}job_dir" -mindepth 1 -maxdepth 1 ! -name stdout ! -name stderr ! -name meta ! -name state ! -name stop_reason ! -name stdout.pipe ! -name stderr.pipe ! -name stdout_limited ! -name stderr_limited -print -quit)
+    for f in stdout stderr stdout.live stderr.live meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do [ -L "${'$'}job_dir/${'$'}f" ] && exit 0; done
+    unknown=${'$'}(find "${'$'}job_dir" -mindepth 1 -maxdepth 1 ! -name stdout ! -name stderr ! -name stdout.live ! -name stderr.live ! -name meta ! -name state ! -name stop_reason ! -name stdout.pipe ! -name stderr.pipe ! -name stdout_limited ! -name stderr_limited ! -name root_done ! -name release -print -quit)
     [ -z "${'$'}unknown" ] || exit 0
     if [ ! -f "${'$'}job_dir/meta" ]; then
         stop_tmp=${'$'}job_dir/stop_reason.tmp.${'$'}${'$'}
@@ -503,7 +506,7 @@ internal val READ_OUTPUT_SCRIPT = """
     exec 9>>"${'$'}lock_file" || { printf 'RIKKAHUB_READ_V1\nerror=output_unreadable\n'; exit 0; }; flock -x 9 || exit 0
     bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1
     [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || { printf 'RIKKAHUB_READ_V1\nerror=job_not_found\n'; exit 0; }
-    for f in stdout stderr meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited; do [ -L "${'$'}job_dir/${'$'}f" ] && { printf 'RIKKAHUB_READ_V1\nerror=corrupt_job_state\n'; exit 0; }; done
+    for f in stdout stderr stdout.live stderr.live meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do [ -L "${'$'}job_dir/${'$'}f" ] && { printf 'RIKKAHUB_READ_V1\nerror=corrupt_job_state\n'; exit 0; }; done
     if [ -f "${'$'}job_dir/meta" ]; then
         [ ! -L "${'$'}job_dir/meta" ] || { printf 'RIKKAHUB_READ_V1\nerror=corrupt_job_state\n'; exit 0; }
         meta_version=${'$'}(sed -n 's/^version=//p' "${'$'}job_dir/meta"); meta_job=${'$'}(sed -n 's/^job_id=//p' "${'$'}job_dir/meta")

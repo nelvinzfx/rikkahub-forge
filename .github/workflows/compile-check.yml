@@ -50,6 +50,7 @@ jobs:
             --tests 'me.rerere.rikkahub.data.preferences.TermuxRuntimeWiringTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxSessionToolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxJobProtocolTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxCaptureLifecycleShellSimulationTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxFileProtocolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxFileShellSimulationTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxTransferProtocolTest' \

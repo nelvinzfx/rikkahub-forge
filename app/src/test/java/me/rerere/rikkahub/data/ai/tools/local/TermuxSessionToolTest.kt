@@ -293,6 +293,8 @@ class TermuxSessionToolTest {
         assertEquals(JOB_RETENTION_LOCKED_SCRIPT, launch.arguments[8])
         assertEquals(SPOOL_CAPTURE_LEADER_SCRIPT, launch.arguments[9])
         assertEquals(SPOOL_OUTPUT_LIMITER_SCRIPT, launch.arguments[10])
+        assertTrue(SPOOL_CAPTURE_LEADER_SCRIPT.contains("root_done"))
+        assertTrue(SPOOL_OUTPUT_LIMITER_SCRIPT.contains("iflag=count_bytes"))
         assertEquals("0", launch.arguments[11])
         assertEquals("/usr/bin/bash", launch.arguments[12])
         assertEquals(listOf("-c", "nohup sh -c 'server' >/dev/null 2>&1 < /dev/null & echo ${'$'}!"), launch.arguments.drop(13))
