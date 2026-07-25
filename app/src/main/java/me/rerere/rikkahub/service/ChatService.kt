@@ -172,6 +172,28 @@ internal fun shouldAutoCompactBeforeGeneration(
     reserveTokens: Int,
 ): Boolean = answer && enabled && usedTokens > contextWindow.toLong() - reserveTokens
 
+/** Gate a replacement generation before it can read or mutate conversation state. */
+internal suspend fun awaitGenerationEntryReady(
+    previousJob: Job?,
+    awaitParentStop: suspend () -> Unit,
+) {
+    previousJob?.join()
+    awaitParentStop()
+}
+
+/** Remove only the epoch still current under [lock], then release its associated fence. */
+internal fun <K, V> releaseEpochIfCurrent(
+    lock: Any,
+    epochs: MutableMap<K, V>,
+    key: K,
+    expected: V,
+    releaseFence: () -> Unit,
+): Boolean = synchronized(lock) {
+    if (!epochs.remove(key, expected)) return@synchronized false
+    releaseFence()
+    true
+}
+
 /**
  * Apply [conversation] to [session]'s state only while the session is NOT generating.
  * Uses a compareAndSet loop so the isGenerating check and the write are observed
@@ -644,8 +666,9 @@ class ChatService(
         // mutation begins. A losing background wake is cancelled without ever running.
         val job = appScope.launch(start = CoroutineStart.LAZY) {
             try {
-                runCatching { previousJob?.join() }
-                awaitParentStopEpochs(conversationId)
+                awaitGenerationEntryReady(previousJob) {
+                    awaitParentStopEpochs(conversationId)
+                }
                 // sendMessage is also called by background entry points such as sub-agent
                 // completion callbacks. The UI may have released and evicted this session
                 // while the persisted conversation still contains the full transcript.
@@ -867,10 +890,16 @@ class ChatService(
         regenerateAssistantMsg: Boolean = true
     ) {
         val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val previousJob = session.getJob()
+        previousJob?.cancel()
 
-        val job = appScope.launch {
+        // Regeneration is a full generation entry too. Do not inherit a stop fence or read
+        // state that the generation being replaced can still mutate.
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
             try {
+                awaitGenerationEntryReady(previousJob) {
+                    awaitParentStopEpochs(conversationId)
+                }
                 val conversation = session.state.value
 
                 // Locate the message's node up front. indexOf returns -1 when the node is no
@@ -915,6 +944,7 @@ class ChatService(
         }
 
         session.setJob(job)
+        job.start()
     }
 
     // ---- 处理工具调用审批 ----
@@ -2355,8 +2385,8 @@ class ChatService(
 
     /**
      * Atomically fence a parent orchestration, request every owned worker to stop, and
-     * clean the parent generation in the background. New turns await the cleanup gate in
-     * [sendMessageOwned], so this returns quickly without allowing old and new epochs to race.
+     * clean the parent generation in the background. The successful epoch self-releases its
+     * fence; every replacement-generation entry also awaits the gate defensively.
      */
     fun requestStopGenerationAndSubAgents(conversationId: Uuid): Int {
         val ownerId = conversationId.toString()
@@ -2395,6 +2425,7 @@ class ChatService(
         epoch: me.rerere.rikkahub.subagent.SubAgentParentStopEpoch,
     ) {
         appScope.launch(NonCancellable) {
+            var closedSuccessfully = false
             try {
                 while (true) {
                     val snapshot = epoch.snapshot()
@@ -2411,13 +2442,33 @@ class ChatService(
                         delay(1_000L)
                         continue
                     }
-                    if (epoch.tryClose(snapshot.revision)) break
+                    if (epoch.tryClose(snapshot.revision)) {
+                        closedSuccessfully = true
+                        break
+                    }
                 }
             } finally {
-                synchronized(parentStopEpochLock) {
-                    parentStopEpochs.remove(conversationId, epoch)
+                if (closedSuccessfully) {
+                    // Self-release after verified quiescence. Conditional removal under the
+                    // same lock prevents an old epoch from clearing a successor's fence.
+                    releaseEpochIfCurrent(
+                        lock = parentStopEpochLock,
+                        epochs = parentStopEpochs,
+                        key = conversationId,
+                        expected = epoch,
+                    ) {
+                        me.rerere.rikkahub.subagent.SubAgentRegistry
+                            .clearOwnerStopFenceViaGlobalInstance(ownerId)
+                    }
+                    epoch.complete()
+                } else {
+                    synchronized(parentStopEpochLock) {
+                        parentStopEpochs.remove(conversationId, epoch)
+                    }
+                    // Never publish an abnormal cleanup as quiescent. Awaiters fail closed
+                    // and the owner fence remains set until a verified stop epoch succeeds.
+                    epoch.abort()
                 }
-                epoch.complete()
             }
         }
     }

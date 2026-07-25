@@ -1,5 +1,12 @@
 package me.rerere.rikkahub.service
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+
 import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.CustomBody
@@ -46,6 +53,48 @@ class ChatServiceTest {
         assertEquals(410_000, resolvedContextWindow(Model(contextLength = 200_000), configured))
         assertEquals(200_000, resolvedContextWindow(Model(contextLength = 200_000), automatic))
         assertEquals(200_000, resolvedContextWindow(Model(contextLength = null), automatic))
+    }
+
+    @Test
+    fun `regeneration entry waits for prior job and parent stop gate`() = runBlocking {
+        coroutineScope {
+            val previous = Job()
+            val stopGate = CompletableDeferred<Unit>()
+            var entered = false
+
+            val waiter = async {
+                awaitGenerationEntryReady(previous) { stopGate.await() }
+                entered = true
+            }
+            yield()
+            assertFalse(entered)
+
+            previous.complete()
+            yield()
+            assertFalse(entered)
+
+            stopGate.complete(Unit)
+            waiter.await()
+            assertTrue(entered)
+        }
+    }
+
+    @Test
+    fun `only current stop epoch may release its fence`() {
+        val lock = Any()
+        val oldEpoch = Any()
+        val successorEpoch = Any()
+        val epochs = mutableMapOf("chat" to oldEpoch)
+        var releases = 0
+
+        assertTrue(releaseEpochIfCurrent(lock, epochs, "chat", oldEpoch) { releases++ })
+        assertEquals(1, releases)
+        assertFalse(epochs.containsKey("chat"))
+
+        epochs["chat"] = successorEpoch
+        assertFalse(releaseEpochIfCurrent(lock, epochs, "chat", oldEpoch) { releases++ })
+        assertEquals(1, releases)
+        assertTrue(epochs["chat"] === successorEpoch)
     }
 
     @Test

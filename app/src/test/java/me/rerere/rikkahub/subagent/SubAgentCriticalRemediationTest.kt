@@ -2,6 +2,7 @@ package me.rerere.rikkahub.subagent
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import me.rerere.rikkahub.service.releaseEpochIfCurrent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -209,6 +210,39 @@ class SubAgentCriticalRemediationTest {
         assertFalse(registry.addPending(run("late"), SubAgentExecutionHandle()))
         registry.clearOwnerStopFence("chat-a")
         assertTrue(registry.addPending(run("next"), SubAgentExecutionHandle()))
+    }
+
+    @Test
+    fun `completed current stop epoch admits regenerated dispatch without a new message`() {
+        val registry = SubAgentRegistry()
+        assertEquals(0, registry.cancelAllForParent("chat-a"))
+        assertTrue(registry.isOwnerStopping("chat-a"))
+
+        val lock = Any()
+        val epoch = Any()
+        val epochs = mutableMapOf("chat-a" to epoch)
+        assertTrue(releaseEpochIfCurrent(lock, epochs, "chat-a", epoch) {
+            registry.clearOwnerStopFence("chat-a")
+        })
+
+        assertFalse(registry.isOwnerStopping("chat-a"))
+        assertTrue(registry.addPending(run("regenerated"), SubAgentExecutionHandle()))
+    }
+
+    @Test
+    fun `old stop epoch cannot clear successor fence`() {
+        val registry = SubAgentRegistry()
+        registry.cancelAllForParent("chat-a")
+        val lock = Any()
+        val oldEpoch = Any()
+        val successorEpoch = Any()
+        val epochs = mutableMapOf("chat-a" to successorEpoch)
+
+        assertFalse(releaseEpochIfCurrent(lock, epochs, "chat-a", oldEpoch) {
+            registry.clearOwnerStopFence("chat-a")
+        })
+        assertTrue(registry.isOwnerStopping("chat-a"))
+        assertFalse(registry.addPending(run("blocked"), SubAgentExecutionHandle()))
     }
 
     @Test

@@ -125,7 +125,8 @@ class SubAgentEngine(
         val childOwnerChatId = sourceRun?.ownerChatId ?: callerRun?.ownerChatId ?: parentChatId
         if (registry.isOwnerStopping(childOwnerChatId)) {
             return@withContext DispatchResult.Reject(
-                "parent_stopping", "the parent conversation is stopping; retry on the next turn"
+                "parent_stopping",
+                "the parent conversation is still stopping; retrying within this generation will not succeed"
             )
         }
         val parentUuid = runCatching { Uuid.parse(parentAssistantId) }.getOrNull()

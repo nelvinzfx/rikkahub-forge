@@ -70,7 +70,7 @@ class SubAgentRegistry {
     private val executionCompletions = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     private val dispatchTimestamps = ConcurrentHashMap<String, MutableList<Long>>()
     // Owner stop fence: once a parent stop begins, no new worker owned by that chat may
-    // enter until ChatService starts the next generation epoch and clears the fence.
+    // enter until ChatService proves full parent+worker quiescence and closes that stop epoch.
     private val stoppingOwners = ConcurrentHashMap.newKeySet<String>()
 
     fun addPending(run: SubAgentRun, handle: SubAgentExecutionHandle? = null): Boolean = synchronized(lock) {
