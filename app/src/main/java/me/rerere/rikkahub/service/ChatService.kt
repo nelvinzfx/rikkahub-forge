@@ -1450,7 +1450,13 @@ class ChatService(
                             p is UIMessagePart.Tool &&
                                 p.executionStartedAt != null &&
                                 p.output.isEmpty() &&
-                                p.approvalState is ToolApprovalState.Approved
+                                // Auto-approved tools (YOLO / headless / sub-agent) keep the
+                                // Auto state (GenerationHandler: "leave as Auto"), so an
+                                // Approved-only check never fires for exactly the flows that
+                                // run unattended — a process kill mid-execute would then
+                                // silently re-run the tool on replay.
+                                (p.approvalState is ToolApprovalState.Approved ||
+                                    p.approvalState is ToolApprovalState.Auto)
                         } ?: false
                         if (needsImmediatePersist) {
                             saveConversation(conversationId, updatedConversation)
@@ -1472,9 +1478,14 @@ class ChatService(
             // path) survive a process restart. Without this, the failure path only
             // updates memory and the persisted DB row keeps the stale Pending state
             // forever — replay would re-run the loop against unrecoverable shape.
+            // NonCancellable: on user cancel this block runs inside the already-cancelled
+            // generation coroutine — without it the first suspending DAO call rethrows
+            // CancellationException and the partial turn is silently never persisted.
             runCatching {
-                val final = getConversationFlow(conversationId).value
-                saveConversation(conversationId, final)
+                withContext(NonCancellable) {
+                    val final = getConversationFlow(conversationId).value
+                    saveConversation(conversationId, final)
+                }
             }.onFailure { saveErr ->
                 Log.w(TAG, "handleMessageComplete: failure-path save failed", saveErr)
             }
@@ -2499,22 +2510,25 @@ class ChatService(
             if (!allowQueuedSuccessor && sessions[conversationId]?.isGenerating == true) return@withLock
             ensureHydrated(conversationId, allowWhileGenerating = allowQueuedSuccessor)
             val currentConversation = getConversationFlow(conversationId).value
-            var changed = false
             val updatedNodes = currentConversation.messageNodes.map { node ->
                 node.copy(
                     messages = node.messages.map { msg ->
-                        val updated = msg.finishPendingTools(::cancelToolByUser)
-                        if (updated !== msg) changed = true
-                        updated
+                        msg.finishPendingTools(::cancelToolByUser)
                     }
                 )
             }
-            if (changed) {
-                saveConversation(
-                    conversationId,
-                    currentConversation.copy(messageNodes = updatedNodes),
-                )
-            }
+            // Always persist after a stop, not only when a tool needed flipping. Streaming
+            // chunks live in memory only (the hot path is DB-free by design), so the old
+            // `changed` gate meant a cancel landing while the model was streaming text — or
+            // between tool steps with every tool already executed — wrote NOTHING: the DB
+            // kept only the user message and the partial assistant turn vanished on the next
+            // rehydrate (sub-agent harvests read the DB and saw nothing either). This is the
+            // one cancellation-safe persistence point (NonCancellable + post-quiescence), so
+            // it must be unconditional.
+            saveConversation(
+                conversationId,
+                currentConversation.copy(messageNodes = updatedNodes),
+            )
         }
     }
 

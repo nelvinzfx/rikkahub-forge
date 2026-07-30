@@ -469,13 +469,15 @@ sealed class UIMessagePart {
         val canResumeExecution: Boolean get() = !isExecuted && approvalState.canResumeToolExecution()
 
         /**
-         * True iff a previous execution attempt was interrupted: approvalState is Approved,
-         * output is empty, and executionStartedAt is set. The resume path uses this to
-         * synthesise a "we don't know whether the side effect happened" Denied envelope
-         * instead of re-running.
+         * True iff a previous execution attempt was interrupted: approvalState is Approved
+         * or Auto (auto-approved tools keep Auto through execution — YOLO / headless /
+         * sub-agent flows), output is empty, and executionStartedAt is set. The resume path
+         * uses this to synthesise a "we don't know whether the side effect happened" Denied
+         * envelope instead of re-running.
          */
         val isInterruptedAttempt: Boolean
-            get() = approvalState is ToolApprovalState.Approved &&
+            get() = (approvalState is ToolApprovalState.Approved ||
+                approvalState is ToolApprovalState.Auto) &&
                 output.isEmpty() && executionStartedAt != null
 
         /** Parse input string as JsonElement */
