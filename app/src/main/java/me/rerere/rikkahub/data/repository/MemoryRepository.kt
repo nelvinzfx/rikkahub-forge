@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.repository
 
+import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -19,6 +20,41 @@ class MemoryRepository(
         const val MODE_CORE = "core"
         const val MODE_BANK = "bank"
         const val DEFAULT_CORE_TOKEN_BUDGET = 3000
+
+        /** Maximum number of tags stored per memory record. */
+        const val MAX_TAGS = 5
+
+        /**
+         * Maximum length of a single tag (in characters) after trimming.
+         * Tags are short labels, not sentences; anything longer is discarded.
+         * Namespaced tags such as `device:lenovo-ideapad-300` (27 chars)
+         * and `project:conversation-recall` (27 chars) fit comfortably.
+         */
+        const val MAX_TAG_LENGTH = 50
+
+        /**
+         * Pure budgeting function: greedily selects rows whose per-entry cost
+         * (content + title + tags lengths + 48-char overhead) fits within the
+         * token budget (converted to characters at 4 chars/token). Oversized
+         * entries are skipped but later smaller entries may still be included.
+         * Input ordering is preserved in the output.
+         */
+        internal fun budgetCoreMemories(
+            rows: List<MemoryEntity>,
+            tokenBudget: Int,
+        ): List<MemoryEntity> {
+            var remainingChars = tokenBudget.coerceAtLeast(0) * 4
+            if (remainingChars == 0) return emptyList()
+            return buildList {
+                rows.forEach { row ->
+                    val cost = row.content.length + row.title.length + row.tags.length + 48
+                    if (cost <= remainingChars) {
+                        add(row)
+                        remainingChars -= cost
+                    }
+                }
+            }
+        }
     }
 
     private val indexMutex = Mutex()
@@ -36,19 +72,8 @@ class MemoryRepository(
     suspend fun getGlobalMemories(): List<AssistantMemory> =
         getMemoriesOfAssistant(GLOBAL_MEMORY_ID)
 
-    suspend fun getCoreMemories(assistantId: String, tokenBudget: Int = DEFAULT_CORE_TOKEN_BUDGET): List<AssistantMemory> {
-        var remainingChars = tokenBudget.coerceAtLeast(0) * 4
-        if (remainingChars == 0) return emptyList()
-        return buildList {
-            memoryDAO.getCoreMemoriesOfAssistant(assistantId).forEach { row ->
-                val cost = row.content.length + row.title.length + row.tags.length + 48
-                if (cost <= remainingChars) {
-                    add(toModel(row))
-                    remainingChars -= cost
-                }
-            }
-        }
-    }
+    suspend fun getCoreMemories(assistantId: String, tokenBudget: Int = DEFAULT_CORE_TOKEN_BUDGET): List<AssistantMemory> =
+        budgetCoreMemories(memoryDAO.getCoreMemoriesOfAssistant(assistantId), tokenBudget).map(::toModel)
 
     suspend fun getMemory(assistantId: String, id: Int): AssistantMemory? {
         val row = memoryDAO.getMemoryById(id)?.takeIf { it.assistantId == assistantId } ?: return null
@@ -128,6 +153,39 @@ class MemoryRepository(
     )
 
     private fun normalizeMode(mode: String) = if (mode.equals(MODE_BANK, true)) MODE_BANK else MODE_CORE
-    private fun encodeTags(tags: List<String>) = tags.map(String::trim).filter(String::isNotBlank).distinct().joinToString(",")
+    private fun encodeTags(tags: List<String>) = normalizeTags(tags).joinToString(",")
     private fun decodeTags(tags: String) = tags.split(',').map(String::trim).filter(String::isNotBlank)
+}
+
+/**
+ * Normalise a raw tag list into a canonical form suitable for storage.
+ *
+ * Rules (applied in order):
+ *  1. Trim surrounding whitespace from each tag.
+ *  2. Lower-case using [Locale.ROOT] (stable across device locales).
+ *  3. Discard blank tags (empty after trim).
+ *  4. Discard tags longer than [MemoryRepository.MAX_TAG_LENGTH] characters
+ *     — tags are short labels, not sentences.
+ *  5. De-duplicate case-insensitively, preserving first-seen order.
+ *  6. Cap the result to [MemoryRepository.MAX_TAGS] entries.
+ *
+ * Namespaced tags such as `device:lenovo-ideapad-300` and
+ * `project:conversation-recall` survive every step; the colon is
+ * treated as an ordinary character.
+ *
+ * Pure function — no Room, no Android dependency; safe to unit-test on JVM.
+ */
+internal fun normalizeTags(tags: List<String>): List<String> {
+    val seen = HashSet<String>(tags.size)
+    return buildList {
+        for (raw in tags) {
+            val tag = raw.trim().lowercase(Locale.ROOT)
+            if (tag.isBlank()) continue
+            if (tag.length > MemoryRepository.MAX_TAG_LENGTH) continue
+            if (seen.add(tag)) {
+                add(tag)
+                if (size >= MemoryRepository.MAX_TAGS) break
+            }
+        }
+    }
 }
