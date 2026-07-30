@@ -564,6 +564,27 @@ class SubAgentEngine(
                 }
                 return
             }
+            // A user stop on the worker conversation itself (the stop button inside the
+            // worker chat) is a pure ChatService-side cancel: it never reaches the
+            // registry, and the chat pipeline swallows the CancellationException, so the
+            // join() above returns normally either way. Job.isCancelled is the one signal
+            // that survives — it stays true once cancel() was requested, even when the
+            // coroutine body swallowed the CE. Without this check, a worker cancelled
+            // this way but holding harvestable partial text was published as SUCCEEDED.
+            if (startedGeneration.isCancelled) {
+                stopWorkerThenMarkTerminal(
+                    runId = runId,
+                    workerConvId = workerConvId,
+                    generationJob = startedGeneration,
+                    status = SubAgentStatus.CANCELLED,
+                    error = "cancelled by user",
+                    boundary = continuationBoundary,
+                )
+                if (registry.get(runId)?.notifyParent == true) {
+                    notifyParentIfBackground(parentChatId, registry.get(runId))
+                }
+                return
+            }
             // Harvest the assistant's final text from the conversation. Best-effort —
             // we read the latest persisted state of the conversation and concatenate any
             // text parts from the last assistant message. This mirrors how the
