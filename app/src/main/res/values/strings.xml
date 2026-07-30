@@ -1702,6 +1702,13 @@
   <string name="image_preview_saving">Saving…</string>
   <string name="image_preview_saved">Image saved</string>
   <string name="chat_drawer_statistics">Statistics</string>
+  <string name="chat_drawer_selected_count">%1$d selected</string>
+  <string name="chat_drawer_select_all">Select all</string>
+  <string name="chat_drawer_deselect_all">Deselect all</string>
+  <string name="chat_drawer_delete_selected">Delete selected</string>
+  <string name="chat_drawer_delete_selected_confirm">Delete %1$d selected chats? This cannot be undone.</string>
+  <string name="chat_drawer_selected">Selected</string>
+  <string name="chat_drawer_not_selected">Not selected</string>
   <string name="translator_error_generic">Error</string>
   <string name="translator_paste_text">Paste text</string>
   <string name="translator_copy_result">Copy translation</string>

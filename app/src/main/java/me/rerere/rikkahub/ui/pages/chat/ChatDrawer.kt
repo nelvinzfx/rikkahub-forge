@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.ui.pages.chat
 
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -51,7 +53,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.hugeicons.stroke.ChartColumn
+import me.rerere.hugeicons.stroke.CheckmarkSquare01
+import me.rerere.hugeicons.stroke.Delete02
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.InLove
 import me.rerere.hugeicons.stroke.LanguageCircle
@@ -140,6 +145,21 @@ fun ChatDrawerContent(
     // Menu popup 状态
     var showMenuPopup by remember { mutableStateOf(false) }
 
+    // 多选状态
+    val selectedIds = drawerVm.selectedConversationIds
+    val selectionMode = drawerVm.selectionMode
+    var showDeleteSelectedDialog by remember { mutableStateOf(false) }
+
+    // 返回键优先退出多选模式
+    BackHandler(enabled = selectionMode) {
+        drawerVm.clearSelection()
+    }
+
+    // 切换助手时清空选择
+    LaunchedEffect(settings.assistantId) {
+        drawerVm.clearSelection()
+    }
+
     ModalDrawerSheet(
         modifier = Modifier.width(300.dp)
     ) {
@@ -215,6 +235,64 @@ fun ChatDrawerContent(
 
             DrawerActions(navController = navController)
 
+            // 多选操作栏
+            if (selectionMode) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.chat_drawer_selected_count, selectedIds.size),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        IconButton(
+                            onClick = { drawerVm.clearSelection() }
+                        ) {
+                            Icon(
+                                imageVector = HugeIcons.CancelSquare,
+                                contentDescription = stringResource(R.string.chat_drawer_deselect_all),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    val all = repo.getConversationsOfAssistant(
+                                        settings.assistantId,
+                                        settings.displaySetting.hideSubAgentChats,
+                                    ).first()
+                                    drawerVm.selectAll(all.map { it.id })
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = HugeIcons.CheckmarkSquare01,
+                                contentDescription = stringResource(R.string.chat_drawer_select_all),
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        IconButton(
+                            onClick = { showDeleteSelectedDialog = true }
+                        ) {
+                            Icon(
+                                imageVector = HugeIcons.Delete02,
+                                contentDescription = stringResource(R.string.chat_drawer_delete_selected),
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+
             ConversationList(
                 current = current,
                 conversations = conversations,
@@ -223,6 +301,11 @@ fun ChatDrawerContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
+                selectionMode = selectionMode,
+                selectedIds = selectedIds,
+                onToggleSelection = {
+                    drawerVm.toggleSelection(it.id)
+                },
                 onClick = {
                     navigateToChatPage(navController, it.id)
                 },
@@ -399,6 +482,51 @@ fun ChatDrawerContent(
                 TextButton(
                     onClick = {
                         nicknameEditState.dismiss()
+                    }
+                ) {
+                    Text(stringResource(R.string.chat_page_cancel))
+                }
+            }
+        )
+    }
+
+    // 批量删除确认对话框
+    if (showDeleteSelectedDialog) {
+        val deleteCount = selectedIds.size
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteSelectedDialog = false
+            },
+            title = {
+                Text(stringResource(R.string.chat_drawer_delete_selected))
+            },
+            text = {
+                Text(stringResource(R.string.chat_drawer_delete_selected_confirm, deleteCount))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteSelectedDialog = false
+                        val idsToDelete = selectedIds
+                        vm.deleteConversations(idsToDelete)
+                        drawerVm.clearSelection()
+                        // Refresh the conversation list to immediately remove the deleted items
+                        conversations.refresh()
+                        if (current.id in idsToDelete) {
+                            navigateToChatPage(navController)
+                        }
+                    }
+                ) {
+                    Text(
+                        text = stringResource(R.string.chat_page_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteSelectedDialog = false
                     }
                 ) {
                     Text(stringResource(R.string.chat_page_cancel))

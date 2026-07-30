@@ -339,6 +339,16 @@ class ChatVM(
         }
     }
 
+    fun deleteConversations(ids: Set<Uuid>) {
+        viewModelScope.launch {
+            ids.forEach { id ->
+                conversationRepo.getConversationById(id)?.let { conversation ->
+                    conversationRepo.deleteConversation(conversation)
+                }
+            }
+        }
+    }
+
     fun updatePinnedStatus(conversation: Conversation) {
         viewModelScope.launch {
             conversationRepo.togglePinStatus(conversation.id)

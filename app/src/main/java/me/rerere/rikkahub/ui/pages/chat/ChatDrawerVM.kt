@@ -1,6 +1,9 @@
 package me.rerere.rikkahub.ui.pages.chat
 
 import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,6 +21,7 @@ import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.utils.toLocalString
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.uuid.Uuid
 
 class ChatDrawerVM(
     private val context: Application,
@@ -87,6 +91,29 @@ class ChatDrawerVM(
                     }
             }
             .cachedIn(viewModelScope)
+
+    // Multi-selection state. Empty set = selection mode off.
+    var selectedConversationIds by mutableStateOf<Set<Uuid>>(emptySet())
+        private set
+
+    val selectionMode: Boolean
+        get() = selectedConversationIds.isNotEmpty()
+
+    fun toggleSelection(id: Uuid) {
+        selectedConversationIds = if (id in selectedConversationIds) {
+            selectedConversationIds - id
+        } else {
+            selectedConversationIds + id
+        }
+    }
+
+    fun selectAll(ids: Collection<Uuid>) {
+        selectedConversationIds = ids.toSet()
+    }
+
+    fun clearSelection() {
+        selectedConversationIds = emptySet()
+    }
 
     val scrollIndex: Int get() = savedStateHandle["scrollIndex"] ?: 0
     val scrollOffset: Int get() = savedStateHandle["scrollOffset"] ?: 0
