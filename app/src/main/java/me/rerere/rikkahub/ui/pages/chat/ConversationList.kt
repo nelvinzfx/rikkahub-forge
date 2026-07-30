@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -283,11 +282,13 @@ private fun ConversationItem(
     }
 
     Box(modifier = modifier) {
-        // Selection affordance revealed behind the item while dragging right
+        // Selection affordance revealed behind the item while dragging right.
+        // matchParentSize (not fillMaxSize) because LazyColumn gives unbounded
+        // height, which would collapse the pill to the icon height.
         if (isDragging) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .clip(RoundedCornerShape(50f))
                     .background(MaterialTheme.colorScheme.secondaryContainer)
                     .padding(start = 20.dp),
