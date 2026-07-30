@@ -80,7 +80,8 @@ internal fun initialToolStepExpanded(
     generationLoading: Boolean,
     executed: Boolean,
     pending: Boolean,
-): Boolean = !autoCollapse || generationLoading || !executed || pending
+    hasNextStep: Boolean,
+): Boolean = !autoCollapse || (generationLoading && !hasNextStep) || !executed || pending
 
 internal fun shouldCollapseToolStepOnGenerationEnd(
     autoCollapse: Boolean,
@@ -90,13 +91,31 @@ internal fun shouldCollapseToolStepOnGenerationEnd(
     pending: Boolean,
 ): Boolean = autoCollapse && wasGenerationLoading && !generationLoading && executed && !pending
 
+/** Mid-generation counterpart to [shouldCollapseToolStepOnGenerationEnd]: once a
+ * finished step gains a successor it is no longer the active tail, so it folds
+ * immediately instead of waiting for the whole generation to end. Edge-triggered
+ * on the hasNextStep false -> true transition so it fires exactly once — a step
+ * the user manually re-expands afterwards is left alone. */
+internal fun shouldCascadeCollapseToolStep(
+    autoCollapse: Boolean,
+    generationLoading: Boolean,
+    executed: Boolean,
+    pending: Boolean,
+    hasNextStep: Boolean,
+    wasHasNextStep: Boolean,
+): Boolean = autoCollapse && generationLoading && executed && !pending && hasNextStep && !wasHasNextStep
+
 @Composable
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     loading: Boolean = false,
-    /** True while the owning message is still generating (any step). Auto-collapse
-     * waits for this to go false instead of firing at each tool's execution edge. */
+    /** True while the owning message is still generating (any step). The final
+     * tail step stays expanded until this goes false; earlier steps fold via the
+     * cascade edge as soon as a successor appears. */
     generationLoading: Boolean = false,
+    /** True when another step already exists after this one in the chain. During
+     * generation only the tail step keeps its expanded state. */
+    hasNextStep: Boolean = false,
     onToolApproval: ((toolCallId: String, approved: Boolean, reason: String, scope: me.rerere.rikkahub.service.ChatService.ApprovalScope, toolName: String) -> Unit)? = null,
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
 ) {
@@ -136,25 +155,37 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                 generationLoading = generationLoading,
                 executed = tool.isExecuted,
                 pending = isPending,
+                hasNextStep = hasNextStep,
             )
         )
     }
     var wasGenerationLoading by rememberSaveable { mutableStateOf(generationLoading) }
+    var wasHasNextStep by rememberSaveable { mutableStateOf(hasNextStep) }
 
+    // Two collapse triggers: the cascade edge folds a finished step the moment a
+    // successor appears mid-generation, the generation-end edge folds the final
+    // tail step when the whole message finishes. Both are edge-triggered so a
+    // completed step that leaves and re-enters composition restores its saved
+    // user state instead of briefly expanding and firing these effects again.
     val collapseOnThisFrame = shouldCollapseToolStepOnGenerationEnd(
         autoCollapse = displaySetting.autoCollapseToolSteps,
         wasGenerationLoading = wasGenerationLoading,
         generationLoading = generationLoading,
         executed = tool.isExecuted,
         pending = isPending,
+    ) || shouldCascadeCollapseToolStep(
+        autoCollapse = displaySetting.autoCollapseToolSteps,
+        generationLoading = generationLoading,
+        executed = tool.isExecuted,
+        pending = isPending,
+        hasNextStep = hasNextStep,
+        wasHasNextStep = wasHasNextStep,
     )
     val displayedExpanded = expanded && !collapseOnThisFrame
 
-    // Collapse only on the real whole-generation true -> false edge. A completed
-    // step that leaves and re-enters composition restores its saved user state
-    // instead of briefly expanding and firing this effect again.
     LaunchedEffect(
         generationLoading,
+        hasNextStep,
         tool.isExecuted,
         isPending,
         displaySetting.autoCollapseToolSteps,
@@ -163,6 +194,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             expanded = false
         }
         wasGenerationLoading = generationLoading
+        wasHasNextStep = hasNextStep
     }
     val images = tool.output.filterIsInstance<UIMessagePart.Image>()
 

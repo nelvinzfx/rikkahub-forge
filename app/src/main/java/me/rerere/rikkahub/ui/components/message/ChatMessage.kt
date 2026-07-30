@@ -339,6 +339,9 @@ private fun MessagePartsBlock(
                         it is ThinkingStep.ToolStep &&
                             it.tool.approvalState is ToolApprovalState.Pending
                     }
+                    // Tail identity for cascade collapse: while streaming, a newly
+                    // appended step turns the previous tail into a non-tail step.
+                    val lastStepStableKey = block.steps.lastOrNull()?.stableKey
                     ChainOfThought(
                         steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
@@ -368,6 +371,7 @@ private fun MessagePartsBlock(
                                 tool = step.tool,
                                 loading = loading && !step.tool.isExecuted,
                                 generationLoading = loading,
+                                hasNextStep = step.stableKey != lastStepStableKey,
                                 onToolApproval = onToolApproval,
                                 onToolAnswer = onToolAnswer,
                             )

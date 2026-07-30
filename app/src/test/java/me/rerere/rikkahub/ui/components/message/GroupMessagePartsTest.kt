@@ -117,11 +117,39 @@ class GroupMessagePartsTest {
 
     @Test
     fun `completed tool starts collapsed only when auto collapse applies`() {
-        assertFalse(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = true, pending = false))
-        assertTrue(initialToolStepExpanded(autoCollapse = false, generationLoading = false, executed = true, pending = false))
-        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = true, executed = true, pending = false))
-        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = false, pending = false))
-        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = true, pending = true))
+        assertFalse(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = true, pending = false, hasNextStep = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = false, generationLoading = false, executed = true, pending = false, hasNextStep = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = true, executed = true, pending = false, hasNextStep = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = false, pending = false, hasNextStep = false))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = false, executed = true, pending = true, hasNextStep = false))
+    }
+
+    @Test
+    fun `non-tail tool starts collapsed during generation when auto collapse applies`() {
+        // mid-generation, step already has a successor -> not the active tail
+        assertFalse(initialToolStepExpanded(autoCollapse = true, generationLoading = true, executed = true, pending = false, hasNextStep = true))
+        // guards still win over the tail check: streaming tool and pending approval stay visible
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = true, executed = false, pending = false, hasNextStep = true))
+        assertTrue(initialToolStepExpanded(autoCollapse = true, generationLoading = true, executed = true, pending = true, hasNextStep = true))
+        // setting off -> unchanged old behavior
+        assertTrue(initialToolStepExpanded(autoCollapse = false, generationLoading = true, executed = true, pending = false, hasNextStep = true))
+    }
+
+    @Test
+    fun `tool cascade collapse fires only on has-next-step edge during generation`() {
+        // the edge: step was the tail, a successor just appeared, generation still running
+        assertTrue(shouldCascadeCollapseToolStep(true, true, true, false, true, false))
+        // already had a successor -> fires once, not continuously (manual re-expand survives)
+        assertFalse(shouldCascadeCollapseToolStep(true, true, true, false, true, true))
+        // still the tail -> nothing to cascade
+        assertFalse(shouldCascadeCollapseToolStep(true, true, true, false, false, false))
+        // generation already over -> handled by the generation-end edge instead
+        assertFalse(shouldCascadeCollapseToolStep(true, false, true, false, true, false))
+        // pending approval and still-executing steps never cascade
+        assertFalse(shouldCascadeCollapseToolStep(true, true, true, true, true, false))
+        assertFalse(shouldCascadeCollapseToolStep(true, true, false, false, true, false))
+        // setting off -> never
+        assertFalse(shouldCascadeCollapseToolStep(false, true, true, false, true, false))
     }
 
     @Test
