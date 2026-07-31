@@ -24,6 +24,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -58,6 +60,15 @@ private const val TAG = "McpManager"
 private const val MAX_RECONNECT_ATTEMPTS = 5
 private const val BASE_RECONNECT_DELAY_MS = 1000L
 private const val MAX_RECONNECT_DELAY_MS = 30000L
+
+// The MCP kotlin-sdk defaults every request (initialize handshake, listTools, ...) to a
+// 60s timeout, and for SSE transports the initial stream open is bounded only by the
+// OkHttp readTimeout (10 minutes here). A single hung server would therefore stall the
+// strictly-sequential syncAll loop for minutes while the pull-to-refresh gesture stays
+// locked. Refresh-path network ops get an explicit short bound instead; interactive
+// tool calls keep their own ToolRuntimeLimits budget.
+private val MCP_CONNECT_TIMEOUT = 15.seconds
+private val MCP_LIST_TOOLS_TIMEOUT = 15.seconds
 
 class McpManager(
     private val context: Context,
@@ -285,7 +296,7 @@ class McpManager(
         clients[config] = client
         runCatching {
             setStatus(config = config, status = McpStatus.Connecting)
-            client.connect(transport)
+            withTimeout(MCP_CONNECT_TIMEOUT) { client.connect(transport) }
             sync(config)
             setStatus(config = config, status = McpStatus.Connected)
             reconnectAttempts[config.id] = 0 // 重置重连计数
@@ -303,9 +314,9 @@ class McpManager(
 
         // Update tools
         if (client.transport == null) {
-            client.connect(getTransport(config))
+            withTimeout(MCP_CONNECT_TIMEOUT) { client.connect(getTransport(config)) }
         }
-        val serverTools = client.listTools().tools
+        val serverTools = withTimeout(MCP_LIST_TOOLS_TIMEOUT) { client.listTools() }.tools
         Log.i(TAG, "sync: tools: $serverTools")
         settingsStore.update { old ->
             old.copy(
@@ -468,6 +479,15 @@ class McpManager(
 
                 Log.i(TAG, "Attempting reconnect for ${config.commonOptions.name}")
                 reconnectClient(currentConfig)
+            } catch (e: TimeoutCancellationException) {
+                // A bounded connect/listTools timeout (MCP_CONNECT_TIMEOUT /
+                // MCP_LIST_TOOLS_TIMEOUT) surfaces as TimeoutCancellationException, which
+                // IS a CancellationException: the generic CE branch below would rethrow
+                // it, silently killing the reconnect ladder with the status stuck on
+                // Connecting (and the refresh gesture locked forever). Treat a timeout
+                // as an ordinary failed attempt instead.
+                Log.e(TAG, "Reconnect attempt timed out for ${config.commonOptions.name}", e)
+                scheduleReconnect(config)
             } catch (e: CancellationException) {
                 Log.i(TAG, "Reconnect cancelled for ${config.commonOptions.name}")
                 throw e
@@ -524,7 +544,7 @@ class McpManager(
 
             clients[config] = client
             setStatus(config, McpStatus.Connecting)
-            client.connect(transport)
+            withTimeout(MCP_CONNECT_TIMEOUT) { client.connect(transport) }
             sync(config)
             setStatus(config, McpStatus.Connected)
             reconnectAttempts[config.id] = 0 // 重置重连计数

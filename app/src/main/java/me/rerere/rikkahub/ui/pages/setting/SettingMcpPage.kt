@@ -341,6 +341,22 @@ private fun McpServerItem(
                     }
                 }
 
+                // Per-server refresh: forceResync tears down and re-connects only this
+                // server, so one stuck/dead server can be probed without a full syncAll
+                // (which is sequential and stays locked behind the pull gesture while
+                // any server is mid-sync). Disabled while a connect/reconnect is already
+                // in flight or when the server itself is disabled (forceResync would
+                // briefly add a client the settings collector then removes again).
+                IconButton(
+                    onClick = {
+                        scope.launch { mcpManager.forceResync(item.id) }
+                    },
+                    enabled = item.commonOptions.enable &&
+                        status != McpStatus.Connecting &&
+                        status !is McpStatus.Reconnecting,
+                ) {
+                    Icon(HugeIcons.Refresh01, null)
+                }
                 IconButton(
                     onClick = {
                         onEdit(item)
