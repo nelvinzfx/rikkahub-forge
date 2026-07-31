@@ -308,8 +308,14 @@ private fun McpServerItem(
                             text = item.commonOptions.name,
                             style = MaterialTheme.typography.titleLarge,
                         )
-                        val dotColor =
-                            if (item.commonOptions.enable) MaterialTheme.extendColors.green6 else MaterialTheme.extendColors.red6
+                        // Error state wins over the enable flag: an enabled server whose
+                        // last connect/sync failed (offline, timeout, auth, ...) shows red
+                        // instead of the misleading default green.
+                        val dotColor = when {
+                            status is McpStatus.Error -> MaterialTheme.extendColors.red6
+                            item.commonOptions.enable -> MaterialTheme.extendColors.green6
+                            else -> MaterialTheme.extendColors.red6
+                        }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
