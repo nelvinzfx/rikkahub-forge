@@ -371,14 +371,23 @@ internal suspend fun executeTermuxEdit(context: Context, request: TermuxEditRequ
     } finally { withContext(NonCancellable) { cleanupIds.forEach { id -> runCatching { cleanupEditTransfer(context, id) } } } }
 }
 
-private fun editSpecSchema() = buildJsonObject {
+// Single flat anyOf of the four alias combinations. The previous shape (allOf of two
+// sibling anyOfs) is valid JSON Schema, but strict provider-side schema flatteners
+// (Kimi via LLMGateway, Fireworks, LiteLLM) merge allOf branches and 400 with
+// "Conflict in schema definitions for key 'anyOf'", aborting generation on the first
+// request. (match|matchAlias) AND (write|writeAlias) is exactly the 4-entry disjunction
+// below, so the constraint is unchanged with no nested keys left to conflict.
+// Visibility is internal (not private) so TermuxEditToolSchemaTest can pin the shape.
+internal fun editSpecSchema() = buildJsonObject {
     put("type", "object"); put("properties", buildJsonObject {
         put("mode", buildJsonObject { put("type", "string"); put("enum", buildJsonArray { add("replace_match"); add("insert_before"); add("insert_after"); add("insert_before_match"); add("insert_after_match") }) })
         put("match_text", buildJsonObject { put("type", "string"); put("minLength", 1) }); put("write_text", buildJsonObject { put("type", "string") })
         put("matchText", buildJsonObject { put("type", "string"); put("minLength", 1); put("description", "Compatibility alias for match_text; conflicting values are rejected.") }); put("writeText", buildJsonObject { put("type", "string"); put("description", "Compatibility alias for write_text; conflicting values are rejected.") })
-    }); put("required", buildJsonArray { add("mode") }); put("allOf", buildJsonArray {
-        add(buildJsonObject { put("anyOf", buildJsonArray { add(buildJsonObject { put("required", buildJsonArray { add("match_text") }) }); add(buildJsonObject { put("required", buildJsonArray { add("matchText") }) }) }) })
-        add(buildJsonObject { put("anyOf", buildJsonArray { add(buildJsonObject { put("required", buildJsonArray { add("write_text") }) }); add(buildJsonObject { put("required", buildJsonArray { add("writeText") }) }) }) })
+    }); put("required", buildJsonArray { add("mode") }); put("anyOf", buildJsonArray {
+        add(buildJsonObject { put("required", buildJsonArray { add("match_text"); add("write_text") }) })
+        add(buildJsonObject { put("required", buildJsonArray { add("match_text"); add("writeText") }) })
+        add(buildJsonObject { put("required", buildJsonArray { add("matchText"); add("write_text") }) })
+        add(buildJsonObject { put("required", buildJsonArray { add("matchText"); add("writeText") }) })
     }); put("additionalProperties", false)
 }
 private fun editsArraySchema() = buildJsonObject { put("type", "array"); put("minItems", 1); put("maxItems", MAX_TERMUX_EDITS_PER_FILE); put("items", editSpecSchema()) }
