@@ -3,22 +3,22 @@ package me.rerere.rikkahub.data.ai.tools.local
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Regression pin for the Kimi-via-LLMGateway 400:
- * "Conflict in schema definitions for key 'anyOf'. Previous: [{'required': ['match_text']},
- * {'required': ['matchText']}], New: [{'required': ['write_text']}, {'required': ['writeText']}]".
+ * Regression pin for the Moonshot-via-LLMGateway 400s on kimi-k3:
+ *  - "Conflict in schema definitions for key 'anyOf'" (allOf of sibling anyOfs)
+ *  - "type should be defined in anyOf items instead of the parent schema"
+ *  - "conflicting keywords (required) are defined on the parent schema and inside anyOf"
  *
- * Strict provider-side schema flatteners (Kimi, Fireworks, LiteLLM) merge sibling allOf
- * branches into one flat object and reject the request when two branches declare the same
- * combinator key with different values. editSpecSchema must therefore stay a single flat
- * anyOf of the four alias combinations, with no allOf and no nested anyOf anywhere.
+ * Moonshot's "moonshot flavored json schema" dialect rejects every combinator shape we
+ * tried; a plain object schema with no anyOf/allOf/oneOf is the only form verified
+ * HTTP 200 against the live provider. The match/write alias constraint is enforced by
+ * the engine (parseTermuxEditRequest), not the schema. These tests pin that the schema
+ * stays combinator-free so nobody reintroduces a provider-hostile shape.
  */
 class TermuxEditToolSchemaTest {
 
@@ -31,36 +31,23 @@ class TermuxEditToolSchemaTest {
     }
 
     @Test
-    fun editSpecSchemaIsSingleFlatAnyOfOfFourAliasCombinations() {
-        val schema = editSpecSchema()
-
-        val anyOf = schema["anyOf"]?.jsonArray ?: error("schema must carry a top-level anyOf")
-        assertEquals(4, anyOf.size)
-
-        val combos = anyOf.map { entry ->
-            entry.jsonObject["required"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet()
-        }.toSet()
+    fun editSpecSchemaUsesNoCombinatorsAnywhere() {
+        val counts = mutableMapOf("allOf" to 0, "anyOf" to 0, "oneOf" to 0, "not" to 0)
+        walkKeys(editSpecSchema()) { key ->
+            counts.computeIfPresent(key) { _, v -> v + 1 }
+        }
         assertEquals(
-            setOf(
-                setOf("match_text", "write_text"),
-                setOf("match_text", "writeText"),
-                setOf("matchText", "write_text"),
-                setOf("matchText", "writeText"),
-            ),
-            combos,
+            "schema must stay a plain object; combinators 400 on strict provider dialects",
+            mapOf("allOf" to 0, "anyOf" to 0, "oneOf" to 0, "not" to 0),
+            counts,
         )
     }
 
     @Test
-    fun editSpecSchemaHasNoConflictingCombinatorsAnywhere() {
-        var allOfCount = 0
-        var anyOfCount = 0
-        walkKeys(editSpecSchema()) { key ->
-            if (key == "allOf") allOfCount++
-            if (key == "anyOf") anyOfCount++
-        }
-        assertEquals("allOf must not appear (provider flatteners conflict on it)", 0, allOfCount)
-        assertEquals("exactly one anyOf (the flat top-level one)", 1, anyOfCount)
+    fun editSpecSchemaIsPlainClosedObject() {
+        val schema = editSpecSchema()
+        assertEquals("object", schema["type"]!!.jsonPrimitive.content)
+        assertEquals("false", schema["additionalProperties"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -70,11 +57,10 @@ class TermuxEditToolSchemaTest {
         val props = schema["properties"]!!.jsonObject.keys
         assertTrue(props.containsAll(listOf("mode", "match_text", "matchText", "write_text", "writeText")))
 
-        // only mode is unconditionally required; the match/write constraint lives in the anyOf
+        // only mode is schema-required; the match/write constraint lives in the engine
         assertEquals(
             listOf("mode"),
             schema["required"]!!.jsonArray.map { it.jsonPrimitive.content },
         )
-        assertFalse(schema.containsKey("allOf"))
     }
 }

@@ -371,24 +371,23 @@ internal suspend fun executeTermuxEdit(context: Context, request: TermuxEditRequ
     } finally { withContext(NonCancellable) { cleanupIds.forEach { id -> runCatching { cleanupEditTransfer(context, id) } } } }
 }
 
-// Single flat anyOf of the four alias combinations. The previous shape (allOf of two
-// sibling anyOfs) is valid JSON Schema, but strict provider-side schema flatteners
-// (Kimi via LLMGateway, Fireworks, LiteLLM) merge allOf branches and 400 with
-// "Conflict in schema definitions for key 'anyOf'", aborting generation on the first
-// request. (match|matchAlias) AND (write|writeAlias) is exactly the 4-entry disjunction
-// below, so the constraint is unchanged with no nested keys left to conflict.
+// No anyOf/allOf/oneOf combinators in this schema, ever. The match/write alias
+// constraint ((match_text|matchText) AND (write_text|writeText)) was first expressed as
+// allOf of sibling anyOfs, then as one flat anyOf; every combinator shape died against
+// the "moonshot flavored json schema" dialect served via LLMGateway, verified live with
+// curl: 400 "Conflict in schema definitions for key 'anyOf'", then "type should be
+// defined in anyOf items instead of the parent schema", then "conflicting keywords
+// (required) are defined on the parent schema and inside anyOf". A plain object schema
+// is the only shape every provider accepts (verified HTTP 200 on kimi-k3), so the
+// constraint is enforced by the engine instead: parseTermuxEditRequest rejects missing
+// or conflicting aliases with a structured, retryable error envelope.
 // Visibility is internal (not private) so TermuxEditToolSchemaTest can pin the shape.
 internal fun editSpecSchema() = buildJsonObject {
     put("type", "object"); put("properties", buildJsonObject {
         put("mode", buildJsonObject { put("type", "string"); put("enum", buildJsonArray { add("replace_match"); add("insert_before"); add("insert_after"); add("insert_before_match"); add("insert_after_match") }) })
         put("match_text", buildJsonObject { put("type", "string"); put("minLength", 1) }); put("write_text", buildJsonObject { put("type", "string") })
         put("matchText", buildJsonObject { put("type", "string"); put("minLength", 1); put("description", "Compatibility alias for match_text; conflicting values are rejected.") }); put("writeText", buildJsonObject { put("type", "string"); put("description", "Compatibility alias for write_text; conflicting values are rejected.") })
-    }); put("required", buildJsonArray { add("mode") }); put("anyOf", buildJsonArray {
-        add(buildJsonObject { put("required", buildJsonArray { add("match_text"); add("write_text") }) })
-        add(buildJsonObject { put("required", buildJsonArray { add("match_text"); add("writeText") }) })
-        add(buildJsonObject { put("required", buildJsonArray { add("matchText"); add("write_text") }) })
-        add(buildJsonObject { put("required", buildJsonArray { add("matchText"); add("writeText") }) })
-    }); put("additionalProperties", false)
+    }); put("required", buildJsonArray { add("mode") }); put("additionalProperties", false)
 }
 private fun editsArraySchema() = buildJsonObject { put("type", "array"); put("minItems", 1); put("maxItems", MAX_TERMUX_EDITS_PER_FILE); put("items", editSpecSchema()) }
 private fun expectedShaSchema() = buildJsonObject { put("type", buildJsonArray { add("string"); add("null") }); put("pattern", "^[0-9a-f]{64}$") }
