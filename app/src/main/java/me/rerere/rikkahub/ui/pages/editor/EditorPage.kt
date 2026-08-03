@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Folder01
@@ -61,6 +62,7 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     val openTabs by vm.openTabs.collectAsStateWithLifecycle()
     val activeTabUri by vm.activeTabUri.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
+    val showTree by vm.showTree.collectAsStateWithLifecycle()
 
     val activeTab = openTabs.firstOrNull { it.uri == activeTabUri }
     var pendingClose by remember { mutableStateOf<EditorTab?>(null) }
@@ -92,11 +94,14 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                 },
                 navigationIcon = { BackButton() },
                 actions = {
-                    if (activeTab != null) {
+                    if (activeTab != null && !showTree) {
                         if (!activeTab.readOnly) {
                             IconButton(onClick = { vm.saveActive() }) {
                                 Icon(HugeIcons.Download01, stringResource(R.string.code_editor_save))
                             }
+                        }
+                        IconButton(onClick = { vm.setShowTree(true) }) {
+                            Icon(HugeIcons.Folder01, stringResource(R.string.code_editor_files))
                         }
                         IconButton(onClick = {
                             if (activeTab.dirty) pendingClose = activeTab else vm.closeActiveTab()
@@ -104,6 +109,11 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                             Icon(HugeIcons.CancelSquare, stringResource(R.string.code_editor_close_file))
                         }
                     } else {
+                        if (openTabs.isNotEmpty()) {
+                            IconButton(onClick = { vm.setShowTree(false) }) {
+                                Icon(HugeIcons.ArrowLeft01, stringResource(R.string.code_editor_back_to_editor))
+                            }
+                        }
                         if (rootName != null) {
                             IconButton(onClick = { vm.refresh() }) {
                                 Icon(HugeIcons.Refresh01, stringResource(R.string.code_editor_refresh))
@@ -124,7 +134,7 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (activeTab != null) {
+            if (activeTab != null && !showTree) {
                 Column(Modifier.fillMaxSize()) {
                     EditorTabsBar(
                         tabs = openTabs,

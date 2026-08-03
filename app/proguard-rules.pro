@@ -94,3 +94,11 @@
 -keep class * implements org.slf4j.spi.SLF4JServiceProvider
 -keepclassmembers class * implements org.slf4j.spi.SLF4JServiceProvider { <init>(); }
 -keep class uk.uuid.slf4j.android.** { *; }
+
+# sora-editor + tm4e (TextMate syntax highlighting). tm4e parses grammar/theme
+# JSON through gson field reflection and joni/jcodings drive the regex engine;
+# stripped or renamed classes make highlighting silently vanish in release.
+-keep class org.eclipse.tm4e.** { *; }
+-keep class org.joni.** { *; }
+-keep class org.jcodings.** { *; }
+-keep class io.github.rosemoe.sora.** { *; }

@@ -1732,6 +1732,8 @@
   <string name="code_editor_discard_confirm">Discard</string>
   <string name="code_editor_cancel">Cancel</string>
   <string name="code_editor_ok">OK</string>
+  <string name="code_editor_files">Files</string>
+  <string name="code_editor_back_to_editor">Back to editor</string>
   <string name="chat_drawer_selected_count">%1$d selected</string>
   <string name="chat_drawer_select_all">Select all</string>
   <string name="chat_drawer_deselect_all">Deselect all</string>
