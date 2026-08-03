@@ -104,6 +104,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // required by itsaky android-tree-sitter AARs (code editor feature)
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
@@ -317,6 +319,7 @@ dependencies {
     implementation(libs.tree.sitter.java)
     implementation(libs.tree.sitter.python)
     implementation(libs.tree.sitter.json)
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Google Play Services Location (FusedLocationProvider)
     implementation("com.google.android.gms:play-services-location:21.3.0")
