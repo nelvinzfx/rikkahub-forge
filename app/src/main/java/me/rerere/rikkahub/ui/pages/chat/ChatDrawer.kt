@@ -56,6 +56,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.hugeicons.stroke.ChartColumn
 import me.rerere.hugeicons.stroke.CheckmarkSquare01
+import me.rerere.hugeicons.stroke.Code
 import me.rerere.hugeicons.stroke.Delete02
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.InLove
@@ -435,6 +436,20 @@ fun ChatDrawerContent(
                         navController.navigate(Screen.Stats)
                     },
                 )
+
+                if (settings.codeEditorEnabled) {
+                    DrawerAction(
+                        icon = {
+                            Icon(HugeIcons.Code, stringResource(R.string.code_editor_title))
+                        },
+                        label = {
+                            Text(stringResource(R.string.code_editor_title))
+                        },
+                        onClick = {
+                            navController.navigate(Screen.CodeEditor)
+                        },
+                    )
+                }
 
                 Spacer(Modifier.weight(1f))
 

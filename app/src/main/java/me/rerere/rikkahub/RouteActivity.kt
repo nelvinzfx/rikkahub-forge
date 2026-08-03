@@ -96,6 +96,7 @@ import me.rerere.rikkahub.ui.pages.backup.BackupPage
 import me.rerere.rikkahub.ui.pages.chat.ChatPage
 import me.rerere.rikkahub.ui.pages.debug.DebugPage
 import me.rerere.rikkahub.ui.pages.developer.DeveloperPage
+import me.rerere.rikkahub.ui.pages.editor.EditorPage
 import me.rerere.rikkahub.ui.pages.extensions.ExtensionsPage
 import me.rerere.rikkahub.ui.pages.extensions.PromptPage
 import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesPage
@@ -625,6 +626,10 @@ class RouteActivity : ComponentActivity() {
                                 StatsPage()
                             }
 
+                            entry<Screen.CodeEditor> {
+                                EditorPage()
+                            }
+
                         }
                     )
                     if (BuildConfig.DEBUG) {
@@ -866,5 +871,8 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object Stats : Screen
+
+    @Serializable
+    data object CodeEditor : Screen
 
 }

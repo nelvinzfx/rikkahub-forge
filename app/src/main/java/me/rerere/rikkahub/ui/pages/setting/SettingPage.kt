@@ -80,6 +80,9 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.Select
+import me.rerere.hugeicons.stroke.Code
+import me.rerere.rikkahub.ui.components.ui.Switch
+import me.rerere.rikkahub.ui.components.ui.SwitchSize
 import me.rerere.rikkahub.ui.components.ui.icons.DiscordIcon
 import me.rerere.rikkahub.ui.components.ui.icons.TencentQQIcon
 import me.rerere.rikkahub.ui.context.LocalNavController
@@ -219,6 +222,23 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         leadingContent = { Icon(HugeIcons.Package, null) },
                         supportingContent = { Text(stringResource(R.string.setting_page_extensions_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_extensions)) },
+                    )
+                    item(
+                        onClick = {
+                            vm.updateSettings(settings.copy(codeEditorEnabled = !settings.codeEditorEnabled))
+                        },
+                        leadingContent = { Icon(HugeIcons.Code, null) },
+                        supportingContent = { Text(stringResource(R.string.setting_page_code_editor_desc)) },
+                        headlineContent = { Text(stringResource(R.string.setting_page_code_editor)) },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.codeEditorEnabled,
+                                onCheckedChange = {
+                                    vm.updateSettings(settings.copy(codeEditorEnabled = it))
+                                },
+                                size = SwitchSize.Small
+                            )
+                        },
                     )
                 }
             }
