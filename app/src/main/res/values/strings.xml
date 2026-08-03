@@ -1708,6 +1708,17 @@
   <string name="setting_page_code_editor_desc">Experimental code editor. Adds a Code Editor entry to the drawer.</string>
   <string name="code_editor_enable_title">Enable Code Editor</string>
   <string name="code_editor_enable_desc">Experimental. Shows the Code Editor entry below the chat history in the drawer.</string>
+  <string name="code_editor_open_folder">Open folder</string>
+  <string name="code_editor_refresh">Refresh</string>
+  <string name="code_editor_choose_folder">Choose folder</string>
+  <string name="code_editor_empty">Pick a folder to browse its files. Access persists across restarts.</string>
+  <string name="code_editor_show_hidden">Show hidden files</string>
+  <string name="code_editor_show_hidden_desc">Files and folders starting with a dot</string>
+  <string name="code_editor_close_file">Close</string>
+  <string name="code_editor_file_too_large">Too large to preview: %1$s</string>
+  <string name="code_editor_binary_file">Binary file, no preview: %1$s</string>
+  <string name="code_editor_read_error">Failed to read: %1$s</string>
+  <string name="code_editor_truncated">truncated</string>
   <string name="chat_drawer_selected_count">%1$d selected</string>
   <string name="chat_drawer_select_all">Select all</string>
   <string name="chat_drawer_deselect_all">Deselect all</string>

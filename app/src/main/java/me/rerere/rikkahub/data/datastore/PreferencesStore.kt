@@ -116,6 +116,8 @@ class SettingsStore(
         val DISPLAY_SETTING = stringPreferencesKey("display_setting")
         val DEVELOPER_MODE = booleanPreferencesKey("developer_mode")
         val CODE_EDITOR_ENABLED = booleanPreferencesKey("code_editor_enabled")
+        val CODE_EDITOR_TREE_URI = stringPreferencesKey("code_editor_tree_uri")
+        val CODE_EDITOR_SHOW_HIDDEN = booleanPreferencesKey("code_editor_show_hidden")
 
         // 模型选择
         val ENABLE_WEB_SEARCH = booleanPreferencesKey("enable_web_search")
@@ -249,6 +251,8 @@ class SettingsStore(
                 } ?: emptyList(),
                 developerMode = preferences[DEVELOPER_MODE] == true,
                 codeEditorEnabled = preferences[CODE_EDITOR_ENABLED] == true,
+                codeEditorTreeUri = preferences[CODE_EDITOR_TREE_URI],
+                codeEditorShowHidden = preferences[CODE_EDITOR_SHOW_HIDDEN] == true,
                 displaySetting = JsonInstant.decodeFromString(preferences[DISPLAY_SETTING] ?: "{}"),
                 searchServices = preferences[SEARCH_SERVICES]?.let {
                     JsonInstant.decodeFromString(it)
@@ -469,6 +473,9 @@ class SettingsStore(
             preferences[CUSTOM_THEMES] = JsonInstant.encodeToString(settings.customThemes)
             preferences[DEVELOPER_MODE] = settings.developerMode
             preferences[CODE_EDITOR_ENABLED] = settings.codeEditorEnabled
+            settings.codeEditorTreeUri?.let { preferences[CODE_EDITOR_TREE_URI] = it }
+                ?: preferences.remove(CODE_EDITOR_TREE_URI)
+            preferences[CODE_EDITOR_SHOW_HIDDEN] = settings.codeEditorShowHidden
             preferences[DISPLAY_SETTING] = JsonInstant.encodeToString(settings.displaySetting)
 
             preferences[ENABLE_WEB_SEARCH] = settings.enableWebSearch
@@ -631,6 +638,8 @@ data class Settings(
     val chatColors: ChatColorConfig = ChatColorConfig(),
     val developerMode: Boolean = false,
     val codeEditorEnabled: Boolean = false,
+    val codeEditorTreeUri: String? = null,
+    val codeEditorShowHidden: Boolean = false,
     val displaySetting: DisplaySetting = DisplaySetting(),
     val enableWebSearch: Boolean = false,
     val favoriteModels: List<Uuid> = emptyList(),
