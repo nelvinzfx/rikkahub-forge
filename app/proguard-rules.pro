@@ -102,3 +102,8 @@
 -keep class org.joni.** { *; }
 -keep class org.jcodings.** { *; }
 -keep class io.github.rosemoe.sora.** { *; }
+
+# kotlin.Cloneable is a typealias over java.lang.Cloneable; the synthetic
+# DefaultImpls class never exists. R8 only sees the reference now that sora
+# classes are kept for TextMate.
+-dontwarn kotlin.Cloneable$DefaultImpls
