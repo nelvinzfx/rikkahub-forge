@@ -1706,6 +1706,8 @@
   <string name="code_editor_placeholder">Experimental beta. File tree and editor surface land in the next commits.</string>
   <string name="setting_page_code_editor">Code Editor (Beta)</string>
   <string name="setting_page_code_editor_desc">Experimental code editor. Adds a Code Editor entry to the drawer.</string>
+  <string name="code_editor_enable_title">Enable Code Editor</string>
+  <string name="code_editor_enable_desc">Experimental. Shows the Code Editor entry below the chat history in the drawer.</string>
   <string name="chat_drawer_selected_count">%1$d selected</string>
   <string name="chat_drawer_select_all">Select all</string>
   <string name="chat_drawer_deselect_all">Deselect all</string>

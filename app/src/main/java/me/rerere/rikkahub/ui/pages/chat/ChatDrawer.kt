@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.hugeicons.stroke.ChartColumn
 import me.rerere.hugeicons.stroke.CheckmarkSquare01
@@ -356,6 +357,41 @@ fun ChatDrawerContent(
                 }
             )
 
+            if (settings.codeEditorEnabled) {
+                Surface(
+                    onClick = { navController.navigate(Screen.CodeEditor) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Code,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = stringResource(R.string.code_editor_title),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Icon(
+                            imageVector = HugeIcons.ArrowRight01,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
             Row(
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically,
@@ -436,20 +472,6 @@ fun ChatDrawerContent(
                         navController.navigate(Screen.Stats)
                     },
                 )
-
-                if (settings.codeEditorEnabled) {
-                    DrawerAction(
-                        icon = {
-                            Icon(HugeIcons.Code, stringResource(R.string.code_editor_title))
-                        },
-                        label = {
-                            Text(stringResource(R.string.code_editor_title))
-                        },
-                        onClick = {
-                            navController.navigate(Screen.CodeEditor)
-                        },
-                    )
-                }
 
                 Spacer(Modifier.weight(1f))
 

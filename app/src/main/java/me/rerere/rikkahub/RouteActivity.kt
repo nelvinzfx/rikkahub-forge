@@ -112,6 +112,7 @@ import me.rerere.rikkahub.ui.pages.log.LogPage
 import me.rerere.rikkahub.ui.pages.search.SearchPage
 import me.rerere.rikkahub.ui.pages.setting.SettingAboutPage
 import me.rerere.rikkahub.ui.pages.setting.SettingAccessibilityPage
+import me.rerere.rikkahub.ui.pages.setting.SettingCodeEditorPage
 import me.rerere.rikkahub.ui.pages.setting.SettingNotificationsPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPermissionsPage
 import me.rerere.rikkahub.ui.pages.setting.SettingPreferencesPage
@@ -435,6 +436,10 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.Setting> {
                                 SettingPage()
+                            }
+
+                            entry<Screen.SettingCodeEditor> {
+                                SettingCodeEditorPage()
                             }
 
                             entry<Screen.Backup> {
@@ -874,5 +879,8 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object CodeEditor : Screen
+
+    @Serializable
+    data object SettingCodeEditor : Screen
 
 }
