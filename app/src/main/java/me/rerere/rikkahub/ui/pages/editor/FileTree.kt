@@ -89,9 +89,9 @@ private fun FileTreeRow(
         }
         Text(
             text = when {
-                node.isDir && isExpanded -> FileIcons.FOLDER_EXPANDED.toString()
-                node.isDir -> FileIcons.FOLDER.toString()
-                else -> FileIcons.forFileName(node.name).toString()
+                node.isDir && isExpanded -> FileIcons.FOLDER_EXPANDED
+                node.isDir -> FileIcons.FOLDER
+                else -> FileIcons.forFileName(node.name)
             },
             fontFamily = iconFont,
             fontSize = 15.sp,
