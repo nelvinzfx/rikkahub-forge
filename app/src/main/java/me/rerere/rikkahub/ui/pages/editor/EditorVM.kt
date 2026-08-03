@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.rosemoe.sora.text.Content
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,8 +17,8 @@ import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 
-private const val MAX_PREVIEW_BYTES = 512 * 1024
-private const val MAX_PREVIEW_FILE_SIZE = 2L * 1024 * 1024
+private const val MAX_OPEN_BYTES = 5 * 1024 * 1024
+private const val READ_ONLY_THRESHOLD = 2L * 1024 * 1024
 
 data class FileNode(
     val uri: String,
@@ -32,26 +34,28 @@ private data class ChildEntry(
     val size: Long,
 )
 
-data class OpenFile(
+data class EditorTab(
+    val uri: String,
     val name: String,
-    val text: String,
-    val truncated: Boolean,
+    val content: Content,
+    val readOnly: Boolean = false,
+    val dirty: Boolean = false,
 )
 
-sealed interface FilePreview {
-    data object None : FilePreview
-    data object Loading : FilePreview
-    data class Ready(val file: OpenFile) : FilePreview
-    data class TooLarge(val name: String, val sizeBytes: Long) : FilePreview
-    data class Binary(val name: String) : FilePreview
-    data class Error(val name: String) : FilePreview
+sealed interface EditorNotice {
+    data object None : EditorNotice
+    data class TooLarge(val name: String) : EditorNotice
+    data class Binary(val name: String) : EditorNotice
+    data class Error(val name: String) : EditorNotice
+    data class Saved(val name: String) : EditorNotice
+    data class SaveFailed(val name: String) : EditorNotice
 }
 
 /**
  * State owner for the experimental code editor. Holds the SAF tree grant, the
- * per-directory children cache (lazy, loaded on first expand), expansion state,
- * and the lightweight read-only preview. The nvim-tree style flattening is
- * recomputed on every expand/collapse/refresh from the cache.
+ * per-directory children cache, expansion state, and the open-tab set. Each tab
+ * owns a sora [Content] document; saving serializes the active tab's Content
+ * back through SAF.
  */
 class EditorVM(
     private val context: Context,
@@ -72,8 +76,17 @@ class EditorVM(
     private val _loadingDirs = MutableStateFlow<Set<String>>(emptySet())
     val loadingDirs = _loadingDirs.asStateFlow()
 
-    private val _preview = MutableStateFlow<FilePreview>(FilePreview.None)
-    val preview = _preview.asStateFlow()
+    private val _openTabs = MutableStateFlow<List<EditorTab>>(emptyList())
+    val openTabs = _openTabs.asStateFlow()
+
+    private val _activeTabUri = MutableStateFlow<String?>(null)
+    val activeTabUri = _activeTabUri.asStateFlow()
+
+    private val _notice = MutableStateFlow<EditorNotice>(EditorNotice.None)
+    val notice = _notice.asStateFlow()
+
+    /** set while the view swaps documents on tab switch, so the swap is not counted as an edit */
+    val swapGuard = AtomicBoolean(false)
 
     private val childrenCache = mutableMapOf<String, List<ChildEntry>>()
     private var rootUriString: String? = null
@@ -84,6 +97,14 @@ class EditorVM(
         initialized = true
         val uri = settings.value.codeEditorTreeUri ?: return
         rootUriString = uri
+        // older grants may have been persisted read-only; upgrading to rw is
+        // best-effort and simply no-ops when the provider refuses
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                Uri.parse(uri),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
         viewModelScope.launch {
             _rootName.value = withContext(Dispatchers.IO) {
                 DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
@@ -95,13 +116,16 @@ class EditorVM(
     fun onTreePicked(uri: Uri) {
         runCatching {
             context.contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
         }
         rootUriString = uri.toString()
         childrenCache.clear()
         _expanded.value = emptySet()
-        _preview.value = FilePreview.None
+        _openTabs.value = emptyList()
+        _activeTabUri.value = null
+        _notice.value = EditorNotice.None
         _rootName.value = DocumentFile.fromTreeUri(context, uri)?.name
         viewModelScope.launch {
             val current = settings.value
@@ -132,7 +156,6 @@ class EditorVM(
             val expandedSnapshot = _expanded.value
             childrenCache.clear()
             loadChildren(root, force = true)
-            // reload previously expanded dirs so expansion survives a refresh
             for (dir in expandedSnapshot) {
                 if (dir != root) loadChildren(dir)
             }
@@ -144,30 +167,32 @@ class EditorVM(
             toggleDir(node)
             return
         }
-        _preview.value = FilePreview.Loading
+        if (_openTabs.value.any { it.uri == node.uri }) {
+            _activeTabUri.value = node.uri
+            return
+        }
         viewModelScope.launch {
-            _preview.value = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 val uri = Uri.parse(node.uri)
                 val size = runCatching {
                     context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
                 }.getOrDefault(-1L)
-                if (size > MAX_PREVIEW_FILE_SIZE) {
-                    return@withContext FilePreview.TooLarge(node.name, size)
+                if (size > MAX_OPEN_BYTES) {
+                    return@withContext OpenResult.TooLarge
                 }
                 runCatching {
                     context.contentResolver.openInputStream(uri)?.use { ins ->
                         val buf = java.io.ByteArrayOutputStream()
                         val chunk = ByteArray(8192)
                         var total = 0
-                        while (total <= MAX_PREVIEW_BYTES) {
+                        while (total <= MAX_OPEN_BYTES) {
                             val read = ins.read(chunk)
                             if (read == -1) break
                             buf.write(chunk, 0, read)
                             total += read
                         }
                         val bytes = buf.toByteArray()
-                        val truncated = total > MAX_PREVIEW_BYTES
-                        val limit = minOf(bytes.size, MAX_PREVIEW_BYTES)
+                        val limit = minOf(bytes.size, MAX_OPEN_BYTES)
                         var binary = false
                         var i = 0
                         while (i < minOf(limit, 8192)) {
@@ -177,30 +202,100 @@ class EditorVM(
                             }
                             i++
                         }
-                        if (binary) {
-                            FilePreview.Binary(node.name)
-                        } else {
-                            FilePreview.Ready(
-                                OpenFile(
-                                    name = node.name,
-                                    text = String(bytes, 0, limit, Charsets.UTF_8),
-                                    truncated = truncated,
-                                )
+                        when {
+                            binary -> OpenResult.Binary
+                            else -> OpenResult.Ok(
+                                text = String(bytes, 0, limit, Charsets.UTF_8),
+                                readOnly = size > READ_ONLY_THRESHOLD,
                             )
                         }
-                    } ?: FilePreview.Error(node.name)
-                }.getOrElse { FilePreview.Error(node.name) }
+                    } ?: OpenResult.Error
+                }.getOrElse { OpenResult.Error }
+            }
+            when (result) {
+                OpenResult.TooLarge -> _notice.value = EditorNotice.TooLarge(node.name)
+                OpenResult.Binary -> _notice.value = EditorNotice.Binary(node.name)
+                OpenResult.Error -> _notice.value = EditorNotice.Error(node.name)
+                is OpenResult.Ok -> {
+                    val tab = EditorTab(
+                        uri = node.uri,
+                        name = node.name,
+                        content = Content(result.text),
+                        readOnly = result.readOnly,
+                    )
+                    _openTabs.value = _openTabs.value + tab
+                    _activeTabUri.value = tab.uri
+                }
             }
         }
     }
 
-    fun closePreview() {
-        _preview.value = FilePreview.None
+    fun activateTab(uri: String) {
+        if (_openTabs.value.any { it.uri == uri }) {
+            _activeTabUri.value = uri
+        }
+    }
+
+    fun closeTab(uri: String) {
+        val tabs = _openTabs.value
+        val idx = tabs.indexOfFirst { it.uri == uri }
+        if (idx == -1) return
+        val newTabs = tabs.toMutableList().apply { removeAt(idx) }
+        _openTabs.value = newTabs
+        if (_activeTabUri.value == uri) {
+            val next = newTabs.getOrNull(idx) ?: newTabs.getOrNull(idx - 1)
+            _activeTabUri.value = next?.uri
+        }
+    }
+
+    fun closeActiveTab() {
+        _activeTabUri.value?.let { closeTab(it) }
+    }
+
+    fun onContentChanged() {
+        if (swapGuard.get()) return
+        val active = _activeTabUri.value ?: return
+        _openTabs.value = _openTabs.value.map {
+            if (it.uri == active && !it.dirty) it.copy(dirty = true) else it
+        }
+    }
+
+    fun saveActive() {
+        val active = _activeTabUri.value ?: return
+        val tab = _openTabs.value.firstOrNull { it.uri == active } ?: return
+        if (tab.readOnly || !tab.dirty) return
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(Uri.parse(tab.uri), "wt")?.use { os ->
+                        os.write(tab.content.toString().toByteArray(Charsets.UTF_8))
+                    } != null
+                }.getOrDefault(false)
+            }
+            if (ok) {
+                _openTabs.value = _openTabs.value.map {
+                    if (it.uri == active) it.copy(dirty = false) else it
+                }
+                _notice.value = EditorNotice.Saved(tab.name)
+            } else {
+                _notice.value = EditorNotice.SaveFailed(tab.name)
+            }
+        }
+    }
+
+    fun dismissNotice() {
+        _notice.value = EditorNotice.None
     }
 
     fun onShowHiddenChanged() {
-        // re-flatten with the new filter; the cache stays valid
         rebuildNodes()
+    }
+
+    private sealed interface OpenResult {
+        data object TooLarge : OpenResult
+        data object Binary : OpenResult
+        data object Error : OpenResult
+        data class Ok(val text: String, val readOnly: Boolean) : OpenResult
     }
 
     private suspend fun loadChildren(dirUri: String, force: Boolean = false) {
