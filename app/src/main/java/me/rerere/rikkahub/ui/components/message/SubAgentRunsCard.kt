@@ -86,6 +86,24 @@ internal fun subAgentRunIdsFromTool(tool: UIMessagePart.Tool): List<String> {
     }.getOrDefault(emptyList())
 }
 
+/** Read dispatch labels straight from the tool input so the card can show
+ * placeholders from the moment the call is made, before any run exists. */
+internal fun subAgentDispatchLabelsFromTool(tool: UIMessagePart.Tool): List<String> {
+    if (!tool.toolName.startsWith("subagent_dispatch")) return emptyList()
+    if (tool.input.isBlank()) return emptyList()
+    val parsed = runCatching {
+        val obj = Json.parseToJsonElement(tool.input).jsonObject
+        buildList {
+            obj["label"]?.jsonPrimitive?.contentOrNull?.let { add(it) }
+            obj["workers"]?.jsonArray?.forEach { el ->
+                runCatching { el.jsonObject["label"]?.jsonPrimitive?.contentOrNull }
+                    .getOrNull()?.let { add(it) }
+            }
+        }
+    }.getOrDefault(emptyList())
+    return parsed.ifEmpty { listOf("sub-agent") }
+}
+
 private fun nameHue(name: String): Int {
     var h = 0
     for (c in name) h = (h * 31 + c.code) ushr 0
@@ -183,26 +201,33 @@ private fun SubAgentAvatar(label: String, status: SubAgentStatus?, size: Int, wi
 @Composable
 fun SubAgentRunsCard(
     runIds: List<String>,
+    pendingLabels: List<String> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val registry: SubAgentRegistry = koinInject()
     val allRuns by registry.runs.collectAsStateWithLifecycle()
     val runs = runIds.mapNotNull { allRuns[it] }
+    // registry purged (old conversation): keep a static card instead of nothing
+    val expired = runs.isEmpty() && pendingLabels.isEmpty() && runIds.isNotEmpty()
+    if (runs.isEmpty() && pendingLabels.isEmpty() && runIds.isEmpty()) return
     val navController = LocalNavController.current
     var sheetOpen by remember { mutableStateOf(false) }
 
-    val active = runs.count { !it.status.isTerminal() }
+    val totalCount = runs.size + pendingLabels.size
+    val active = runs.count { !it.status.isTerminal() } + pendingLabels.size
     val running = runs.filter { it.status == SubAgentStatus.RUNNING }
     val sumIn = runs.sumOf { it.tokensIn }
     val sumOut = runs.sumOf { it.tokensOut }
     val sumTools = runs.sumOf { it.toolCalls }
 
     val subtitle = when {
-        runs.isEmpty() -> stringResource(R.string.sub_agents_history_expired)
+        expired -> stringResource(R.string.sub_agents_history_expired)
         active > 0 && running.isNotEmpty() ->
             stringResource(R.string.sub_agents_active_count, active) + " · " +
                 (running.last().progressNote ?: stringResource(R.string.sub_agents_line_working))
-        active > 0 -> stringResource(R.string.sub_agents_active_count, active)
+        active > 0 -> stringResource(R.string.sub_agents_active_count, active) + " · " +
+            if (pendingLabels.isNotEmpty()) stringResource(R.string.sub_agents_line_dispatching)
+            else stringResource(R.string.sub_agents_line_working)
         else -> stringResource(R.string.sub_agents_done_summary, runs.size, sumTools)
     }
 
@@ -221,13 +246,15 @@ fun SubAgentRunsCard(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
                 // avatar stack
+                val avatarItems = runs.map { it.label to it.status } +
+                    pendingLabels.map { it to SubAgentStatus.PENDING }
                 Box {
-                    runs.take(3).forEachIndexed { index, run ->
+                    avatarItems.take(3).forEachIndexed { index, (label, status) ->
                         Box(Modifier.offset(x = (index * 26).dp)) {
-                            SubAgentAvatar(run.label, run.status, 34, withBadge = false)
+                            SubAgentAvatar(label, status, 34, withBadge = false)
                         }
                     }
-                    if (runs.size > 3) {
+                    if (totalCount > 3) {
                         Box(Modifier.offset(x = (3 * 26).dp)) {
                             Box(
                                 modifier = Modifier
@@ -236,22 +263,22 @@ fun SubAgentRunsCard(
                                     .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("+${runs.size - 3}", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                                Text("+${totalCount - 3}", fontSize = 12.sp, fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
                     // reserve width for the stack (3 avatars + optional +N chip)
                     val stackWidth = when {
-                        runs.isEmpty() -> 34
-                        runs.size > 3 -> 3 * 26 + 34
-                        else -> (runs.size - 1) * 26 + 34
+                        avatarItems.isEmpty() -> 34
+                        totalCount > 3 -> 3 * 26 + 34
+                        else -> (avatarItems.size - 1) * 26 + 34
                     }
                     Box(Modifier.size(width = stackWidth.dp, height = 34.dp))
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.sub_agents_title, runs.size),
+                        text = stringResource(R.string.sub_agents_title, totalCount),
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
@@ -286,6 +313,46 @@ fun SubAgentRunsCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
             LazyColumn(modifier = Modifier.padding(bottom = 18.dp)) {
+                items(pendingLabels, key = { "pending-$it" }) { label ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                    ) {
+                        SubAgentAvatar(label, SubAgentStatus.PENDING, 40, withBadge = true)
+                        Column(Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(label, style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false))
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = statusColor(SubAgentStatus.PENDING).copy(alpha = 0.18f),
+                                ) {
+                                    Text(
+                                        text = statusLabel(SubAgentStatus.PENDING),
+                                        color = statusColor(SubAgentStatus.PENDING),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                            Text(
+                                text = stringResource(R.string.sub_agents_line_dispatching),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
                 items(runs, key = { it.id }) { run ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

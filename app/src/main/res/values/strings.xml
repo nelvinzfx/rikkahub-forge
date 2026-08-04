@@ -1968,6 +1968,7 @@
   <string name="sub_agents_state_timed_out">timed out</string>
   <string name="sub_agents_state_cancelled">cancelled</string>
   <string name="sub_agents_line_pending">queued, waiting for a slot</string>
+  <string name="sub_agents_line_dispatching">dispatching...</string>
   <string name="sub_agents_line_working">working...</string>
   <string name="sub_agents_line_stopping">stop requested, cleaning up...</string>
   <string name="sub_agents_line_finished">finished</string>
