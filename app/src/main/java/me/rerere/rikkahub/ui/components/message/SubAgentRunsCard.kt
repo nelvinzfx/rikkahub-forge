@@ -49,6 +49,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.subagent.SubAgentRegistry
 import me.rerere.rikkahub.subagent.SubAgentRun
 import me.rerere.rikkahub.subagent.SubAgentStatus
+import me.rerere.rikkahub.subagent.isTerminal
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.utils.navigateToChatPage
 import org.koin.compose.koinInject
