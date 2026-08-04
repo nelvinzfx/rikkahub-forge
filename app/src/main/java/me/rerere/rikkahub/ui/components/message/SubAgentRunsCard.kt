@@ -43,15 +43,13 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.subagent.SubAgentRegistry
 import me.rerere.rikkahub.subagent.SubAgentRun
 import me.rerere.rikkahub.subagent.SubAgentStatus
 import me.rerere.rikkahub.subagent.isTerminal
 import me.rerere.rikkahub.ui.context.LocalNavController
-import me.rerere.rikkahub.utils.navigateToChatPage
 import org.koin.compose.koinInject
 
 /**
@@ -264,19 +262,11 @@ fun SubAgentRunsCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = stringResource(R.string.sub_agents_tokens, fmtTokens(sumIn), fmtTokens(sumOut)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Icon(
-                        HugeIcons.ArrowUp01,
-                        contentDescription = stringResource(R.string.sub_agents_open),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
+                Text(
+                    text = stringResource(R.string.sub_agents_tokens, fmtTokens(sumIn), fmtTokens(sumOut)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (active > 0) {
                 LinearProgressIndicator(
@@ -306,7 +296,7 @@ fun SubAgentRunsCard(
                                 sheetOpen = false
                                 run.conversationId
                                     ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-                                    ?.let { navigateToChatPage(navController, it) }
+                                    ?.let { navController.navigate(Screen.Chat(id = it.toString())) }
                             }
                             .padding(horizontal = 20.dp, vertical = 10.dp),
                     ) {

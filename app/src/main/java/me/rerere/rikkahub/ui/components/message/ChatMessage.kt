@@ -341,17 +341,23 @@ private fun MessagePartsBlock(
                     }
                     // Tail identity for cascade collapse: while streaming, a newly
                     // appended step turns the previous tail into a non-tail step.
-                    val lastStepStableKey = block.steps.lastOrNull()?.stableKey
-                    // Sub-agent dispatches collapse into one live card instead of one
-                    // pill per dispatch. Unexecuted tools (approval/executing) keep
-                    // their normal pill so the approval flow stays visible.
+                    // Sub-agent dispatches collapse into one live card rendered BELOW
+                    // the tool chain (pill position, under the message). Executed
+                    // dispatch steps leave the chain entirely (no folded blank rows);
+                    // pending/executing ones keep their pill so approvals stay visible.
                     val subAgentDispatchIds = block.steps.filterIsInstance<ThinkingStep.ToolStep>()
                         .flatMap { subAgentRunIdsFromTool(it.tool) }
                         .distinct()
-                    val firstResolvedDispatchKey = block.steps.filterIsInstance<ThinkingStep.ToolStep>()
-                        .firstOrNull { subAgentRunIdsFromTool(it.tool).isNotEmpty() }?.stableKey
+                    val visibleSteps = if (subAgentDispatchIds.isEmpty()) {
+                        block.steps
+                    } else {
+                        block.steps.filter {
+                            it !is ThinkingStep.ToolStep || subAgentRunIdsFromTool(it.tool).isEmpty()
+                        }
+                    }
+                    val lastStepStableKey = visibleSteps.lastOrNull()?.stableKey
                     ChainOfThought(
-                        steps = block.steps,
+                        steps = visibleSteps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         forceExpanded = hasPendingApproval,
                         stateKey = block.stableKey,
@@ -375,35 +381,21 @@ private fun MessagePartsBlock(
                                 collapsedAdaptiveWidth = isReasoningOnlyBlock,
                             )
 
-                            is ThinkingStep.ToolStep -> {
-                                if (subAgentDispatchIds.isNotEmpty() && step.tool.toolName.startsWith("subagent_dispatch")) {
-                                    when {
-                                        // not executed yet (approval/executing): keep the pill
-                                        subAgentRunIdsFromTool(step.tool).isEmpty() -> ChatMessageToolStep(
-                                            tool = step.tool,
-                                            loading = loading && !step.tool.isExecuted,
-                                            generationLoading = loading,
-                                            hasNextStep = step.stableKey != lastStepStableKey,
-                                            onToolApproval = onToolApproval,
-                                            onToolAnswer = onToolAnswer,
-                                        )
-                                        step.stableKey == firstResolvedDispatchKey -> SubAgentRunsCard(
-                                            runIds = subAgentDispatchIds,
-                                        )
-                                        // other executed dispatch steps fold into the card
-                                    }
-                                } else {
-                                    ChatMessageToolStep(
-                                        tool = step.tool,
-                                        loading = loading && !step.tool.isExecuted,
-                                        generationLoading = loading,
-                                        hasNextStep = step.stableKey != lastStepStableKey,
-                                        onToolApproval = onToolApproval,
-                                        onToolAnswer = onToolAnswer,
-                                    )
-                                }
-                            }
+                            is ThinkingStep.ToolStep -> ChatMessageToolStep(
+                                tool = step.tool,
+                                loading = loading && !step.tool.isExecuted,
+                                generationLoading = loading,
+                                hasNextStep = step.stableKey != lastStepStableKey,
+                                onToolApproval = onToolApproval,
+                                onToolAnswer = onToolAnswer,
+                            )
                         }
+                    }
+                    if (subAgentDispatchIds.isNotEmpty()) {
+                        SubAgentRunsCard(
+                            runIds = subAgentDispatchIds,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                     }
                 }
             }

@@ -1954,7 +1954,6 @@
 
   <!-- Sub-agent runs card -->
   <string name="sub_agents_title">%1$d sub-agents</string>
-  <string name="sub_agents_open">Open sub-agents</string>
   <string name="sub_agents_sheet_title">Sub-agents</string>
   <string name="sub_agents_tokens">%1$s in · %2$s out</string>
   <string name="sub_agents_tool_calls">%1$d tool calls</string>
