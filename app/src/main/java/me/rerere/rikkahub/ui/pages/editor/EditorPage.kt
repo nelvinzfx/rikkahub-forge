@@ -175,6 +175,9 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         ModalNavigationDrawer(
             drawerState = drawerState,
+            // swipe gestures fight the editor's own scrolling (vertical scrolls with
+            // horizontal drift opened the drawer; long-line horizontal scroll lost to it)
+            gesturesEnabled = false,
             drawerContent = {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {

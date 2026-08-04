@@ -46,7 +46,13 @@ object EditorTextMate {
         }
     }
 
+    private var lastDark: Boolean? = null
+
     fun applyTheme(editor: CodeEditor, dark: Boolean) {
+        // creating a TextMateColorScheme forces a full editor repaint, so only
+        // re-apply when the mode actually changed (this runs on every recompose)
+        if (lastDark == dark) return
+        lastDark = dark
         runCatching {
             ThemeRegistry.getInstance().setTheme(if (dark) "darcula" else "quietlight")
             editor.colorScheme = TextMateColorScheme.create(ThemeRegistry.getInstance())
