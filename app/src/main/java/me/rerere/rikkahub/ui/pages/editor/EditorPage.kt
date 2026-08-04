@@ -507,8 +507,12 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
             confirmButton = {
                 TextButton(onClick = {
                     val line = gotoInput.toIntOrNull()
-                    if (line != null && line > 0) {
-                        editor?.setSelection(line - 1, 0)
+                    val ed = editor
+                    if (line != null && line > 0 && ed != null) {
+                        // sora's setSelection does charAt(line, ...) unchecked; an
+                        // out-of-range line crashes the app, so clamp to lineCount
+                        val target = line.coerceAtMost(ed.lineCount) - 1
+                        ed.setSelection(target, 0)
                     }
                     gotoOpen = false
                 }) {
