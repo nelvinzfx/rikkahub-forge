@@ -87,9 +87,6 @@ class EditorVM(
     /** bumped on every content change so the page can re-read canUndo/canRedo */
     private val _editTick = MutableStateFlow(0)
     val editTick = _editTick.asStateFlow()
-    /** when true the file tree is shown even while tabs are open (tabs stay alive) */
-    private val _showTree = MutableStateFlow(false)
-    val showTree = _showTree.asStateFlow()
 
     /** set while the view swaps documents on tab switch, so the swap is not counted as an edit */
     val swapGuard = AtomicBoolean(false)
@@ -168,10 +165,6 @@ class EditorVM(
         }
     }
 
-    fun setShowTree(show: Boolean) {
-        _showTree.value = show
-    }
-
     fun openFile(node: FileNode) {
         if (node.isDir) {
             toggleDir(node)
@@ -179,7 +172,6 @@ class EditorVM(
         }
         if (_openTabs.value.any { it.uri == node.uri }) {
             _activeTabUri.value = node.uri
-            _showTree.value = false
             return
         }
         viewModelScope.launch {
@@ -236,7 +228,6 @@ class EditorVM(
                     )
                     _openTabs.value = _openTabs.value + tab
                     _activeTabUri.value = tab.uri
-                    _showTree.value = false
                 }
             }
         }

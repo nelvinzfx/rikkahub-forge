@@ -1746,6 +1746,9 @@
   <string name="code_editor_undo">Undo</string>
   <string name="code_editor_redo">Redo</string>
   <string name="code_editor_word_wrap">Word wrap</string>
+  <string name="code_editor_browse_files">Browse files</string>
+  <string name="code_editor_no_tab">Open a file from the files drawer.</string>
+  <string name="code_editor_change_folder">Change folder</string>
   <string name="chat_drawer_selected_count">%1$d selected</string>
   <string name="chat_drawer_select_all">Select all</string>
   <string name="chat_drawer_deselect_all">Deselect all</string>

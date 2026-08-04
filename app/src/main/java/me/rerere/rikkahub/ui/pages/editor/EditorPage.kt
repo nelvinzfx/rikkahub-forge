@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.editor
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -7,13 +8,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,31 +25,40 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.EditorSearcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
-import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.hugeicons.stroke.Download01
@@ -59,8 +72,8 @@ import org.koin.androidx.compose.koinViewModel
 
 /**
  * Experimental code editor (beta), gated behind Settings > Code Editor (Beta).
- * Commit 4 scope: in-file search (next/prev + match count), go to line,
- * undo/redo and word wrap in the overflow menu.
+ * The page renders the editor directly; the file tree lives in a right-side
+ * modal drawer (vscode/MT Manager style) so opening files never swaps views.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,7 +86,6 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     val openTabs by vm.openTabs.collectAsStateWithLifecycle()
     val activeTabUri by vm.activeTabUri.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
-    val showTree by vm.showTree.collectAsStateWithLifecycle()
     val editTick by vm.editTick.collectAsStateWithLifecycle()
 
     val activeTab = openTabs.firstOrNull { it.uri == activeTabUri }
@@ -91,6 +103,10 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     // go to line state
     var gotoOpen by remember { mutableStateOf(false) }
     var gotoInput by remember { mutableStateOf("") }
+
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    var drawerAutoOpened by remember { mutableStateOf(false) }
 
     val canUndo = editTick.let { editor?.canUndo() == true }
     val canRedo = editTick.let { editor?.canRedo() == true }
@@ -110,6 +126,14 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     LaunchedEffect(Unit) { vm.initFromSettings() }
     LaunchedEffect(settings.codeEditorShowHidden) { vm.onShowHiddenChanged() }
 
+    // auto-open the files drawer once when a root exists and nothing is open
+    LaunchedEffect(rootName, activeTabUri) {
+        if (!drawerAutoOpened && rootName != null && activeTabUri == null) {
+            drawerAutoOpened = true
+            drawerState.open()
+        }
+    }
+
     // saved notice auto-dismiss
     LaunchedEffect(notice) {
         if (notice is EditorNotice.Saved) {
@@ -118,8 +142,8 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
         }
     }
 
-    // close search when leaving the editor surface
-    LaunchedEffect(activeTabUri, showTree) {
+    // close search when switching tabs
+    LaunchedEffect(activeTabUri) {
         searchOpen = false
         searchQuery = ""
         matchCurrent = 0
@@ -144,213 +168,301 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri -> if (uri != null) vm.onTreePicked(uri) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    val base = activeTab?.name ?: rootName ?: stringResource(R.string.code_editor_title)
-                    val suffix = if (activeTab?.readOnly == true) {
-                        " (" + stringResource(R.string.code_editor_read_only) + ")"
-                    } else ""
-                    Text(base + suffix)
-                },
-                navigationIcon = { BackButton() },
-                actions = {
-                    if (activeTab != null && !showTree) {
-                        if (!activeTab.readOnly) {
-                            IconButton(onClick = { vm.saveActive() }) {
-                                Icon(HugeIcons.Download01, stringResource(R.string.code_editor_save))
-                            }
-                        }
-                        IconButton(onClick = { vm.setShowTree(true) }) {
-                            Icon(HugeIcons.Folder01, stringResource(R.string.code_editor_files))
-                        }
-                        Box {
-                            IconButton(onClick = { showOverflow = true }) {
-                                Icon(HugeIcons.MoreVertical, stringResource(R.string.code_editor_menu))
-                            }
-                            DropdownMenu(
-                                expanded = showOverflow,
-                                onDismissRequest = { showOverflow = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.code_editor_search)) },
-                                    onClick = {
-                                        showOverflow = false
-                                        searchOpen = true
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.code_editor_goto_line)) },
-                                    onClick = {
-                                        showOverflow = false
-                                        gotoInput = ""
-                                        gotoOpen = true
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.code_editor_undo)) },
-                                    enabled = canUndo && !activeTab.readOnly,
-                                    onClick = {
-                                        showOverflow = false
-                                        editor?.undo()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.code_editor_redo)) },
-                                    enabled = canRedo && !activeTab.readOnly,
-                                    onClick = {
-                                        showOverflow = false
-                                        editor?.redo()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            stringResource(R.string.code_editor_word_wrap) +
-                                                    if (wordWrap) " ✓" else ""
-                                        )
-                                    },
-                                    onClick = {
-                                        showOverflow = false
-                                        wordWrap = !wordWrap
-                                        editor?.setWordwrap(wordWrap)
-                                    }
-                                )
-                            }
-                        }
-                        IconButton(onClick = {
-                            if (activeTab.dirty) pendingClose = activeTab else vm.closeActiveTab()
-                        }) {
-                            Icon(HugeIcons.CancelSquare, stringResource(R.string.code_editor_close_file))
-                        }
-                    } else {
-                        if (openTabs.isNotEmpty()) {
-                            IconButton(onClick = { vm.setShowTree(false) }) {
-                                Icon(HugeIcons.ArrowLeft01, stringResource(R.string.code_editor_back_to_editor))
-                            }
-                        }
-                        if (rootName != null) {
-                            IconButton(onClick = { vm.refresh() }) {
-                                Icon(HugeIcons.Refresh01, stringResource(R.string.code_editor_refresh))
-                            }
-                        }
-                        IconButton(onClick = { picker.launch(null) }) {
-                            Icon(HugeIcons.Folder01, stringResource(R.string.code_editor_open_folder))
-                        }
-                    }
-                },
-                colors = CustomColors.topBarColors,
-            )
-        },
-        containerColor = CustomColors.topBarColors.containerColor,
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            if (activeTab != null && !showTree) {
-                Column(Modifier.fillMaxSize()) {
-                    EditorTabsBar(
-                        tabs = openTabs,
-                        activeUri = activeTabUri,
-                        onSelect = vm::activateTab,
-                        onClose = { tab ->
-                            if (tab.dirty) pendingClose = tab else vm.closeTab(tab.uri)
-                        },
-                    )
-                    if (searchOpen) {
-                        HorizontalDivider()
+    BackHandler(drawerState.isOpen) {
+        scope.launch { drawerState.close() }
+    }
+
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+                        val iconFont = rememberFileIconFont()
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            OutlinedTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                                placeholder = {
-                                    Text(
-                                        stringResource(R.string.code_editor_search_hint),
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                },
-                            )
                             Text(
-                                text = "$matchCurrent/$matchCount",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = FileIcons.FOLDER_ROOT,
+                                fontFamily = iconFont,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.primary,
                             )
-                            IconButton(onClick = {
-                                editor?.searcher?.gotoPrevious()
-                                refreshMatchInfo()
-                            }) {
-                                Icon(
-                                    HugeIcons.ArrowUp01,
-                                    stringResource(R.string.code_editor_search_prev),
-                                    modifier = Modifier.size(18.dp),
-                                )
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                text = rootName ?: stringResource(R.string.code_editor_files),
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (rootName != null) {
+                                IconButton(onClick = { vm.refresh() }) {
+                                    Icon(
+                                        HugeIcons.Refresh01,
+                                        stringResource(R.string.code_editor_refresh),
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
                             }
-                            IconButton(onClick = {
-                                editor?.searcher?.gotoNext()
-                                refreshMatchInfo()
-                            }) {
+                            IconButton(onClick = { picker.launch(null) }) {
                                 Icon(
-                                    HugeIcons.ArrowDown01,
-                                    stringResource(R.string.code_editor_search_next),
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                            IconButton(onClick = {
-                                editor?.searcher?.stopSearch()
-                                searchOpen = false
-                                searchQuery = ""
-                                matchCurrent = 0
-                                matchCount = 0
-                            }) {
-                                Icon(
-                                    HugeIcons.CancelSquare,
-                                    stringResource(R.string.code_editor_search_close),
+                                    HugeIcons.Folder01,
+                                    stringResource(R.string.code_editor_change_folder),
                                     modifier = Modifier.size(18.dp),
                                 )
                             }
                         }
+                        HorizontalDivider()
+                        if (rootName == null) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.code_editor_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Button(onClick = { picker.launch(null) }) {
+                                    Text(stringResource(R.string.code_editor_choose_folder))
+                                }
+                            }
+                        } else {
+                            FileTreeList(
+                                nodes = nodes,
+                                expanded = expanded,
+                                loadingDirs = loadingDirs,
+                                onRowClick = { node ->
+                                    vm.openFile(node)
+                                    if (!node.isDir) {
+                                        scope.launch { drawerState.close() }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
-                    HorizontalDivider()
-                    EditorSurface(
-                        tab = activeTab,
-                        darkTheme = isSystemInDarkTheme(),
-                        vm = vm,
-                        onEditorChange = { editor = it },
-                        modifier = Modifier.fillMaxSize(),
-                    )
                 }
-            } else if (rootName == null) {
-                EmptyState(onPick = { picker.launch(null) })
-            } else {
-                FileTreeList(
-                    nodes = nodes,
-                    expanded = expanded,
-                    loadingDirs = loadingDirs,
-                    onRowClick = vm::openFile,
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
+        ) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = {
+                                val base = activeTab?.name ?: rootName
+                                ?: stringResource(R.string.code_editor_title)
+                                val suffix = if (activeTab?.readOnly == true) {
+                                    " (" + stringResource(R.string.code_editor_read_only) + ")"
+                                } else ""
+                                Text(base + suffix)
+                            },
+                            navigationIcon = { BackButton() },
+                            actions = {
+                                if (activeTab != null) {
+                                    if (!activeTab.readOnly) {
+                                        IconButton(onClick = { vm.saveActive() }) {
+                                            Icon(HugeIcons.Download01, stringResource(R.string.code_editor_save))
+                                        }
+                                    }
+                                    Box {
+                                        IconButton(onClick = { showOverflow = true }) {
+                                            Icon(HugeIcons.MoreVertical, stringResource(R.string.code_editor_menu))
+                                        }
+                                        DropdownMenu(
+                                            expanded = showOverflow,
+                                            onDismissRequest = { showOverflow = false }
+                                        ) {
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.code_editor_search)) },
+                                                onClick = {
+                                                    showOverflow = false
+                                                    searchOpen = true
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.code_editor_goto_line)) },
+                                                onClick = {
+                                                    showOverflow = false
+                                                    gotoInput = ""
+                                                    gotoOpen = true
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.code_editor_undo)) },
+                                                enabled = canUndo && !activeTab.readOnly,
+                                                onClick = {
+                                                    showOverflow = false
+                                                    editor?.undo()
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.code_editor_redo)) },
+                                                enabled = canRedo && !activeTab.readOnly,
+                                                onClick = {
+                                                    showOverflow = false
+                                                    editor?.redo()
+                                                }
+                                            )
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        stringResource(R.string.code_editor_word_wrap) +
+                                                                if (wordWrap) " ✓" else ""
+                                                    )
+                                                },
+                                                onClick = {
+                                                    showOverflow = false
+                                                    wordWrap = !wordWrap
+                                                    editor?.setWordwrap(wordWrap)
+                                                }
+                                            )
+                                        }
+                                    }
+                                    IconButton(onClick = {
+                                        if (activeTab.dirty) pendingClose = activeTab else vm.closeActiveTab()
+                                    }) {
+                                        Icon(HugeIcons.CancelSquare, stringResource(R.string.code_editor_close_file))
+                                    }
+                                }
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(HugeIcons.Folder01, stringResource(R.string.code_editor_files))
+                                }
+                            },
+                            colors = CustomColors.topBarColors,
+                        )
+                    },
+                    containerColor = CustomColors.topBarColors.containerColor,
+                ) { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    ) {
+                        if (activeTab != null) {
+                            Column(Modifier.fillMaxSize()) {
+                                EditorTabsBar(
+                                    tabs = openTabs,
+                                    activeUri = activeTabUri,
+                                    onSelect = vm::activateTab,
+                                    onClose = { tab ->
+                                        if (tab.dirty) pendingClose = tab else vm.closeTab(tab.uri)
+                                    },
+                                )
+                                if (searchOpen) {
+                                    HorizontalDivider()
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        OutlinedTextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true,
+                                            textStyle = MaterialTheme.typography.bodySmall,
+                                            placeholder = {
+                                                Text(
+                                                    stringResource(R.string.code_editor_search_hint),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                )
+                                            },
+                                        )
+                                        Text(
+                                            text = "$matchCurrent/$matchCount",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        IconButton(onClick = {
+                                            editor?.searcher?.gotoPrevious()
+                                            refreshMatchInfo()
+                                        }) {
+                                            Icon(
+                                                HugeIcons.ArrowUp01,
+                                                stringResource(R.string.code_editor_search_prev),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            editor?.searcher?.gotoNext()
+                                            refreshMatchInfo()
+                                        }) {
+                                            Icon(
+                                                HugeIcons.ArrowDown01,
+                                                stringResource(R.string.code_editor_search_next),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            editor?.searcher?.stopSearch()
+                                            searchOpen = false
+                                            searchQuery = ""
+                                            matchCurrent = 0
+                                            matchCount = 0
+                                        }) {
+                                            Icon(
+                                                HugeIcons.CancelSquare,
+                                                stringResource(R.string.code_editor_search_close),
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                                HorizontalDivider()
+                                EditorSurface(
+                                    tab = activeTab,
+                                    darkTheme = isSystemInDarkTheme(),
+                                    vm = vm,
+                                    onEditorChange = { editor = it },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
+                            ) {
+                                Icon(
+                                    imageVector = HugeIcons.Folder01,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(48.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    text = stringResource(R.string.code_editor_no_tab),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Button(onClick = { scope.launch { drawerState.open() } }) {
+                                    Text(stringResource(R.string.code_editor_browse_files))
+                                }
+                            }
+                        }
 
-            if (notice !is EditorNotice.None) {
-                NoticeBar(
-                    notice = notice,
-                    onDismiss = vm::dismissNotice,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(12.dp),
-                )
+                        if (notice !is EditorNotice.None) {
+                            NoticeBar(
+                                notice = notice,
+                                onDismiss = vm::dismissNotice,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(12.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -443,32 +555,6 @@ private fun NoticeBar(
             TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.code_editor_ok))
             }
-        }
-    }
-}
-
-@Composable
-private fun EmptyState(onPick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
-    ) {
-        Icon(
-            imageVector = HugeIcons.Folder01,
-            contentDescription = null,
-            modifier = Modifier.size(48.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            text = stringResource(R.string.code_editor_empty),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Button(onClick = onPick) {
-            Text(stringResource(R.string.code_editor_choose_folder))
         }
     }
 }
