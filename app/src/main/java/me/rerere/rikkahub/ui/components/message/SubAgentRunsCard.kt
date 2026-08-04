@@ -35,74 +35,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.uuid.Uuid
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import me.rerere.ai.ui.UIMessagePart
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.rikkahub.R
-import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.subagent.SubAgentRegistry
 import me.rerere.rikkahub.subagent.SubAgentRun
 import me.rerere.rikkahub.subagent.SubAgentStatus
 import me.rerere.rikkahub.subagent.isTerminal
-import me.rerere.rikkahub.ui.context.LocalNavController
-import org.koin.compose.koinInject
 
 /**
- * Wraps all sub-agent dispatches of one assistant turn into a single live card
- * (instead of one pill per dispatch). The card observes SubAgentRegistry, whose
- * usage ticker keeps tokens/tool calls fresh while runs are non-terminal.
- * Tap opens a bottom sheet with one row per worker; tapping a row jumps into
- * that worker's conversation.
+ * Conversation-level sub-agent overview, rendered once at the end of the chat
+ * list (replaces the old per-run chip FlowRow). All runs of the conversation
+ * fold into a single live card: initial-avatar stack, active/terminal
+ * subtitle, summed tokens, indeterminate bar while anything runs. Tap opens a
+ * modal bottom sheet with one row per worker (7-state chip, live activity,
+ * tokens in/out, tool calls, cancel for active runs); tapping a row jumps
+ * into that worker's conversation. Data comes from ChatVM.subAgentRuns, which
+ * is registry-backed and live (usage ticker every ~2.5s while non-terminal).
  */
 
 private val StateGreen = Color(0xFF7FCF8E)
 private val StateAmber = Color(0xFFE3C26B)
 private val StateOrange = Color(0xFFF0A35E)
-
-/** Pull dispatched run ids out of a subagent_dispatch(_batch/_continue) tool output. */
-internal fun subAgentRunIdsFromTool(tool: UIMessagePart.Tool): List<String> {
-    if (!tool.toolName.startsWith("subagent_dispatch")) return emptyList()
-    if (!tool.isExecuted) return emptyList()
-    val text = tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("") { it.text }
-    if (text.isBlank()) return emptyList()
-    return runCatching {
-        val obj = Json.parseToJsonElement(text).jsonObject
-        buildList {
-            obj["id"]?.jsonPrimitive?.contentOrNull?.let { add(it) }
-            obj["run_ids"]?.jsonArray?.forEach { el ->
-                el.jsonPrimitive.contentOrNull?.let { add(it) }
-            }
-            // dispatch_batch nests run ids under results[].run_id
-            obj["results"]?.jsonArray?.forEach { el ->
-                runCatching { el.jsonObject["run_id"]?.jsonPrimitive?.contentOrNull }
-                    .getOrNull()?.let { add(it) }
-            }
-        }.distinct()
-    }.getOrDefault(emptyList())
-}
-
-/** Read dispatch labels straight from the tool input so the card can show
- * placeholders from the moment the call is made, before any run exists. */
-internal fun subAgentDispatchLabelsFromTool(tool: UIMessagePart.Tool): List<String> {
-    if (!tool.toolName.startsWith("subagent_dispatch")) return emptyList()
-    if (tool.input.isBlank()) return emptyList()
-    val parsed = runCatching {
-        val obj = Json.parseToJsonElement(tool.input).jsonObject
-        buildList {
-            obj["label"]?.jsonPrimitive?.contentOrNull?.let { add(it) }
-            obj["workers"]?.jsonArray?.forEach { el ->
-                runCatching { el.jsonObject["label"]?.jsonPrimitive?.contentOrNull }
-                    .getOrNull()?.let { add(it) }
-            }
-        }
-    }.getOrDefault(emptyList())
-    return parsed.ifEmpty { listOf("sub-agent") }
-}
 
 private fun nameHue(name: String): Int {
     var h = 0
@@ -200,34 +155,24 @@ private fun SubAgentAvatar(label: String, status: SubAgentStatus?, size: Int, wi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubAgentRunsCard(
-    runIds: List<String>,
-    pendingLabels: List<String> = emptyList(),
+    runs: List<SubAgentRun>,
+    onOpenConversation: (Uuid) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val registry: SubAgentRegistry = koinInject()
-    val allRuns by registry.runs.collectAsStateWithLifecycle()
-    val runs = runIds.mapNotNull { allRuns[it] }
-    // registry purged (old conversation): keep a static card instead of nothing
-    val expired = runs.isEmpty() && pendingLabels.isEmpty() && runIds.isNotEmpty()
-    if (runs.isEmpty() && pendingLabels.isEmpty() && runIds.isEmpty()) return
-    val navController = LocalNavController.current
+    if (runs.isEmpty()) return
     var sheetOpen by remember { mutableStateOf(false) }
 
-    val totalCount = runs.size + pendingLabels.size
-    val active = runs.count { !it.status.isTerminal() } + pendingLabels.size
+    val active = runs.count { !it.status.isTerminal() }
     val running = runs.filter { it.status == SubAgentStatus.RUNNING }
     val sumIn = runs.sumOf { it.tokensIn }
     val sumOut = runs.sumOf { it.tokensOut }
     val sumTools = runs.sumOf { it.toolCalls }
 
     val subtitle = when {
-        expired -> stringResource(R.string.sub_agents_history_expired)
         active > 0 && running.isNotEmpty() ->
             stringResource(R.string.sub_agents_active_count, active) + " · " +
                 (running.last().progressNote ?: stringResource(R.string.sub_agents_line_working))
-        active > 0 -> stringResource(R.string.sub_agents_active_count, active) + " · " +
-            if (pendingLabels.isNotEmpty()) stringResource(R.string.sub_agents_line_dispatching)
-            else stringResource(R.string.sub_agents_line_working)
+        active > 0 -> stringResource(R.string.sub_agents_active_count, active)
         else -> stringResource(R.string.sub_agents_done_summary, runs.size, sumTools)
     }
 
@@ -246,15 +191,13 @@ fun SubAgentRunsCard(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
                 // avatar stack
-                val avatarItems = runs.map { it.label to it.status } +
-                    pendingLabels.map { it to SubAgentStatus.PENDING }
                 Box {
-                    avatarItems.take(3).forEachIndexed { index, (label, status) ->
+                    runs.take(3).forEachIndexed { index, run ->
                         Box(Modifier.offset(x = (index * 26).dp)) {
-                            SubAgentAvatar(label, status, 34, withBadge = false)
+                            SubAgentAvatar(run.label, run.status, 34, withBadge = false)
                         }
                     }
-                    if (totalCount > 3) {
+                    if (runs.size > 3) {
                         Box(Modifier.offset(x = (3 * 26).dp)) {
                             Box(
                                 modifier = Modifier
@@ -263,22 +206,21 @@ fun SubAgentRunsCard(
                                     .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("+${totalCount - 3}", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                                Text("+${runs.size - 3}", fontSize = 12.sp, fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
                     // reserve width for the stack (3 avatars + optional +N chip)
                     val stackWidth = when {
-                        avatarItems.isEmpty() -> 34
-                        totalCount > 3 -> 3 * 26 + 34
-                        else -> (avatarItems.size - 1) * 26 + 34
+                        runs.size > 3 -> 3 * 26 + 34
+                        else -> (runs.size - 1) * 26 + 34
                     }
                     Box(Modifier.size(width = stackWidth.dp, height = 34.dp))
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.sub_agents_title, totalCount),
+                        text = stringResource(R.string.sub_agents_title, runs.size),
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
@@ -313,46 +255,6 @@ fun SubAgentRunsCard(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
             LazyColumn(modifier = Modifier.padding(bottom = 18.dp)) {
-                items(pendingLabels, key = { "pending-$it" }) { label ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 10.dp),
-                    ) {
-                        SubAgentAvatar(label, SubAgentStatus.PENDING, 40, withBadge = true)
-                        Column(Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(label, style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false))
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = statusColor(SubAgentStatus.PENDING).copy(alpha = 0.18f),
-                                ) {
-                                    Text(
-                                        text = statusLabel(SubAgentStatus.PENDING),
-                                        color = statusColor(SubAgentStatus.PENDING),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                    )
-                                }
-                            }
-                            Text(
-                                text = stringResource(R.string.sub_agents_line_dispatching),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
                 items(runs, key = { it.id }) { run ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -363,7 +265,7 @@ fun SubAgentRunsCard(
                                 sheetOpen = false
                                 run.conversationId
                                     ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-                                    ?.let { navController.navigate(Screen.Chat(id = it.toString())) }
+                                    ?.let(onOpenConversation)
                             }
                             .padding(horizontal = 20.dp, vertical = 10.dp),
                     ) {
@@ -407,6 +309,16 @@ fun SubAgentRunsCard(
                                 text = stringResource(R.string.sub_agents_tool_calls, run.toolCalls),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (!run.status.isTerminal()) {
+                            Icon(
+                                imageVector = HugeIcons.Cancel01,
+                                contentDescription = stringResource(R.string.sub_agents_cancel),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable { SubAgentRegistry.cancelViaGlobalInstance(run.id) },
                             )
                         }
                     }

@@ -341,28 +341,9 @@ private fun MessagePartsBlock(
                     }
                     // Tail identity for cascade collapse: while streaming, a newly
                     // appended step turns the previous tail into a non-tail step.
-                    // Sub-agent dispatches never render as pills: every one of them
-                    // folds into a single live card below the chain. Labels from the
-                    // tool input let the card show placeholders from the moment the
-                    // call is made, before any run exists.
-                    val dispatchSteps = block.steps.filterIsInstance<ThinkingStep.ToolStep>()
-                        .filter { it.tool.toolName.startsWith("subagent_dispatch") }
-                    val subAgentDispatchIds = dispatchSteps
-                        .flatMap { subAgentRunIdsFromTool(it.tool) }
-                        .distinct()
-                    val inflightLabels = if (!loading) emptyList() else dispatchSteps
-                        .filter { subAgentRunIdsFromTool(it.tool).isEmpty() }
-                        .flatMap { subAgentDispatchLabelsFromTool(it.tool) }
-                    val visibleSteps = if (dispatchSteps.isEmpty()) {
-                        block.steps
-                    } else {
-                        block.steps.filter {
-                            it !is ThinkingStep.ToolStep || !it.tool.toolName.startsWith("subagent_dispatch")
-                        }
-                    }
-                    val lastStepStableKey = visibleSteps.lastOrNull()?.stableKey
+                    val lastStepStableKey = block.steps.lastOrNull()?.stableKey
                     ChainOfThought(
-                        steps = visibleSteps,
+                        steps = block.steps,
                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                         forceExpanded = hasPendingApproval,
                         stateKey = block.stableKey,
@@ -395,13 +376,6 @@ private fun MessagePartsBlock(
                                 onToolAnswer = onToolAnswer,
                             )
                         }
-                    }
-                    if (subAgentDispatchIds.isNotEmpty() || inflightLabels.isNotEmpty()) {
-                        SubAgentRunsCard(
-                            runIds = subAgentDispatchIds,
-                            pendingLabels = inflightLabels,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
                     }
                 }
             }

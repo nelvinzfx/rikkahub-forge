@@ -1957,6 +1957,7 @@
   <string name="sub_agents_sheet_title">Sub-agents</string>
   <string name="sub_agents_tokens">%1$s in · %2$s out</string>
   <string name="sub_agents_tool_calls">%1$d tool calls</string>
+  <string name="sub_agents_cancel">Cancel sub-agent</string>
   <string name="sub_agents_active_count">%1$d active</string>
   <string name="sub_agents_done_summary">all done · %2$d tool calls</string>
   <string name="sub_agents_history_expired">run history expired</string>
@@ -1968,7 +1969,6 @@
   <string name="sub_agents_state_timed_out">timed out</string>
   <string name="sub_agents_state_cancelled">cancelled</string>
   <string name="sub_agents_line_pending">queued, waiting for a slot</string>
-  <string name="sub_agents_line_dispatching">dispatching...</string>
   <string name="sub_agents_line_working">working...</string>
   <string name="sub_agents_line_stopping">stop requested, cleaning up...</string>
   <string name="sub_agents_line_finished">finished</string>

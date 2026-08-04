@@ -97,6 +97,7 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.ui.components.message.ChatMessage
+import me.rerere.rikkahub.ui.components.message.SubAgentRunsCard
 import me.rerere.rikkahub.ui.components.ui.ErrorCardsDisplay
 import me.rerere.rikkahub.ui.components.ui.ListSelectableItem
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
@@ -396,9 +397,8 @@ private fun ChatListNormal(
 
             if (subAgentRuns.isNotEmpty()) {
                 item(key = "SubAgentChipRow") {
-                    SubAgentChipRow(
+                    SubAgentRunsCard(
                         runs = subAgentRuns,
-                        modelById = modelById,
                         onOpenConversation = onOpenSubAgentConversation,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
