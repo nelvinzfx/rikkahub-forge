@@ -84,6 +84,9 @@ class EditorVM(
 
     private val _notice = MutableStateFlow<EditorNotice>(EditorNotice.None)
     val notice = _notice.asStateFlow()
+    /** bumped on every content change so the page can re-read canUndo/canRedo */
+    private val _editTick = MutableStateFlow(0)
+    val editTick = _editTick.asStateFlow()
     /** when true the file tree is shown even while tabs are open (tabs stay alive) */
     private val _showTree = MutableStateFlow(false)
     val showTree = _showTree.asStateFlow()
@@ -263,6 +266,7 @@ class EditorVM(
 
     fun onContentChanged() {
         if (swapGuard.get()) return
+        _editTick.value += 1
         val active = _activeTabUri.value ?: return
         _openTabs.value = _openTabs.value.map {
             if (it.uri == active && !it.dirty) it.copy(dirty = true) else it

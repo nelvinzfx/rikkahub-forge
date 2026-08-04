@@ -46,6 +46,7 @@ fun EditorSurface(
     tab: EditorTab,
     darkTheme: Boolean,
     vm: EditorVM,
+    onEditorChange: (CodeEditor?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var editor by remember { mutableStateOf<CodeEditor?>(null) }
@@ -61,13 +62,18 @@ fun EditorSurface(
                 isEditable = !tab.readOnly
                 subscribeEvent(ContentChangeEvent::class.java) { _, _ -> vm.onContentChanged() }
                 editor = this
+                onEditorChange(this)
             }
         },
         update = { view ->
             EditorTextMate.applyTheme(view, darkTheme)
             editor = view
+            onEditorChange(view)
         },
-        onRelease = { view -> view.release() },
+        onRelease = { view ->
+            view.release()
+            onEditorChange(null)
+        },
         modifier = modifier,
     )
 

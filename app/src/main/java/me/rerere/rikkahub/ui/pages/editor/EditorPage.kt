@@ -11,13 +11,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,20 +30,27 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.EditorSearcher
 import kotlinx.coroutines.delay
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowLeft01
+import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Folder01
+import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Refresh01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -48,8 +59,8 @@ import org.koin.androidx.compose.koinViewModel
 
 /**
  * Experimental code editor (beta), gated behind Settings > Code Editor (Beta).
- * Commit 3 scope: sora editor surface with tabs, dirty tracking, SAF save and
- * TextMate syntax highlighting. The tree stays one back press away.
+ * Commit 4 scope: in-file search (next/prev + match count), go to line,
+ * undo/redo and word wrap in the overflow menu.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,9 +74,38 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     val activeTabUri by vm.activeTabUri.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val showTree by vm.showTree.collectAsStateWithLifecycle()
+    val editTick by vm.editTick.collectAsStateWithLifecycle()
 
     val activeTab = openTabs.firstOrNull { it.uri == activeTabUri }
     var pendingClose by remember { mutableStateOf<EditorTab?>(null) }
+    var editor by remember { mutableStateOf<CodeEditor?>(null) }
+    var showOverflow by remember { mutableStateOf(false) }
+    var wordWrap by remember { mutableStateOf(false) }
+
+    // search state
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var matchCurrent by remember { mutableIntStateOf(0) }
+    var matchCount by remember { mutableIntStateOf(0) }
+
+    // go to line state
+    var gotoOpen by remember { mutableStateOf(false) }
+    var gotoInput by remember { mutableStateOf("") }
+
+    val canUndo = editTick.let { editor?.canUndo() == true }
+    val canRedo = editTick.let { editor?.canRedo() == true }
+
+    fun refreshMatchInfo() {
+        val s = editor?.searcher
+        if (s != null && s.hasQuery()) {
+            val idx = s.currentMatchedPositionIndex
+            matchCurrent = if (idx >= 0) idx + 1 else 0
+            matchCount = s.matchedPositionCount
+        } else {
+            matchCurrent = 0
+            matchCount = 0
+        }
+    }
 
     LaunchedEffect(Unit) { vm.initFromSettings() }
     LaunchedEffect(settings.codeEditorShowHidden) { vm.onShowHiddenChanged() }
@@ -76,6 +116,28 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
             delay(2500)
             vm.dismissNotice()
         }
+    }
+
+    // close search when leaving the editor surface
+    LaunchedEffect(activeTabUri, showTree) {
+        searchOpen = false
+        searchQuery = ""
+        matchCurrent = 0
+        matchCount = 0
+    }
+
+    // debounced search
+    LaunchedEffect(searchQuery, searchOpen) {
+        if (!searchOpen) return@LaunchedEffect
+        delay(300)
+        val s = editor?.searcher ?: return@LaunchedEffect
+        if (searchQuery.isBlank()) {
+            s.stopSearch()
+        } else {
+            s.search(searchQuery, EditorSearcher.SearchOptions(true, false))
+        }
+        delay(200)
+        refreshMatchInfo()
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -102,6 +164,60 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                         }
                         IconButton(onClick = { vm.setShowTree(true) }) {
                             Icon(HugeIcons.Folder01, stringResource(R.string.code_editor_files))
+                        }
+                        Box {
+                            IconButton(onClick = { showOverflow = true }) {
+                                Icon(HugeIcons.MoreVertical, stringResource(R.string.code_editor_menu))
+                            }
+                            DropdownMenu(
+                                expanded = showOverflow,
+                                onDismissRequest = { showOverflow = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.code_editor_search)) },
+                                    onClick = {
+                                        showOverflow = false
+                                        searchOpen = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.code_editor_goto_line)) },
+                                    onClick = {
+                                        showOverflow = false
+                                        gotoInput = ""
+                                        gotoOpen = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.code_editor_undo)) },
+                                    enabled = canUndo && !activeTab.readOnly,
+                                    onClick = {
+                                        showOverflow = false
+                                        editor?.undo()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.code_editor_redo)) },
+                                    enabled = canRedo && !activeTab.readOnly,
+                                    onClick = {
+                                        showOverflow = false
+                                        editor?.redo()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(R.string.code_editor_word_wrap) +
+                                                    if (wordWrap) " ✓" else ""
+                                        )
+                                    },
+                                    onClick = {
+                                        showOverflow = false
+                                        wordWrap = !wordWrap
+                                        editor?.setWordwrap(wordWrap)
+                                    }
+                                )
+                            }
                         }
                         IconButton(onClick = {
                             if (activeTab.dirty) pendingClose = activeTab else vm.closeActiveTab()
@@ -144,11 +260,74 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                             if (tab.dirty) pendingClose = tab else vm.closeTab(tab.uri)
                         },
                     )
+                    if (searchOpen) {
+                        HorizontalDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                placeholder = {
+                                    Text(
+                                        stringResource(R.string.code_editor_search_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                },
+                            )
+                            Text(
+                                text = "$matchCurrent/$matchCount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            IconButton(onClick = {
+                                editor?.searcher?.gotoPrevious()
+                                refreshMatchInfo()
+                            }) {
+                                Icon(
+                                    HugeIcons.ArrowUp01,
+                                    stringResource(R.string.code_editor_search_prev),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            IconButton(onClick = {
+                                editor?.searcher?.gotoNext()
+                                refreshMatchInfo()
+                            }) {
+                                Icon(
+                                    HugeIcons.ArrowDown01,
+                                    stringResource(R.string.code_editor_search_next),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            IconButton(onClick = {
+                                editor?.searcher?.stopSearch()
+                                searchOpen = false
+                                searchQuery = ""
+                                matchCurrent = 0
+                                matchCount = 0
+                            }) {
+                                Icon(
+                                    HugeIcons.CancelSquare,
+                                    stringResource(R.string.code_editor_search_close),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
                     HorizontalDivider()
                     EditorSurface(
                         tab = activeTab,
                         darkTheme = isSystemInDarkTheme(),
                         vm = vm,
+                        onEditorChange = { editor = it },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -191,6 +370,38 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { pendingClose = null }) {
+                    Text(stringResource(R.string.code_editor_cancel))
+                }
+            },
+        )
+    }
+
+    if (gotoOpen) {
+        AlertDialog(
+            onDismissRequest = { gotoOpen = false },
+            title = { Text(stringResource(R.string.code_editor_goto_line)) },
+            text = {
+                OutlinedTextField(
+                    value = gotoInput,
+                    onValueChange = { gotoInput = it.filter(Char::isDigit) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    placeholder = { Text(stringResource(R.string.code_editor_goto_line_hint)) },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val line = gotoInput.toIntOrNull()
+                    if (line != null && line > 0) {
+                        editor?.setSelection(line - 1, 0)
+                    }
+                    gotoOpen = false
+                }) {
+                    Text(stringResource(R.string.code_editor_goto))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { gotoOpen = false }) {
                     Text(stringResource(R.string.code_editor_cancel))
                 }
             },
