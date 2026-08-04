@@ -5,7 +5,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -545,9 +548,29 @@ class SubAgentEngine(
             // LLM finished). So `finished == null` was true on BOTH timeout AND success, and
             // every sub-agent looked TIMED_OUT despite actually finishing. Use a Unit sentinel
             // so the two outcomes are distinguishable.
-            val completed: Unit? = withTimeoutOrNull(request.timeoutSeconds * 1000L) {
-                startedGeneration.join()
-                Unit
+            // Live telemetry ticker. Without periodic harvests the run record keeps
+            // its initial zeros until a terminal transition, and a parent polling
+            // subagent_list/subagent_get mid-run misreads a healthy worker as
+            // stalled (tokens_in/out stuck at 0). The terminal harvest still owns
+            // the final numbers.
+            val completed: Unit? = coroutineScope {
+                val usageTicker = launch {
+                    while (isActive) {
+                        delay(2_500)
+                        runCatching {
+                            val u = harvestUsage(workerConvId, continuationBoundary)
+                            registry.updateUsage(runId, u.tokensIn, u.tokensOut, u.trips, u.toolCalls)
+                        }
+                    }
+                }
+                try {
+                    withTimeoutOrNull(request.timeoutSeconds * 1000L) {
+                        startedGeneration.join()
+                        Unit
+                    }
+                } finally {
+                    usageTicker.cancel()
+                }
             }
             if (completed == null) {
                 registry.requestTimeout(runId)
@@ -624,15 +647,16 @@ class SubAgentEngine(
             // completion tokens across the worker conversation's selected message branch so
             // Phase D's subtree cap has real numbers. tripCount = assistant messages = LLM
             // round-trips. Best-effort: a missing/empty conversation just yields zeros.
-            val (tokensIn, tokensOut, trips) = harvestUsage(workerConvId, continuationBoundary)
+            val usage = harvestUsage(workerConvId, continuationBoundary)
             val succeeded = registry.transitionTerminal(runId, SubAgentStatus.SUCCEEDED) {
                 it.copy(
                     result = finalText,
                     reasoningLevel = workerReasoningLevel.name,
                     finishedAtMs = System.currentTimeMillis(),
-                    tokensIn = tokensIn,
-                    tokensOut = tokensOut,
-                    tripCount = trips,
+                    tokensIn = usage.tokensIn,
+                    tokensOut = usage.tokensOut,
+                    tripCount = usage.trips,
+                    toolCalls = usage.toolCalls,
                     fallbackModelUsed = fallbackUsed,
                     fallbackReason = fallbackReason,
                 )
@@ -774,17 +798,18 @@ class SubAgentEngine(
             ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
             ?.let { harvestFinalText(it, boundary) }
             .orEmpty()
-        val (tokensIn, tokensOut, trips) = run?.conversationId
+        val usage = run?.conversationId
             ?.let { runCatching { Uuid.parse(it) }.getOrNull() }
             ?.let { harvestUsage(it, boundary) }
-            ?: Triple(0L, 0L, 0)
+            ?: SubAgentUsage()
         val transitioned = registry.transitionTerminal(runId, status) {
             it.copy(
                 error = error,
                 result = partialResult.ifEmpty { null },
-                tokensIn = tokensIn,
-                tokensOut = tokensOut,
-                tripCount = trips,
+                tokensIn = usage.tokensIn,
+                tokensOut = usage.tokensOut,
+                tripCount = usage.trips,
+                toolCalls = usage.toolCalls,
                 finishedAtMs = System.currentTimeMillis(),
             )
         }
@@ -906,17 +931,21 @@ class SubAgentEngine(
      * Returns (promptTokens, completionTokens, assistantMessageCount). Best-effort: a missing
      * conversation or one with no usage data yields (0, 0, N) — the trip count is still useful.
      */
-    private suspend fun harvestUsage(conversationId: Uuid, boundary: Int = 0): Triple<Long, Long, Int> {
+    private suspend fun harvestUsage(conversationId: Uuid, boundary: Int = 0): SubAgentUsage {
         return runCatching {
-            val conv = conversationRepo.getConversationById(conversationId) ?: return@runCatching Triple(0L, 0L, 0)
+            val conv = conversationRepo.getConversationById(conversationId) ?: return@runCatching SubAgentUsage()
             val selectedMessages = SubAgentAttemptBoundary.after(conv.messageNodes, boundary)
                 .mapNotNull { node -> node.messages.getOrNull(node.selectIndex) }
-            SubAgentAttemptBoundary.usageAfter(
+            val (tokensIn, tokensOut, trips) = SubAgentAttemptBoundary.usageAfter(
                 items = selectedMessages,
                 boundary = 0,
                 usageOf = { msg -> msg.usage?.let { it.promptTokens.toLong() to it.completionTokens.toLong() } },
                 isAssistant = { msg -> msg.role.name.equals("assistant", ignoreCase = true) },
             )
-        }.getOrDefault(Triple(0L, 0L, 0))
+            val toolCalls = selectedMessages.sumOf { msg ->
+                msg.parts.count { part -> part is UIMessagePart.Tool }
+            }
+            SubAgentUsage(tokensIn, tokensOut, trips, toolCalls)
+        }.getOrDefault(SubAgentUsage())
     }
 }

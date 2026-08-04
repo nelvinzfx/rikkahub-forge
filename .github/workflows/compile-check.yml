@@ -2,7 +2,7 @@ name: Compile Check
 
 on:
   push:
-    branches: [master, feat/conversation-recall, feat/code-editor]
+    branches: [master, feat/conversation-recall, feat/code-editor, fix/subagent-live-telemetry]
   pull_request:
     branches: [master]
   workflow_dispatch:

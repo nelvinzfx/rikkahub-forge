@@ -42,6 +42,8 @@ data class SubAgentRun(
     val tokensIn: Long = 0,
     val tokensOut: Long = 0,
     val tripCount: Int = 0,
+    /** UIMessagePart.Tool parts seen on the worker branch; refreshed live while non-terminal. */
+    val toolCalls: Int = 0,
     // Phase 30 (Orchestrator Mode Phase A) - records when the explicitly-requested
     // model could not be used at run time (e.g. provider flipped to disabled between
     // dispatch and generation) and the engine fell back to the assistant/global default.
@@ -201,6 +203,18 @@ internal class SubAgentParentStopEpoch {
         completion.cancel()
     }
 }
+
+/**
+ * Token/tool telemetry for one sub-agent run, harvested from the worker
+ * conversation. Produced live by the engine's usage ticker while the run is
+ * non-terminal, and one final time at the terminal transition.
+ */
+internal data class SubAgentUsage(
+    val tokensIn: Long = 0,
+    val tokensOut: Long = 0,
+    val trips: Int = 0,
+    val toolCalls: Int = 0,
+)
 
 internal object SubAgentTerminalCleanup {
     suspend fun stopThenPublish(

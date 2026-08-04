@@ -44,6 +44,30 @@ class SubAgentRegistryTest {
         assertEquals("done", r.runs.value["a"]?.result)
     }
 
+    @Test fun `updateUsage refreshes telemetry on running run`() {
+        val r = SubAgentRegistry()
+        r.addPending(makeRun("a", status = SubAgentStatus.RUNNING))
+        r.updateUsage("a", tokensIn = 1200, tokensOut = 340, tripCount = 3, toolCalls = 7)
+        val run = r.runs.value["a"]!!
+        assertEquals(1200L, run.tokensIn)
+        assertEquals(340L, run.tokensOut)
+        assertEquals(3, run.tripCount)
+        assertEquals(7, run.toolCalls)
+    }
+
+    @Test fun `updateUsage never overwrites terminal numbers`() {
+        val r = SubAgentRegistry()
+        r.addPending(makeRun("a", status = SubAgentStatus.RUNNING))
+        r.updateUsage("a", tokensIn = 100, tokensOut = 10, tripCount = 1, toolCalls = 2)
+        r.update("a") { it.copy(status = SubAgentStatus.SUCCEEDED, tokensIn = 999, tokensOut = 99, tripCount = 9, toolCalls = 20) }
+        r.updateUsage("a", tokensIn = 50, tokensOut = 5, tripCount = 0, toolCalls = 1)
+        val run = r.runs.value["a"]!!
+        assertEquals(999L, run.tokensIn)
+        assertEquals(99L, run.tokensOut)
+        assertEquals(9, run.tripCount)
+        assertEquals(20, run.toolCalls)
+    }
+
     @Test fun `update on missing id is no-op`() {
         val r = SubAgentRegistry()
         r.update("nope") { it.copy(status = SubAgentStatus.SUCCEEDED) }

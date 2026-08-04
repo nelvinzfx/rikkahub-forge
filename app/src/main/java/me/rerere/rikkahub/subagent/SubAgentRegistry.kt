@@ -138,6 +138,21 @@ class SubAgentRegistry {
         }
     }
 
+    /**
+     * Live telemetry refresh from the engine's usage ticker. Non-terminal only:
+     * the terminal harvest owns the final numbers and must never be overwritten.
+     */
+    fun updateUsage(id: String, tokensIn: Long, tokensOut: Long, tripCount: Int, toolCalls: Int) {
+        update(id) { run ->
+            if (!run.status.isTerminal()) run.copy(
+                tokensIn = tokensIn,
+                tokensOut = tokensOut,
+                tripCount = tripCount,
+                toolCalls = toolCalls,
+            ) else run
+        }
+    }
+
     fun get(id: String): SubAgentRun? = _runs.value[id]
 
     fun list(activeOnly: Boolean): List<SubAgentRun> = _runs.value.values

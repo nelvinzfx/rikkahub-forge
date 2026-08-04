@@ -55,6 +55,7 @@ internal fun encodeRun(run: SubAgentRun): kotlinx.serialization.json.JsonObject 
     put("tokens_in", run.tokensIn)
     put("tokens_out", run.tokensOut)
     put("trip_count", run.tripCount)
+    put("tool_calls", run.toolCalls)
     if (run.fallbackModelUsed) put("fallback_model_used", true)
     if (run.fallbackReason != null) put("fallback_reason", run.fallbackReason)
     put("depth", run.depth)
@@ -102,7 +103,8 @@ fun subagentDispatchTool(
         the worker automatically gets ONE extra final turn with tools disabled to write
         its summary, so the true provider-request count can be max_trips + 1. The
         trip_count field in run records counts assistant messages (telemetry), not exact
-        provider requests.
+        provider requests. tokens_in/out and tool_calls refresh live (about every 2.5s)
+        while a run is non-terminal, so mid-run reads show real current usage.
 
         Concurrency caps: each assistant has its own (default 3, configurable 1-10) and
         there's a global cap of 16 across all assistants. Over-cap dispatches fail with
@@ -381,7 +383,10 @@ fun subagentListTool(
                 put("status", it.status.name)
                 if (it.modelId != null) put("model_id", it.modelId)
                 put("started_at_ms", it.startedAtMs)
+                put("tokens_in", it.tokensIn)
+                put("tokens_out", it.tokensOut)
                 put("trip_count", it.tripCount)
+                put("tool_calls", it.toolCalls)
                 if (it.progressNote != null) put("progress_note", it.progressNote)
             } }
         }
@@ -628,6 +633,7 @@ fun subagentWaitAllTool(
                         put("tokens_in", run.tokensIn)
                         put("tokens_out", run.tokensOut)
                         put("trip_count", run.tripCount)
+                        put("tool_calls", run.toolCalls)
                     } else {
                         put("status", "unknown")
                     }
@@ -727,6 +733,7 @@ fun subagentSubtreeStatusTool(
                     put("tokens_in", run.tokensIn)
                     put("tokens_out", run.tokensOut)
                     put("trip_count", run.tripCount)
+                    put("tool_calls", run.toolCalls)
                     if (run.modelId != null) put("model_id", run.modelId)
                     if (run.fallbackModelUsed) put("fallback_model_used", true)
                     if (run.subtreeTokenWarning) put("subtree_token_warning", true)
@@ -740,6 +747,7 @@ fun subagentSubtreeStatusTool(
             put("aggregate_tokens_in", totalIn)
             put("aggregate_tokens_out", totalOut)
             put("aggregate_tokens_total", totalIn + totalOut)
+            put("aggregate_tool_calls", runs.sumOf { it.toolCalls })
             put("active_count", runs.count { !it.status.isTerminal() })
             put("terminal_count", runs.count { it.status.isTerminal() })
             put("runs", runArr)
