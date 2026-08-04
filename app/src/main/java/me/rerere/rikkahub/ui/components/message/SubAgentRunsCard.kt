@@ -79,7 +79,12 @@ internal fun subAgentRunIdsFromTool(tool: UIMessagePart.Tool): List<String> {
             obj["run_ids"]?.jsonArray?.forEach { el ->
                 el.jsonPrimitive.contentOrNull?.let { add(it) }
             }
-        }
+            // dispatch_batch nests run ids under results[].run_id
+            obj["results"]?.jsonArray?.forEach { el ->
+                runCatching { el.jsonObject["run_id"]?.jsonPrimitive?.contentOrNull }
+                    .getOrNull()?.let { add(it) }
+            }
+        }.distinct()
     }.getOrDefault(emptyList())
 }
 
