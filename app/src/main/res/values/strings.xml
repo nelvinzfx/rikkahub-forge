@@ -1951,4 +1951,28 @@
   <string name="memory_bank_search">Search memory bank</string>
   <string name="memory_bank_core_budget">Core memory token budget</string>
   <string name="memory_bank_core_budget_desc">Only core memories within this budget are added to every prompt. Bank memories stay searchable on demand.</string>
+
+  <!-- Sub-agent runs card -->
+  <string name="sub_agents_title">%1$d sub-agents</string>
+  <string name="sub_agents_open">Open sub-agents</string>
+  <string name="sub_agents_sheet_title">Sub-agents</string>
+  <string name="sub_agents_tokens">%1$s in · %2$s out</string>
+  <string name="sub_agents_tool_calls">%1$d tool calls</string>
+  <string name="sub_agents_active_count">%1$d active</string>
+  <string name="sub_agents_done_summary">all done · %2$d tool calls</string>
+  <string name="sub_agents_history_expired">run history expired</string>
+  <string name="sub_agents_state_pending">pending</string>
+  <string name="sub_agents_state_running">running</string>
+  <string name="sub_agents_state_stopping">stopping</string>
+  <string name="sub_agents_state_succeeded">succeeded</string>
+  <string name="sub_agents_state_failed">failed</string>
+  <string name="sub_agents_state_timed_out">timed out</string>
+  <string name="sub_agents_state_cancelled">cancelled</string>
+  <string name="sub_agents_line_pending">queued, waiting for a slot</string>
+  <string name="sub_agents_line_working">working...</string>
+  <string name="sub_agents_line_stopping">stop requested, cleaning up...</string>
+  <string name="sub_agents_line_finished">finished</string>
+  <string name="sub_agents_line_error">error: %1$s</string>
+  <string name="sub_agents_line_timed_out">timed out</string>
+  <string name="sub_agents_line_cancelled">cancelled</string>
 </resources>
