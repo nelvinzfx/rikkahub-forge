@@ -10,6 +10,7 @@ import io.github.rosemoe.sora.langs.textmate.registry.ThemeRegistry
 import io.github.rosemoe.sora.langs.textmate.registry.model.ThemeModel
 import io.github.rosemoe.sora.langs.textmate.registry.provider.AssetsFileResolver
 import io.github.rosemoe.sora.widget.CodeEditor
+import java.lang.ref.WeakReference
 import org.eclipse.tm4e.core.registry.IThemeSource
 
 /**
@@ -46,12 +47,18 @@ object EditorTextMate {
         }
     }
 
+    private var lastEditor: WeakReference<CodeEditor>? = null
     private var lastDark: Boolean? = null
 
     fun applyTheme(editor: CodeEditor, dark: Boolean) {
         // creating a TextMateColorScheme forces a full editor repaint, so only
-        // re-apply when the mode actually changed (this runs on every recompose)
-        if (lastDark == dark) return
+        // skip when THIS editor instance already runs this mode (this runs on
+        // every recompose). a fresh editor must always be themed: guarding on
+        // the dark flag alone left recreated editors on sora's default light
+        // scheme with dark-themed spans (light editor in dark app, invisible
+        // text on grammar-highlighted files)
+        if (lastEditor?.get() === editor && lastDark == dark) return
+        lastEditor = WeakReference(editor)
         lastDark = dark
         runCatching {
             ThemeRegistry.getInstance().setTheme(if (dark) "darcula" else "quietlight")
