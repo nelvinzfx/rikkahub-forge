@@ -4,13 +4,13 @@
 
 # RikkaHub Forge
 
-A fork of [RikkaHub](https://github.com/rikkahub/rikkahub) focused on agentic reliability: native Termux integration, hardened sub-agent orchestration, long-term memory, and chat UX polish.
+A fork of [RikkaHub](https://github.com/rikkahub/rikkahub) focused on agentic reliability: native Termux integration, hardened sub-agent orchestration, long-term memory, a built-in code editor, and chat UX polish.
 
 <p>
   <a href="https://github.com/nelvinzfx/rikkahub-forge/releases"><img src="https://img.shields.io/github/v/release/nelvinzfx/rikkahub-forge?include_prereleases&style=flat-square&label=release&color=blue" alt="Release" /></a>
-  <a href="https://github.com/nelvinzfx/rikkahub-forge/releases"><img src="https://img.shields.io/github/downloads/nelvinzfx/rikkahub-forge/total?style=flat-square&color=brightgreen" alt="Downloads" /></a>
+  <a href="https://github.com/nelvinzfx/rikkahub-forge/releases/latest"><img src="https://img.shields.io/github/downloads/nelvinzfx/rikkahub-forge/latest/total?style=flat-square&color=brightgreen" alt="Downloads" /></a>
   <img src="https://img.shields.io/badge/platform-Android%208%2B-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android 8+" />
-  <img src="https://img.shields.io/badge/arch-arm64%20only-orange?style=flat-square" alt="arm64 only" />
+  <img src="https://img.shields.io/badge/arch-arm64--v8a_%C2%B7_x86__64_%C2%B7_universal-orange?style=flat-square" alt="arm64-v8a, x86_64, universal" />
 </p>
 
 <a href="https://github.com/nelvinzfx/rikkahub-forge/releases/latest"><strong>Download</strong></a> ·
