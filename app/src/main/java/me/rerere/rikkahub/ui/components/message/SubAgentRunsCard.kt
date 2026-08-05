@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -254,7 +256,13 @@ fun SubAgentRunsCard(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
-            LazyColumn(modifier = Modifier.padding(bottom = 18.dp)) {
+            // max-height like the demo (72% of screen): short lists stay short,
+            // many workers scroll inside instead of stretching the sheet
+            LazyColumn(
+                modifier = Modifier
+                    .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.72f).dp)
+                    .padding(bottom = 18.dp)
+            ) {
                 items(runs, key = { it.id }) { run ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
