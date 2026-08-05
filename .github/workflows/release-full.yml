@@ -131,8 +131,9 @@ jobs:
           - signer certificate sha256: `9dc3d0968c6546a6d93b2a036894c4ee30b167c246e0ad3bc384a93b5bce0e7b`
           - per-file hashes in `SHA256SUMS`
           EOF
-          # expand the placeholders (heredoc above is quoted on purpose, expand manually)
-          sed -i "s|\${{ inputs.tag }}|${TAG}|g; s|\${{ inputs.expected_sha }}|${EXPECTED_SHA}|g" dist/release-notes.md
+          # note: ${{ inputs.* }} placeholders are already expanded by the runner
+          # before bash runs, no post-processing needed (a sed here once failed
+          # on shas starting with 1-9: invalid back reference)
 
       - name: Remove temporary credentials
         if: always()
