@@ -568,7 +568,8 @@ class EditorVM(
                     )
                 } else if (snap != null) {
                     // draft lost but file alive: fall back to the disk content
-                    restored += readCleanTab(st, snap)
+                    val clean = readCleanTab(st, snap)
+                    if (clean != null) restored += clean else dropped += st.name
                 } else {
                     dropped += st.name
                 }
