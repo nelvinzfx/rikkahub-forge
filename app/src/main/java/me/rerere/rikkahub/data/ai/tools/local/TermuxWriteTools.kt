@@ -179,6 +179,9 @@ internal val TERMUX_ATOMIC_WRITE_SCRIPT = """
     chmod 600 -- "${'$'}temp"
     cat -- "${'$'}transfer_dir/payload" >> "${'$'}temp" || path_error copy_failed
     chmod "${'$'}mode" -- "${'$'}temp" || path_error mode_failed
+    # chmod-ignoring filesystems (Android sdcardfs) silently derive their own mode bits, so
+    # publication is verified against the mode the target filesystem actually effected.
+    mode=${'$'}(stat -Lc '%a' -- "${'$'}temp") || path_error stat_failed
     final_total=${'$'}(wc -c < "${'$'}temp" | tr -d ' '); final_sha=${'$'}(sha256sum < "${'$'}temp" | cut -d' ' -f1) || path_error hash_failed
     [ "${'$'}final_total" -eq "${'$'}meta_total" ] && [ "${'$'}final_sha" = "${'$'}meta_sha" ] || path_error publication_changed
     temp_identity=${'$'}(stat -Lc '%d:%i' -- "${'$'}temp") || path_error stat_failed

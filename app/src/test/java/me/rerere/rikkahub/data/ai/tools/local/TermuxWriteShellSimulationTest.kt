@@ -118,6 +118,28 @@ class TermuxWriteShellSimulationTest {
         assertTrue(mutate("printf SAME > \"${'$'}actual_path\"; touch -d @${'$'}(date +%s) \"${'$'}actual_path\"").out.contains("error=source_changed"))
     }
 
+    @Test fun chmodIgnoringFilesystemPublishesNewFilesWithoutFalsePublicationChanged() = withSandbox { home, tmp ->
+        // Android sdcardfs silently derives its own mode bits: every chmod lands as a
+        // filesystem-chosen mode. Simulate by forcing the temp's chmod to effect 660.
+        val needle = "chmod \"${'$'}mode\" -- \"${'$'}temp\" || path_error mode_failed"
+        val sdcardfs = TERMUX_ATOMIC_WRITE_SCRIPT.replace(needle, "chmod 660 -- \"${'$'}temp\" || path_error mode_failed")
+        assertTrue(sdcardfs != TERMUX_ATOMIC_WRITE_SCRIPT)
+        val payload = "sdcardfs-new".toByteArray()
+        val fresh = runFinalScript(home, tmp, sdcardfs, stage(home, tmp, payload), "sdcard-new", null, false)
+        assertSuccess(fresh, payload); assertArrayEquals(payload, File(home, "sdcard-new").readBytes())
+        val replacement = "sdcardfs-overwrite".toByteArray()
+        val overwrite = runFinalScript(home, tmp, sdcardfs, stage(home, tmp, replacement), "sdcard-new", sha256Hex(payload), false)
+        assertSuccess(overwrite, replacement); assertArrayEquals(replacement, File(home, "sdcard-new").readBytes())
+        // A real external mode change between publish and verification is still detected.
+        val raced = TERMUX_ATOMIC_WRITE_SCRIPT.replace(
+            "mv -Tf -- \"${'$'}temp\" \"${'$'}actual_path\" || path_error publish_failed; temp=",
+            "mv -Tf -- \"${'$'}temp\" \"${'$'}actual_path\" || path_error publish_failed; temp=; chmod 400 -- \"${'$'}actual_path\"",
+        )
+        assertTrue(raced != TERMUX_ATOMIC_WRITE_SCRIPT)
+        val detected = runFinalScript(home, tmp, raced, stage(home, tmp, "raced".toByteArray()), "raced-mode", null, false)
+        assertTrue(detected.out.contains("error=publication_changed"))
+    }
+
     @Test fun transferRejectsMalformedOrderDuplicateUnknownAndSymlinkStateAndCleansTtl() = withSandbox { home, tmp ->
         val raw = ByteArray(TERMUX_TRANSFER_CHUNK_BYTES + 1) { 7 }; val sha = sha256Hex(raw); val id = UUID.randomUUID().toString()
         assertTrue(run(home, tmp, TERMUX_STAGE_CHUNK_SCRIPT, id, "1", "2", raw.size.toString(), sha, b64(byteArrayOf(7))).out.contains("error=missing_transfer"))
