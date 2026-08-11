@@ -79,6 +79,9 @@ jobs:
             --tests 'me.rerere.rikkahub.subagent.SubAgentRegistryTest' \
             --tests 'me.rerere.rikkahub.subagent.SubAgentCriticalRemediationTest' \
             --tests 'me.rerere.rikkahub.data.ai.mcp.McpAssistantToolScopeTest' \
+            --tests 'me.rerere.rikkahub.ui.pages.editor.ExternalChangeTest' \
+            --tests 'me.rerere.rikkahub.ui.pages.editor.EditorSessionCodecTest' \
+            --tests 'me.rerere.rikkahub.ui.pages.editor.EditorSessionStoreTest' \
             --tests 'me.rerere.rikkahub.reliability.GitHubReleaseCheckerTest' \
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \
