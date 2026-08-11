@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -57,6 +60,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.EditorSearcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowDown01
@@ -76,6 +81,8 @@ import org.koin.androidx.compose.koinViewModel
  * The page renders the editor directly; the file tree lives in a right-side
  * modal drawer (vscode/MT Manager style) so opening files never swaps views.
  */
+private val DrawerSheetWidth = 300.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorPage(vm: EditorVM = koinViewModel()) {
@@ -108,7 +115,6 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
 
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
-    var drawerAutoOpened by remember { mutableStateOf(false) }
 
     val canUndo = editTick.let { editor?.canUndo() == true }
     val canRedo = editTick.let { editor?.canRedo() == true }
@@ -142,10 +148,14 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
         }
     }
 
-    // auto-open the files drawer once when a root exists and nothing is open
-    LaunchedEffect(rootName, activeTabUri) {
-        if (!drawerAutoOpened && rootName != null && activeTabUri == null) {
-            drawerAutoOpened = true
+    // auto-open the files drawer exactly once, after session restore settles
+    // and only when no tab survived restore. one-shot effect + direct .value
+    // read: a keyed effect would restart mid-animation when restored tabs land
+    // and cancel the suspend open(), stranding the drawer at a partial offset
+    LaunchedEffect(Unit) {
+        combine(vm.sessionRestoreDone, vm.rootName) { done, root -> done && root != null }
+            .first { it }
+        if (vm.activeTabUri.value == null) {
             drawerState.open()
         }
     }
@@ -184,10 +194,13 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri -> if (uri != null) vm.onTreePicked(uri) }
 
-    BackHandler(drawerState.isOpen) {
+    // targetValue (not isOpen) so back also works mid-open-animation
+    val drawerVisible = drawerState.targetValue == DrawerValue.Open
+    BackHandler(drawerVisible) {
         scope.launch { drawerState.close() }
     }
 
+    Box(Modifier.fillMaxSize()) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -196,7 +209,7 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
             gesturesEnabled = false,
             drawerContent = {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+                    ModalDrawerSheet(modifier = Modifier.width(DrawerSheetWidth)) {
                         val iconFont = rememberFileIconFont()
                         Row(
                             modifier = Modifier
@@ -483,6 +496,25 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                     }
                 }
             }
+        }
+    }
+
+        // M3's scrim ignores taps when gesturesEnabled=false (upstream ties
+        // scrim dismiss to the gestures flag), so this overlay covers
+        // everything except the sheet strip and closes the drawer on tap.
+        // PaddingValues.Absolute pins the exclusion to the visual right
+        // regardless of the RTL wrapper.
+        if (drawerVisible) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(PaddingValues.Absolute(right = DrawerSheetWidth))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClickLabel = "Close file drawer",
+                    ) { scope.launch { drawerState.close() } },
+            )
         }
     }
 

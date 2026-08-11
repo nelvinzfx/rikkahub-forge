@@ -133,6 +133,10 @@ class EditorVM(
     private val _externalChangeUri = MutableStateFlow<String?>(null)
     val externalChangeUri = _externalChangeUri.asStateFlow()
 
+    /** flipped when the initial session restore has settled (or there is nothing to restore) */
+    private val _sessionRestoreDone = MutableStateFlow(false)
+    val sessionRestoreDone = _sessionRestoreDone.asStateFlow()
+
     /** set while the view swaps documents on tab switch, so the swap is not counted as an edit */
     val swapGuard = AtomicBoolean(false)
 
@@ -150,7 +154,11 @@ class EditorVM(
     fun initFromSettings() {
         if (initialized) return
         initialized = true
-        val uri = settings.value.codeEditorTreeUri ?: return
+        val uri = settings.value.codeEditorTreeUri
+        if (uri == null) {
+            _sessionRestoreDone.value = true
+            return
+        }
         rootUriString = uri
         // older grants may have been persisted read-only; upgrading to rw is
         // best-effort and simply no-ops when the provider refuses
@@ -168,7 +176,13 @@ class EditorVM(
         }
         // tabs restore independently of the tree: SAF listing is slow and the
         // editor surface must not wait for it
-        viewModelScope.launch { restoreSession() }
+        viewModelScope.launch {
+            try {
+                restoreSession()
+            } finally {
+                _sessionRestoreDone.value = true
+            }
+        }
     }
 
     fun onTreePicked(uri: Uri) {
