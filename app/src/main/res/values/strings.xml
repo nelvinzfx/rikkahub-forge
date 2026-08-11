@@ -1757,6 +1757,7 @@
   <string name="code_editor_restore_dropped">Some tabs could not be restored: %1$s</string>
   <string name="code_editor_auto_save">Auto save</string>
   <string name="code_editor_auto_save_desc">Write changes to disk automatically, a moment after you stop typing</string>
+  <string name="code_editor_key_tab">Tab</string>
   <string name="chat_drawer_selected_count">%1$d selected</string>
   <string name="chat_drawer_select_all">Select all</string>
   <string name="chat_drawer_deselect_all">Deselect all</string>

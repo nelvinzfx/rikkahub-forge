@@ -466,8 +466,18 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                                     wordWrap = wordWrap,
                                     vm = vm,
                                     onEditorChange = { editor = it },
-                                    modifier = Modifier.fillMaxSize(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
                                 )
+                                if (!activeTab.readOnly) {
+                                    HorizontalDivider()
+                                    // inside the imePadding'd Box, so the bar sits
+                                    // right above the keyboard while typing
+                                    EditorSymbolBar(
+                                        onInsert = { symbol -> editor?.commitText(symbol) },
+                                    )
+                                }
                             }
                         } else {
                             Column(

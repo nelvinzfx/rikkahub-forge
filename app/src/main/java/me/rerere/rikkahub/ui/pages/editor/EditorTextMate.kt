@@ -10,6 +10,7 @@ import io.github.rosemoe.sora.langs.textmate.registry.ThemeRegistry
 import io.github.rosemoe.sora.langs.textmate.registry.model.ThemeModel
 import io.github.rosemoe.sora.langs.textmate.registry.provider.AssetsFileResolver
 import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import java.lang.ref.WeakReference
 import org.eclipse.tm4e.core.registry.IThemeSource
 
@@ -64,6 +65,25 @@ object EditorTextMate {
             ThemeRegistry.getInstance().setTheme(if (dark) "darcula" else "quietlight")
             editor.colorScheme = TextMateColorScheme.create(ThemeRegistry.getInstance())
         }
+        applyGutterStyle(editor)
+    }
+
+    /**
+     * Breathing room + separator for the line-number gutter. Must run after
+     * every scheme swap: TextMateColorScheme.applyDefault() resets
+     * LINE_DIVIDER to transparent, so the divider is re-tinted here from the
+     * scheme's own muted line-number tone at low alpha.
+     */
+    private fun applyGutterStyle(editor: CodeEditor) {
+        val dp = editor.dpUnit
+        editor.setLineNumberMarginLeft(6 * dp)
+        // 0.23.6 has no line-number right margin; the divider's left margin
+        // provides the right-side breathing room instead
+        editor.setDividerMargin(6 * dp, 8 * dp)
+        editor.setDividerWidth(dp)
+        val scheme = editor.colorScheme
+        val base = scheme.getColor(EditorColorScheme.LINE_NUMBER)
+        scheme.setColor(EditorColorScheme.LINE_DIVIDER, (base and 0x00FFFFFF) or 0x50000000)
     }
 
     fun languageFor(fileName: String): Language? {

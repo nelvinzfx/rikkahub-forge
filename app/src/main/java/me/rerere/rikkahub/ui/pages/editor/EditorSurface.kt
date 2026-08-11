@@ -6,6 +6,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import android.graphics.Typeface
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -34,6 +37,7 @@ import io.github.rosemoe.sora.widget.CodeEditor
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.CancelSquare
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.ui.theme.CustomColors
 
 /**
  * The sora CodeEditor wrapped for Compose. A single editor instance is kept
@@ -180,6 +184,60 @@ fun EditorTabsBar(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+        }
+    }
+}
+
+private const val TAB_KEY = "\t"
+
+// Tab plus a trimmed set of common programming symbols (Gboard/Termux-style
+// extra row). Order: pairs first, then statement/operator chars, then the rest.
+private val SymbolKeys = listOf(
+    TAB_KEY,
+    "(", ")", "[", "]", "{", "}", "<", ">",
+    ";", ":", ",", ".", "=", "+", "-", "*", "/",
+    "_", "|", "&", "!", "?", "'", "\"", "`",
+    "@", "#", "$", "\\",
+)
+
+/**
+ * Quick-insert key row pinned under the editor (above the IME via the page's
+ * imePadding chain). Plain clickable Surfaces: taps insert at the caret
+ * without stealing keyboard focus from the CodeEditor.
+ */
+@Composable
+fun EditorSymbolBar(
+    onInsert: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(CustomColors.topBarColors.containerColor)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SymbolKeys.forEach { key ->
+            val isTab = key == TAB_KEY
+            Surface(
+                onClick = { onInsert(key) },
+                shape = MaterialTheme.shapes.small,
+                color = if (isTab) MaterialTheme.colorScheme.surfaceContainerHigh
+                else MaterialTheme.colorScheme.surfaceContainerLowest,
+            ) {
+                Text(
+                    text = if (isTab) stringResource(R.string.code_editor_key_tab) else key,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 26.dp)
+                        .padding(horizontal = 6.dp, vertical = 8.dp),
+                )
             }
         }
     }
