@@ -99,11 +99,38 @@ private suspend fun publishEditFiles(context: Context, snapshotId: String, prepa
     return parseTermuxEditPublish((capture as CaptureResult.Success).stdout, snapshotId, prepared.map { Triple(it.snapshot.actualPath, it.snapshot.sha256, it.resultSha256) })
 }
 
-private fun diagnosticJson(value: TermuxEditDiagnostic) = buildJsonObject {
+internal fun diagnosticJson(value: TermuxEditDiagnostic) = buildJsonObject {
     put("index", value.index); put("mode", value.mode); put("status", value.status); put("matched", value.matched)
     value.strategy?.let { put("strategy", it) }; value.reason?.let { put("reason", it) }
     if (value.candidateLines.isNotEmpty()) put("candidate_lines", buildJsonArray { value.candidateLines.take(5).forEach { (line, text) -> add(buildJsonObject { put("line", line); put("text", text) }) } })
     value.closestLine?.let { put("closest_match_line", it) }; value.similarity?.let { put("similarity", it) }; value.nearbyText?.let { put("nearby_text", it.take(MAX_TERMUX_EDIT_DIAGNOSTIC_CHARS)) }
+    value.candidateStartLine?.let { put("candidate_start_line", it) }; value.candidateEndLine?.let { put("candidate_end_line", it) }
+    value.firstDiffLine?.let { put("first_diff_line", it) }
+    value.firstDiffExpected?.let { put("first_diff_expected", it) }; value.firstDiffActual?.let { put("first_diff_actual", it) }
+    value.firstDiffInvisiblesOnly?.let { put("first_diff_invisibles_only", it) }
+}
+
+/**
+ * Adds failed_edits / validated_edit_count / failed_edit_count to a failure envelope so an
+ * atomic_edit_aborted batch answers "which edits validated and which failed, and why" in one
+ * read. Internal (not private) so the pure-JVM suite can pin the shape without a Context.
+ */
+internal fun kotlinx.serialization.json.JsonObjectBuilder.appendEditFailureEnumeration(
+    perFile: List<Pair<String, List<TermuxEditDiagnostic>>>,
+) {
+    put("failed_edits", buildJsonArray {
+        perFile.forEach { (path, diagnostics) ->
+            diagnostics.filter { it.status == "failed" }.forEach { diagnostic ->
+                add(buildJsonObject {
+                    put("path", path); put("edit_index", diagnostic.index)
+                    put("reason", diagnostic.reason ?: "failed")
+                    diagnostic.firstDiffLine?.let { put("first_diff_line", it) }
+                })
+            }
+        }
+    })
+    put("validated_edit_count", perFile.sumOf { (_, diagnostics) -> diagnostics.count { it.matched && it.status != "failed" } })
+    put("failed_edit_count", perFile.sumOf { (_, diagnostics) -> diagnostics.count { it.status == "failed" } })
 }
 
 private const val EDIT_BOUNDARY = "Each file replacement is atomic. A crash between batch renames is not fully atomic without a WAL; an uncooperative same-UID writer can race the final check-to-rename interval."
@@ -328,6 +355,11 @@ private fun response(request: TermuxEditRequest, prepared: List<PreparedTermuxEd
     put("state", when { !success -> "error"; dryRun -> "dry_run"; applied -> "applied"; else -> "no_change" })
     put("diff_truncated", diffTruncated)
     putNullableString("error", error)
+    // Enumerate per-edit validation outcomes on batch failure so the agent can see, in one
+    // read, which edits validated and which failed (with reasons) without walking files[].
+    if (error == "atomic_edit_aborted") {
+        appendEditFailureEnumeration(prepared.map { it.request.path to it.outcome.diagnostics })
+    }
     if (request.single) {
         val item = bounded.single(); val pub = published?.items?.single(); put("path", item.request.path); put("actual_path", item.snapshot.actualPath); put("replacements", item.outcome.diagnostics.count { it.status == "applied" })
         put("source_sha256", item.snapshot.sha256)
@@ -393,8 +425,12 @@ private fun editsArraySchema() = buildJsonObject { put("type", "array"); put("mi
 private fun expectedShaSchema() = buildJsonObject { put("type", buildJsonArray { add("string"); add("null") }); put("pattern", "^[0-9a-f]{64}$") }
 private fun fileSpecSchema() = buildJsonObject { put("type", "object"); put("properties", buildJsonObject { put("path", buildJsonObject { put("type", "string") }); put("edits", editsArraySchema()); put("expected_sha256", expectedShaSchema()) }); put("required", buildJsonArray { add("path"); add("edits") }); put("additionalProperties", false) }
 
+internal const val TERMUX_EDIT_FILE_TOOL_DESCRIPTION = "Atomically edit one existing strict UTF-8 Termux file without creating it. Matches are unique exact, Unicode-normalized, or indent-insensitive spans resolved against the original source. ALL match_text values in one call are matched against the ORIGINAL file content, never against the result of earlier edits in the same call; edits whose match regions overlap (or insert at the same position) are rejected, and the whole call is atomic: if any edit fails, nothing is applied and the failure enumerates every edit's outcome, the closest candidate region, and the first differing line with invisible characters escaped. Dry-run validates and returns a bounded unified diff. Apply preserves mode, BOM, mixed LF/CRLF/CR separators outside edited spans, and final-newline state with source SHA revalidation."
+
+internal const val TERMUX_EDIT_FILES_TOOL_DESCRIPTION = "Transactionally edit 1 to 20 existing strict UTF-8 Termux files. ALL match_text values are matched against each file's ORIGINAL content, never against the result of earlier edits in the same call; edits whose match regions overlap are rejected. The batch is all-or-nothing: if any edit in any file fails validation, no file is modified and the error enumerates per-edit outcomes (failed_edits with reasons, closest candidate region, and first differing line with invisibles escaped) so failing files can be fixed and resubmitted alone. All files validate and stage before publication; each replacement is atomic and a later publication failure triggers verified best-effort rollback of earlier replacements."
+
 fun termuxEditFileTool(context: Context): Tool = Tool(
-    name = "termux_edit_file", description = "Atomically edit one existing strict UTF-8 Termux file without creating it. Matches are unique exact, Unicode-normalized, or indent-insensitive spans resolved against the original source. Dry-run validates and returns a bounded unified diff. Apply preserves mode, BOM, mixed LF/CRLF/CR separators outside edited spans, and final-newline state with source SHA revalidation.",
+    name = "termux_edit_file", description = TERMUX_EDIT_FILE_TOOL_DESCRIPTION,
     parameters = { InputSchema.Obj(buildJsonObject { put("path", buildJsonObject { put("type", "string") }); put("edits", editsArraySchema()); put("dry_run", buildJsonObject { put("type", "boolean"); put("default", false) }); put("expected_sha256", expectedShaSchema()) }, listOf("path", "edits"), additionalProperties = false) },
     execute = { input ->
         val requestedDryRun = (input as? kotlinx.serialization.json.JsonObject)?.get("dry_run")
@@ -406,7 +442,7 @@ fun termuxEditFileTool(context: Context): Tool = Tool(
     },
 )
 fun termuxEditFilesTool(context: Context): Tool = Tool(
-    name = "termux_edit_files", description = "Transactionally edit 1 to 20 existing strict UTF-8 Termux files. All files validate and stage before publication; each replacement is atomic and a later publication failure triggers verified best-effort rollback of earlier replacements.",
+    name = "termux_edit_files", description = TERMUX_EDIT_FILES_TOOL_DESCRIPTION,
     parameters = { InputSchema.Obj(buildJsonObject { put("files", buildJsonObject { put("type", "array"); put("minItems", 1); put("maxItems", MAX_TERMUX_EDIT_FILES); put("items", fileSpecSchema()) }); put("dry_run", buildJsonObject { put("type", "boolean"); put("default", false) }) }, listOf("files"), additionalProperties = false) },
     execute = { input ->
         val requestedDryRun = (input as? kotlinx.serialization.json.JsonObject)?.get("dry_run")

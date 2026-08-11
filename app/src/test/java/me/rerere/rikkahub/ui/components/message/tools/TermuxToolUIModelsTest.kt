@@ -282,6 +282,23 @@ class TermuxToolUIModelsTest {
     }
 
     @Test
+    fun failedEditEnvelopeWithFirstDiffAndEnumerationFieldsStillParses() {
+        val sha = "a".repeat(64)
+        val model = parseTermuxEditUIModel(
+            "termux_edit_file",
+            json("""{"path":"a.kt","edits":[{"mode":"replace_match","match_text":"gama","write_text":"M"}]}"""),
+            json(
+                """{"success":false,"ok":false,"applied":false,"changed":false,"dry_run":false,"batch_aborted":true,"state":"error","error":"atomic_edit_aborted","diff_truncated":false,"path":"a.kt","actual_path":"/a.kt","replacements":0,"source_sha256":"$sha","result_sha256":"$sha","diff":null,"results":[{"index":0,"mode":"replace_match","status":"failed","matched":false,"reason":"match_not_found","closest_match_line":3,"similarity":0.857,"candidate_start_line":3,"candidate_end_line":3,"first_diff_line":3,"first_diff_expected":"gama","first_diff_actual":"gamma","first_diff_invisibles_only":false}],"failed_edits":[{"path":"a.kt","edit_index":0,"reason":"match_not_found","first_diff_line":3}],"validated_edit_count":0,"failed_edit_count":1}""",
+            ),
+            null,
+        )!!
+        assertEquals("atomic_edit_aborted", model.error)
+        val diagnostic = model.files.single().diagnostics.single()
+        assertTrue(diagnostic.contains("match_not_found"))
+        assertTrue(diagnostic.contains("closest line 3"))
+    }
+
+    @Test
     fun diffPreviewBudgetIsSharedAcrossFiles() {
         val first = (1..500).joinToString("\n") { "+first$it" }
         val second = (1..500).joinToString("\n") { "+second$it" }

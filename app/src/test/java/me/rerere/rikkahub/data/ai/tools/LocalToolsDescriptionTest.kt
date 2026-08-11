@@ -6,6 +6,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.ai.tools.local.TERMUX_EDIT_FILES_TOOL_DESCRIPTION
+import me.rerere.rikkahub.data.ai.tools.local.TERMUX_EDIT_FILE_TOOL_DESCRIPTION
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,6 +52,18 @@ class LocalToolsDescriptionTest {
         val result = appendTopToolExample(tool)
 
         assertEquals(tool.description, result.description)
+    }
+
+    @Test
+    fun `termux edit tool descriptions document the original-source batch model`() {
+        for (description in listOf(TERMUX_EDIT_FILE_TOOL_DESCRIPTION, TERMUX_EDIT_FILES_TOOL_DESCRIPTION)) {
+            assertTrue(description.contains("ORIGINAL"))
+            assertTrue(description.contains("never against the result of earlier edits"))
+            assertTrue(description.contains("overlap"))
+        }
+        assertTrue(TERMUX_EDIT_FILE_TOOL_DESCRIPTION.contains("the whole call is atomic"))
+        assertTrue(TERMUX_EDIT_FILES_TOOL_DESCRIPTION.contains("all-or-nothing"))
+        assertTrue(TERMUX_EDIT_FILES_TOOL_DESCRIPTION.contains("failed_edits"))
     }
 
     @Test

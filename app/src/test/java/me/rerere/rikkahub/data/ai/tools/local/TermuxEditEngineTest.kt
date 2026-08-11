@@ -3,6 +3,11 @@ package me.rerere.rikkahub.data.ai.tools.local
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -119,6 +124,76 @@ class TermuxEditEngineTest {
         val missing = applyTermuxEdits((1..20).joinToString("\n") { "line $it" }, listOf(edit(TermuxEditMode.REPLACE, "line xx", "x")))
         assertFalse(missing.success)
         assertTrue((missing.diagnostics.single().nearbyText?.length ?: 0) <= MAX_TERMUX_EDIT_DIAGNOSTIC_CHARS)
+    }
+
+    @Test fun missingMatchReportsCandidateRegionAndFirstDifferingLine() {
+        val source = "alpha\nbeta\ngamma\ndelta\n"
+        val result = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "beta\ngama\ndelta", "x")))
+        assertFalse(result.success)
+        val diagnostic = result.diagnostics.single()
+        assertEquals("match_not_found", diagnostic.reason)
+        assertEquals(2, diagnostic.candidateStartLine)
+        assertEquals(4, diagnostic.candidateEndLine)
+        assertEquals(3, diagnostic.firstDiffLine)
+        assertEquals("gama", diagnostic.firstDiffExpected)
+        assertEquals("gamma", diagnostic.firstDiffActual)
+        assertEquals(false, diagnostic.firstDiffInvisiblesOnly)
+
+        // Postmortem case: match text over-escapes a quote (\\' in match vs \' in file).
+        val escaped = applyTermuxEdits(
+            "header\nprint('\\'')\nfooter\n",
+            listOf(edit(TermuxEditMode.REPLACE, "header\nprint('\\\\'')\nfooter", "x")),
+        )
+        assertFalse(escaped.success)
+        val escapedDiagnostic = escaped.diagnostics.single()
+        assertEquals("match_not_found", escapedDiagnostic.reason)
+        assertEquals(2, escapedDiagnostic.firstDiffLine)
+        assertEquals("print('\\\\\\\\'')", escapedDiagnostic.firstDiffExpected)
+        assertEquals("print('\\\\'')", escapedDiagnostic.firstDiffActual)
+    }
+
+    @Test fun invisiblesOnlyMismatchRendersOffendingBytesVisibly() {
+        val result = applyTermuxEdits("foo\u200bbar\n", listOf(edit(TermuxEditMode.REPLACE, "foo bar", "x")))
+        assertFalse(result.success)
+        val diagnostic = result.diagnostics.single()
+        assertEquals("match_not_found", diagnostic.reason)
+        assertEquals(1, diagnostic.firstDiffLine)
+        assertEquals(true, diagnostic.firstDiffInvisiblesOnly)
+        assertEquals("foo\\u0020bar", diagnostic.firstDiffExpected)
+        assertEquals("foo\\u200bbar", diagnostic.firstDiffActual)
+
+        assertEquals("a\\tb\\\\c", renderTermuxEditVisibleLine("a\tb\\c"))
+        assertEquals("a\\u0020b", renderTermuxEditVisibleLine("a b", escapeSpaces = true))
+        assertEquals("nbsp\\u00a0end", renderTermuxEditVisibleLine("nbsp\u00a0end"))
+    }
+
+    @Test fun batchFailureEnumerationListsValidatedAndFailedEdits() {
+        val healthy = applyTermuxEdits("alpha beta", listOf(edit(TermuxEditMode.REPLACE, "alpha", "A")))
+        assertTrue(healthy.success)
+        val failing = applyTermuxEdits("gamma\ndelta\n", listOf(
+            edit(TermuxEditMode.REPLACE, "gamma", "G"),
+            edit(TermuxEditMode.REPLACE, "gama\ndelta", "M"),
+        ))
+        assertFalse(failing.success)
+
+        val envelope = buildJsonObject {
+            appendEditFailureEnumeration(listOf("a.kt" to healthy.diagnostics, "b.kt" to failing.diagnostics))
+        }
+        val failed = envelope["failed_edits"]!!.jsonArray
+        assertEquals(1, failed.size)
+        val entry = failed.single().jsonObject
+        assertEquals("b.kt", entry["path"]!!.jsonPrimitive.content)
+        assertEquals(1, entry["edit_index"]!!.jsonPrimitive.int)
+        assertEquals("match_not_found", entry["reason"]!!.jsonPrimitive.content)
+        assertEquals(1, entry["first_diff_line"]!!.jsonPrimitive.int)
+        assertEquals(2, envelope["validated_edit_count"]!!.jsonPrimitive.int)
+        assertEquals(1, envelope["failed_edit_count"]!!.jsonPrimitive.int)
+
+        val diagnosticEnvelope = diagnosticJson(failing.diagnostics[1])
+        assertEquals("match_not_found", diagnosticEnvelope["reason"]!!.jsonPrimitive.content)
+        assertEquals(1, diagnosticEnvelope["first_diff_line"]!!.jsonPrimitive.int)
+        assertEquals("gama", diagnosticEnvelope["first_diff_expected"]!!.jsonPrimitive.content)
+        assertEquals("gamma", diagnosticEnvelope["first_diff_actual"]!!.jsonPrimitive.content)
     }
 
     @Test fun strictBytesPreserveBomMixedSeparatorsFinalNewlineAndNoOpIdentity() {

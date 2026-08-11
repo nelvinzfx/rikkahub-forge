@@ -54,6 +54,12 @@ internal data class TermuxEditDiagnostic(
     val closestLine: Int? = null,
     val similarity: Double? = null,
     val nearbyText: String? = null,
+    val candidateStartLine: Int? = null,
+    val candidateEndLine: Int? = null,
+    val firstDiffLine: Int? = null,
+    val firstDiffExpected: String? = null,
+    val firstDiffActual: String? = null,
+    val firstDiffInvisiblesOnly: Boolean? = null,
 )
 
 internal data class TermuxEditOutcome(
@@ -591,6 +597,109 @@ private fun closest(content: String, search: String, lines: LineIndex, budget: T
     }.take(MAX_TERMUX_EDIT_DIAGNOSTIC_CHARS)
     return Triple(bestIndex + 1, (best * 1000).toInt() / 1000.0, excerpt)
 }
+private data class TermuxEditMatchDiff(
+    val candidateStartLine: Int,
+    val candidateEndLine: Int,
+    val firstDiffLine: Int,
+    val expected: String,
+    val actual: String?,
+    val invisiblesOnly: Boolean,
+)
+
+private const val MAX_TERMUX_EDIT_FIRST_DIFF_UNITS = 8L * 1024 * 1024
+private const val MAX_TERMUX_EDIT_VISIBLE_LINE_CHARS = 240
+
+/**
+ * Renders a line so a failed match can be understood in one read: backslashes are doubled,
+ * tabs/CRs/control characters and non-ASCII whitespace become explicit escapes, and when
+ * [escapeSpaces] is set (invisibles-only mismatches) even plain spaces become \u0020 so the
+ * offending bytes are visible without re-reading the file.
+ */
+internal fun renderTermuxEditVisibleLine(value: String, escapeSpaces: Boolean = false): String {
+    val boundedInput = value.take(MAX_TERMUX_EDIT_VISIBLE_LINE_CHARS)
+    val out = StringBuilder(boundedInput.length + 16)
+    for (c in boundedInput) {
+        when {
+            c == '\\' -> out.append("\\\\")
+            c == '\t' -> out.append("\\t")
+            c == '\r' -> out.append("\\r")
+            c == ' ' && escapeSpaces -> out.append("\\u0020")
+            c.isISOControl() || isTermuxEditInvisibleChar(c) ->
+                out.append(String.format(Locale.ROOT, "\\u%04x", c.code))
+            else -> out.append(c)
+        }
+    }
+    if (value.length > boundedInput.length) out.append("...")
+    return out.toString()
+}
+
+/**
+ * Whitespace variants, Unicode space separators (nbsp is not Char.isWhitespace), and
+ * zero-width FORMAT-category characters: all invisible in a terminal yet break exact matching.
+ */
+private fun isTermuxEditInvisibleChar(c: Char): Boolean = c != ' ' &&
+    (c.isWhitespace() || Character.isSpaceChar(c) || Character.getType(c) == Character.FORMAT.toInt())
+
+/**
+ * Reporting-only diagnostics for match_not_found: finds the candidate line window that agrees
+ * with the most match_text lines (indent-insensitive, like the matcher's most lenient strategy)
+ * and pinpoints the first line where the window diverges. Runs on its own bounded budget and
+ * never touches the shared work budget, so it cannot change matching behavior; on budget
+ * exhaustion it degrades to the best window found so far or the similarity anchor.
+ */
+private fun firstTermuxEditDifference(
+    content: String,
+    search: String,
+    lines: LineIndex,
+    fallbackAnchorLine: Int?,
+): TermuxEditMatchDiff? {
+    if (lines.size > MAX_TERMUX_EDIT_DIAGNOSTIC_LINES) return null
+    val targetLines = search.split('\n')
+    val trimmedTargets = targetLines.map { it.trim() }
+    var bestStart = -1
+    var bestMatched = 0
+    try {
+        val budget = TermuxEditWorkBudget(MAX_TERMUX_EDIT_FIRST_DIFF_UNITS)
+        val targetWork = trimmedTargets.sumOf { it.length.toLong() + 1L }
+        for (start in 0 until lines.size) {
+            budget.consume(targetWork)
+            var matched = 0
+            for (offset in targetLines.indices) {
+                val lineIndex = start + offset
+                if (lineIndex < lines.size &&
+                    lineEqualsTrimmed(content, lines.starts[lineIndex], lines.ends[lineIndex], trimmedTargets[offset])
+                ) matched++
+            }
+            if (matched > bestMatched) { bestMatched = matched; bestStart = start }
+        }
+    } catch (_: WorkBudgetExceeded) {
+        // keep the best window found before the diagnostic budget ran out
+    }
+    val anchor = if (bestStart >= 0) bestStart else fallbackAnchorLine?.minus(1)
+    if (anchor == null || anchor < 0 || anchor >= lines.size) return null
+    var diffOffset = -1
+    for (offset in targetLines.indices) {
+        val lineIndex = anchor + offset
+        val equal = lineIndex < lines.size &&
+            lineEqualsTrimmed(content, lines.starts[lineIndex], lines.ends[lineIndex], trimmedTargets[offset])
+        if (!equal) { diffOffset = offset; break }
+    }
+    if (diffOffset < 0) return null
+    val diffLineIndex = anchor + diffOffset
+    val expectedRaw = targetLines[diffOffset]
+    val actualRaw = if (diffLineIndex < lines.size) content.substring(lines.starts[diffLineIndex], lines.ends[diffLineIndex]) else null
+    fun visibleOnly(value: String) = value.filterNot { it == ' ' || it.isISOControl() || isTermuxEditInvisibleChar(it) }
+    val invisiblesOnly = actualRaw != null && expectedRaw != actualRaw &&
+        visibleOnly(expectedRaw) == visibleOnly(actualRaw)
+    return TermuxEditMatchDiff(
+        candidateStartLine = anchor + 1,
+        candidateEndLine = minOf(anchor + targetLines.size, lines.size),
+        firstDiffLine = diffLineIndex + 1,
+        expected = renderTermuxEditVisibleLine(expectedRaw, invisiblesOnly),
+        actual = actualRaw?.let { renderTermuxEditVisibleLine(it, invisiblesOnly) },
+        invisiblesOnly = invisiblesOnly,
+    )
+}
 
 private fun similarity(a: String, b: String): Double {
     if (a == b) return 1.0
@@ -638,7 +747,17 @@ internal fun applyTermuxEdits(
                 found.isEmpty() -> {
                     failed = true
                     val near = closest(original, edit.matchText, matcher.lineIndex(), budget)
-                    diagnostics += TermuxEditDiagnostic(index, edit.mode.wireName, "failed", false, reason = "match_not_found", closestLine = near.first, similarity = near.second, nearbyText = near.third)
+                    val firstDiff = firstTermuxEditDifference(original, edit.matchText, matcher.lineIndex(), near.first)
+                    diagnostics += TermuxEditDiagnostic(
+                        index, edit.mode.wireName, "failed", false, reason = "match_not_found",
+                        closestLine = near.first, similarity = near.second, nearbyText = near.third,
+                        candidateStartLine = firstDiff?.candidateStartLine,
+                        candidateEndLine = firstDiff?.candidateEndLine,
+                        firstDiffLine = firstDiff?.firstDiffLine,
+                        firstDiffExpected = firstDiff?.expected,
+                        firstDiffActual = firstDiff?.actual,
+                        firstDiffInvisiblesOnly = firstDiff?.invisiblesOnly,
+                    )
                 }
                 else -> {
                     val match = found.single()
