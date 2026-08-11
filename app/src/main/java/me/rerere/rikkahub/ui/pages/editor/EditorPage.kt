@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.EditorSearcher
@@ -87,12 +88,13 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
     val activeTabUri by vm.activeTabUri.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val editTick by vm.editTick.collectAsStateWithLifecycle()
+    val externalChangeUri by vm.externalChangeUri.collectAsStateWithLifecycle()
 
     val activeTab = openTabs.firstOrNull { it.uri == activeTabUri }
     var pendingClose by remember { mutableStateOf<EditorTab?>(null) }
     var editor by remember { mutableStateOf<CodeEditor?>(null) }
     var showOverflow by remember { mutableStateOf(false) }
-    var wordWrap by remember { mutableStateOf(false) }
+    val wordWrap = settings.codeEditorWordWrap
 
     // search state
     var searchOpen by remember { mutableStateOf(false) }
@@ -125,6 +127,16 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
 
     LaunchedEffect(Unit) { vm.initFromSettings() }
     LaunchedEffect(settings.codeEditorShowHidden) { vm.onShowHiddenChanged() }
+
+    // watch open files for external edits while visible; parking the page
+    // (navigation / background) flushes drafts + session so nothing is lost
+    LifecycleResumeEffect(Unit) {
+        vm.startPolling()
+        onPauseOrDispose {
+            vm.stopPolling()
+            vm.flushNow()
+        }
+    }
 
     // auto-open the files drawer once when a root exists and nothing is open
     LaunchedEffect(rootName, activeTabUri) {
@@ -323,8 +335,7 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                                                 },
                                                 onClick = {
                                                     showOverflow = false
-                                                    wordWrap = !wordWrap
-                                                    editor?.setWordwrap(wordWrap)
+                                                    vm.toggleWordWrap()
                                                 }
                                             )
                                         }
@@ -425,6 +436,7 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                                 EditorSurface(
                                     tab = activeTab,
                                     darkTheme = isSystemInDarkTheme(),
+                                    wordWrap = wordWrap,
                                     vm = vm,
                                     onEditorChange = { editor = it },
                                     modifier = Modifier.fillMaxSize(),
@@ -467,6 +479,36 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                     }
                 }
             }
+        }
+    }
+
+    // external-change conflict: only renders when the conflicted tab is the
+    // active one; background tabs hold their flag until switched to
+    externalChangeUri?.takeIf { it == activeTabUri }?.let { uri ->
+        openTabs.firstOrNull { it.uri == uri }?.let { tab ->
+            AlertDialog(
+                onDismissRequest = { vm.keepLocalContent() },
+                title = { Text(stringResource(R.string.code_editor_external_change_title)) },
+                text = {
+                    Text(
+                        stringResource(
+                            if (tab.dirty) R.string.code_editor_external_change_msg_dirty
+                            else R.string.code_editor_external_change_msg,
+                            tab.name,
+                        )
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { vm.reloadActiveFromDisk() }) {
+                        Text(stringResource(R.string.code_editor_reload))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { vm.keepLocalContent() }) {
+                        Text(stringResource(R.string.code_editor_cancel))
+                    }
+                },
+            )
         }
     }
 
@@ -540,6 +582,11 @@ private fun NoticeBar(
         is EditorNotice.Error -> stringResource(R.string.code_editor_notice_error, notice.name)
         is EditorNotice.Saved -> stringResource(R.string.code_editor_notice_saved, notice.name)
         is EditorNotice.SaveFailed -> stringResource(R.string.code_editor_save_failed, notice.name)
+        is EditorNotice.FileMissing -> stringResource(R.string.code_editor_notice_missing, notice.name)
+        is EditorNotice.RestoreDropped -> stringResource(
+            R.string.code_editor_restore_dropped,
+            notice.names.joinToString(", "),
+        )
         EditorNotice.None -> ""
     }
     Surface(

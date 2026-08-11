@@ -7,6 +7,7 @@ import me.rerere.rikkahub.ui.pages.chat.ChatDrawerVM
 import me.rerere.rikkahub.ui.pages.chat.ChatVM
 import me.rerere.rikkahub.ui.pages.debug.DebugVM
 import me.rerere.rikkahub.ui.pages.developer.DeveloperVM
+import me.rerere.rikkahub.ui.pages.editor.EditorSessionStore
 import me.rerere.rikkahub.ui.pages.editor.EditorVM
 import me.rerere.rikkahub.ui.pages.favorite.FavoriteVM
 import me.rerere.rikkahub.ui.pages.search.SearchVM
@@ -49,7 +50,8 @@ val viewModelModule = module {
         )
     }
     viewModelOf(::ChatDrawerVM)
-    viewModel { EditorVM(context = get(), settingsStore = get()) }
+    single { EditorSessionStore.create(context = get()) }
+    viewModel { EditorVM(context = get(), settingsStore = get(), sessionStore = get()) }
     viewModelOf(::SettingVM)
     viewModelOf(::DebugVM)
     viewModelOf(::DeveloperVM)

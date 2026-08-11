@@ -118,6 +118,8 @@ class SettingsStore(
         val CODE_EDITOR_ENABLED = booleanPreferencesKey("code_editor_enabled")
         val CODE_EDITOR_TREE_URI = stringPreferencesKey("code_editor_tree_uri")
         val CODE_EDITOR_SHOW_HIDDEN = booleanPreferencesKey("code_editor_show_hidden")
+        val CODE_EDITOR_AUTO_SAVE = booleanPreferencesKey("code_editor_auto_save")
+        val CODE_EDITOR_WORD_WRAP = booleanPreferencesKey("code_editor_word_wrap")
 
         // 模型选择
         val ENABLE_WEB_SEARCH = booleanPreferencesKey("enable_web_search")
@@ -253,6 +255,8 @@ class SettingsStore(
                 codeEditorEnabled = preferences[CODE_EDITOR_ENABLED] == true,
                 codeEditorTreeUri = preferences[CODE_EDITOR_TREE_URI],
                 codeEditorShowHidden = preferences[CODE_EDITOR_SHOW_HIDDEN] == true,
+                codeEditorAutoSave = preferences[CODE_EDITOR_AUTO_SAVE] == true,
+                codeEditorWordWrap = preferences[CODE_EDITOR_WORD_WRAP] == true,
                 displaySetting = JsonInstant.decodeFromString(preferences[DISPLAY_SETTING] ?: "{}"),
                 searchServices = preferences[SEARCH_SERVICES]?.let {
                     JsonInstant.decodeFromString(it)
@@ -476,6 +480,8 @@ class SettingsStore(
             settings.codeEditorTreeUri?.let { preferences[CODE_EDITOR_TREE_URI] = it }
                 ?: preferences.remove(CODE_EDITOR_TREE_URI)
             preferences[CODE_EDITOR_SHOW_HIDDEN] = settings.codeEditorShowHidden
+            preferences[CODE_EDITOR_AUTO_SAVE] = settings.codeEditorAutoSave
+            preferences[CODE_EDITOR_WORD_WRAP] = settings.codeEditorWordWrap
             preferences[DISPLAY_SETTING] = JsonInstant.encodeToString(settings.displaySetting)
 
             preferences[ENABLE_WEB_SEARCH] = settings.enableWebSearch
@@ -640,6 +646,8 @@ data class Settings(
     val codeEditorEnabled: Boolean = false,
     val codeEditorTreeUri: String? = null,
     val codeEditorShowHidden: Boolean = false,
+    val codeEditorAutoSave: Boolean = false,
+    val codeEditorWordWrap: Boolean = false,
     val displaySetting: DisplaySetting = DisplaySetting(),
     val enableWebSearch: Boolean = false,
     val favoriteModels: List<Uuid> = emptyList(),

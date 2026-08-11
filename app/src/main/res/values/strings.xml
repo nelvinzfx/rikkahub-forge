@@ -1749,6 +1749,14 @@
   <string name="code_editor_browse_files">Browse files</string>
   <string name="code_editor_no_tab">Open a file from the files drawer.</string>
   <string name="code_editor_change_folder">Change folder</string>
+  <string name="code_editor_external_change_title">File changed on disk</string>
+  <string name="code_editor_external_change_msg">%1$s was modified outside the editor. Reload from disk?</string>
+  <string name="code_editor_external_change_msg_dirty">%1$s was modified outside the editor and has unsaved changes. Reloading discards your edits.</string>
+  <string name="code_editor_reload">Reload</string>
+  <string name="code_editor_notice_missing">%1$s no longer exists on disk</string>
+  <string name="code_editor_restore_dropped">Some tabs could not be restored: %1$s</string>
+  <string name="code_editor_auto_save">Auto save</string>
+  <string name="code_editor_auto_save_desc">Write changes to disk automatically, a moment after you stop typing</string>
   <string name="chat_drawer_selected_count">%1$d selected</string>
   <string name="chat_drawer_select_all">Select all</string>
   <string name="chat_drawer_deselect_all">Deselect all</string>

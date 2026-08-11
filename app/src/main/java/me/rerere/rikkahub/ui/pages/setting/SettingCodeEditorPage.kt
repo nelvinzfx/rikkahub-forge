@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Code
+import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.View
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -93,6 +94,23 @@ fun SettingCodeEditorPage(vm: SettingVM = koinViewModel()) {
                                 checked = settings.codeEditorShowHidden,
                                 onCheckedChange = {
                                     vm.updateSettings(settings.copy(codeEditorShowHidden = it))
+                                },
+                                size = SwitchSize.Small
+                            )
+                        },
+                    )
+                    item(
+                        onClick = {
+                            vm.updateSettings(settings.copy(codeEditorAutoSave = !settings.codeEditorAutoSave))
+                        },
+                        leadingContent = { Icon(HugeIcons.Download01, null) },
+                        headlineContent = { Text(stringResource(R.string.code_editor_auto_save)) },
+                        supportingContent = { Text(stringResource(R.string.code_editor_auto_save_desc)) },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.codeEditorAutoSave,
+                                onCheckedChange = {
+                                    vm.updateSettings(settings.copy(codeEditorAutoSave = it))
                                 },
                                 size = SwitchSize.Small
                             )

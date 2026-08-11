@@ -39,12 +39,15 @@ import me.rerere.rikkahub.R
  * alive across tab switches; each tab owns its Content document, so undo
  * history and cursor state survive switching. Dirty tracking goes through
  * [EditorVM.onContentChanged] with a swap guard so programmatic setText during
- * tab switches is not counted as an edit.
+ * tab switches is not counted as an edit. [wordWrap] is a persisted setting:
+ * applied at creation, on every document swap (tab switch AND reload-from-disk
+ * via tab.contentVersion), and live when the setting flips.
  */
 @Composable
 fun EditorSurface(
     tab: EditorTab,
     darkTheme: Boolean,
+    wordWrap: Boolean,
     vm: EditorVM,
     onEditorChange: (CodeEditor?) -> Unit,
     modifier: Modifier = Modifier,
@@ -58,6 +61,7 @@ fun EditorSurface(
                 typefaceText = Typeface.createFromAsset(ctx.assets, "fonts/JetBrainsMono-Regular.ttf")
                 EditorTextMate.applyTheme(this, darkTheme)
                 setText(tab.content)
+                setWordwrap(wordWrap)
                 EditorTextMate.languageFor(tab.name)?.let { setEditorLanguage(it) }
                 isEditable = !tab.readOnly
                 subscribeEvent(ContentChangeEvent::class.java) { _, _ -> vm.onContentChanged() }
@@ -77,14 +81,22 @@ fun EditorSurface(
         modifier = modifier,
     )
 
-    LaunchedEffect(tab.uri) {
+    // tab switch OR reload-from-disk (same uri, bumped contentVersion) swaps
+    // the document into the shared view under the swap guard
+    LaunchedEffect(tab.uri, tab.contentVersion) {
         editor?.let { ed ->
             vm.swapGuard.set(true)
             ed.setText(tab.content)
             ed.setEditorLanguage(EditorTextMate.languageFor(tab.name))
             ed.isEditable = !tab.readOnly
+            ed.setWordwrap(wordWrap)
             vm.swapGuard.set(false)
         }
+    }
+
+    // live-apply a wrap toggle from the overflow menu
+    LaunchedEffect(wordWrap) {
+        editor?.setWordwrap(wordWrap)
     }
 }
 
