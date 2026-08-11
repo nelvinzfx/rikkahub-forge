@@ -25,6 +25,8 @@ class EditorSessionCodecTest {
                     hasDraft = true,
                     diskLastModified = 1720000000000L,
                     diskLength = 12345L,
+                    cursorLine = 12,
+                    cursorColumn = 34,
                 ),
                 SessionTab(
                     uri = "content://a/b/d",
@@ -33,6 +35,7 @@ class EditorSessionCodecTest {
                 ),
             ),
             activeUri = "content://a/b/d",
+            expandedDirs = setOf("content://a/b"),
         )
         val decoded = EditorSessionCodec.decode(EditorSessionCodec.encode(session))
         assertEquals(session, decoded)

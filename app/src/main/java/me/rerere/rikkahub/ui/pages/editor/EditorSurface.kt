@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -90,7 +91,30 @@ fun EditorSurface(
             ed.setEditorLanguage(EditorTextMate.languageFor(tab.name))
             ed.isEditable = !tab.readOnly
             ed.setWordwrap(wordWrap)
+            if (tab.applyCursorOnce) {
+                // restored session: put the caret back where it was, clamped
+                // (sora's setSelection has no bounds check)
+                val lineCount = ed.lineCount
+                if (lineCount > 0) {
+                    val line = tab.cursorLine.coerceIn(0, lineCount - 1)
+                    val col = tab.cursorColumn
+                        .coerceAtLeast(0)
+                        .coerceAtMost(ed.text.getLineString(line).length)
+                    ed.setSelection(line, col)
+                }
+                vm.consumePendingCursor(tab.uri)
+            }
             vm.swapGuard.set(false)
+        }
+    }
+
+    // capture the caret when this document leaves the shared view (tab switch,
+    // page dispose) so it survives into the session manifest
+    DisposableEffect(tab.uri, tab.contentVersion) {
+        onDispose {
+            editor?.let { ed ->
+                vm.noteCursorPosition(tab.uri, ed.cursor.leftLine, ed.cursor.leftColumn)
+            }
         }
     }
 

@@ -134,6 +134,10 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
         vm.startPolling()
         onPauseOrDispose {
             vm.stopPolling()
+            // capture the caret before the flush writes the manifest
+            activeTabUri?.let { uri ->
+                editor?.let { vm.noteCursorPosition(uri, it.cursor.leftLine, it.cursor.leftColumn) }
+            }
             vm.flushNow()
         }
     }

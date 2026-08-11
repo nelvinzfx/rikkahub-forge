@@ -11,6 +11,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +58,11 @@ data class EditorTab(
     val contentVersion: Int = 0,
     /** file vanished; polling and auto-save skip this tab */
     val missing: Boolean = false,
+    /** last captured caret position; persisted in the session manifest */
+    val cursorLine: Int = 0,
+    val cursorColumn: Int = 0,
+    /** set on session restore so EditorSurface re-applies the caret once */
+    val applyCursorOnce: Boolean = false,
 )
 
 sealed interface EditorNotice {
@@ -157,8 +165,10 @@ class EditorVM(
                 DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
             }
             loadChildren(uri, force = true)
-            restoreSession()
         }
+        // tabs restore independently of the tree: SAF listing is slow and the
+        // editor surface must not wait for it
+        viewModelScope.launch { restoreSession() }
     }
 
     fun onTreePicked(uri: Uri) {
@@ -199,6 +209,7 @@ class EditorVM(
                 viewModelScope.launch { loadChildren(uri) }
             }
         }
+        persistSessionDebounced()
     }
 
     fun refresh() {
@@ -428,6 +439,19 @@ class EditorVM(
 
     // --- session persistence + auto-save -------------------------------------------
 
+    /** caret capture points: tab switch, page park. persisted with the session */
+    fun noteCursorPosition(uri: String, line: Int, column: Int) {
+        _openTabs.value = _openTabs.value.map {
+            if (it.uri == uri) it.copy(cursorLine = line, cursorColumn = column) else it
+        }
+    }
+
+    fun consumePendingCursor(uri: String) {
+        _openTabs.value = _openTabs.value.map {
+            if (it.uri == uri && it.applyCursorOnce) it.copy(applyCursorOnce = false) else it
+        }
+    }
+
     fun toggleWordWrap() {
         viewModelScope.launch {
             settingsStore.update(
@@ -536,50 +560,45 @@ class EditorVM(
                         hasDraft = tab.uri in draftedUris,
                         diskLastModified = tab.diskSnapshot.lastModified,
                         diskLength = tab.diskSnapshot.length,
+                        cursorLine = tab.cursorLine,
+                        cursorColumn = tab.cursorColumn,
                     )
                 },
                 activeUri = _activeTabUri.value,
+                expandedDirs = _expanded.value,
             )
         )
     }
 
     private suspend fun restoreSession() {
         val session = sessionStore.loadSession() ?: return
+        // tree expansion is session state too; reload the expanded dirs so the
+        // tree comes back the way it was left
+        _expanded.value = session.expandedDirs
+        val root = rootUriString
+        if (root != null && session.expandedDirs.isNotEmpty()) {
+            viewModelScope.launch {
+                for (dir in session.expandedDirs) {
+                    if (dir != root) loadChildren(dir)
+                }
+            }
+        }
         if (session.tabs.isEmpty()) return
+        // per-tab SAF reads are slow; fan them out so open latency is the
+        // slowest single tab, not the sum of all tabs
+        val results = coroutineScope {
+            session.tabs.map { st ->
+                async(Dispatchers.IO) { st to restoreOneTab(st) }
+            }.awaitAll()
+        }
         val restored = mutableListOf<EditorTab>()
         val dropped = mutableListOf<String>()
-        for (st in session.tabs) {
-            val snap = statFile(st.uri)
-            if (st.hasDraft) {
-                val draftText = sessionStore.readDraft(st.uri)
-                if (draftText != null) {
-                    draftedUris += st.uri
-                    restored += EditorTab(
-                        uri = st.uri,
-                        name = st.name,
-                        content = Content(draftText),
-                        readOnly = st.readOnly,
-                        dirty = true,
-                        // keep the PERSISTED snapshot: an external edit made
-                        // while the app was closed is caught by the first poll
-                        // and raised as a dirty conflict
-                        diskSnapshot = DiskSnapshot(st.diskLastModified, st.diskLength),
-                        missing = snap == null,
-                    )
-                } else if (snap != null) {
-                    // draft lost but file alive: fall back to the disk content
-                    val clean = readCleanTab(st, snap)
-                    if (clean != null) restored += clean else dropped += st.name
-                } else {
-                    dropped += st.name
-                }
+        for ((st, tab) in results) {
+            if (tab != null) {
+                restored += tab
+                if (st.hasDraft && tab.dirty) draftedUris += st.uri
             } else {
-                if (snap == null) {
-                    dropped += st.name
-                } else {
-                    val clean = readCleanTab(st, snap)
-                    if (clean != null) restored += clean else dropped += st.name
-                }
+                dropped += st.name
             }
         }
         if (restored.isNotEmpty()) {
@@ -593,6 +612,36 @@ class EditorVM(
         }
     }
 
+    /** rebuilds one persisted tab; null when neither draft nor disk can provide content */
+    private suspend fun restoreOneTab(st: SessionTab): EditorTab? {
+        val snap = statFile(st.uri)
+        if (st.hasDraft) {
+            val draftText = sessionStore.readDraft(st.uri)
+            if (draftText != null) {
+                return EditorTab(
+                    uri = st.uri,
+                    name = st.name,
+                    content = Content(draftText),
+                    readOnly = st.readOnly,
+                    dirty = true,
+                    // keep the PERSISTED snapshot: an external edit made while
+                    // the app was closed is caught by the first poll and raised
+                    // as a dirty conflict
+                    diskSnapshot = DiskSnapshot(st.diskLastModified, st.diskLength),
+                    missing = snap == null,
+                    cursorLine = st.cursorLine,
+                    cursorColumn = st.cursorColumn,
+                    applyCursorOnce = true,
+                )
+            }
+            // draft lost but file alive: fall back to the disk content
+            if (snap != null) return readCleanTab(st, snap)
+            return null
+        }
+        if (snap == null) return null
+        return readCleanTab(st, snap)
+    }
+
     /** re-reads a clean tab from disk; null when the file can no longer be opened */
     private suspend fun readCleanTab(st: SessionTab, snap: DiskSnapshot): EditorTab? =
         when (val result = readUriContents(st.uri)) {
@@ -602,6 +651,9 @@ class EditorVM(
                 content = Content(result.text),
                 readOnly = result.readOnly,
                 diskSnapshot = snap,
+                cursorLine = st.cursorLine,
+                cursorColumn = st.cursorColumn,
+                applyCursorOnce = true,
             )
             else -> null
         }

@@ -19,6 +19,8 @@ data class SessionTab(
     val hasDraft: Boolean = false,
     val diskLastModified: Long = 0L,
     val diskLength: Long = -1L,
+    val cursorLine: Int = 0,
+    val cursorColumn: Int = 0,
 )
 
 @Serializable
@@ -26,6 +28,7 @@ data class EditorSession(
     val version: Int = 1,
     val tabs: List<SessionTab> = emptyList(),
     val activeUri: String? = null,
+    val expandedDirs: Set<String> = emptySet(),
 )
 
 object EditorSessionCodec {
