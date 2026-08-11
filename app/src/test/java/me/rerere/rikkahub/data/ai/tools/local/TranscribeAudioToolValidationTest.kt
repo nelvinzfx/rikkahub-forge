@@ -25,7 +25,7 @@ import java.io.File
  *       wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin`
  *   3. Drop a test voice note at `/sdcard/Download/test_voice.ogg` (export one from Telegram,
  *      or record one with: `termux_run_command "arecord -d 5 /sdcard/Download/test_voice.wav"`).
- *   4. Enable the Termux toggle in Assistant → Local tools.
+ *   4. Termux integration is ON by default; if disabled, enable it in Settings → Termux.
  *   5. Ask the assistant: "Transcribe /sdcard/Download/test_voice.ogg"
  *   6. Approve the tool-call prompt. Expect:
  *      `{"success":true,"text":"...actual words...","language":"en","transcription_time_sec":...}`

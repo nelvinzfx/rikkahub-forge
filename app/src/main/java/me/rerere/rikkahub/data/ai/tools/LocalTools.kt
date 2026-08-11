@@ -114,6 +114,7 @@ import me.rerere.rikkahub.data.ai.tools.local.batchDeleteTool
 import me.rerere.rikkahub.data.ai.tools.local.webFetchTool
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.preferences.TermuxRuntime
 import me.rerere.rikkahub.utils.readClipboardText
 import me.rerere.rikkahub.utils.writeClipboardText
 import java.time.ZonedDateTime
@@ -172,6 +173,9 @@ sealed class LocalToolOption {
     @Serializable @SerialName("telegram_bot")    data object TelegramBot    : LocalToolOption()
     @Serializable @SerialName("screen_automation") data object ScreenAutomation : LocalToolOption()
     @Serializable @SerialName("app_launcher")      data object AppLauncher       : LocalToolOption()
+    // LEGACY: the per-assistant Termux toggle was removed (the integration is now a global
+    // Settings -> Termux switch, default ON). The object stays so old assistants whose stored
+    // localTools still contain "termux" decode cleanly; nothing reads it for gating anymore.
     @Serializable @SerialName("termux")            data object Termux            : LocalToolOption()
     @Serializable @SerialName("notification_listener") data object NotificationListener : LocalToolOption()
     @Serializable @SerialName("files")               data object Files              : LocalToolOption()
@@ -833,7 +837,11 @@ class LocalTools(
             tools.add(me.rerere.rikkahub.data.ai.tools.local.listInstalledAppsTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.openUrlTool(context, invocationContext, interactiveToolStreamer))
         }
-        if (options.contains(LocalToolOption.Termux)) {
+        // Termux group is gated by the GLOBAL integration switch (Settings -> Termux,
+        // default ON) instead of the removed per-assistant LocalToolOption.Termux toggle.
+        // The Termux app-install / RUN_COMMAND permission checks stay inside the individual
+        // tools (TermuxIntegration.state) and are unaffected by this gate.
+        if (TermuxRuntime.integrationEnabled) {
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxRunCommandTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadOutputTool(context))
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileTool(context))
@@ -851,11 +859,11 @@ class LocalTools(
             tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionListTool(context))
             // transcribe_audio_file shells out to whisper-cli via Termux's RUN_COMMAND
             // service — it has a hard transitive dependency on Termux being present. No
-            // separate toggle; it lives under the Termux toggle.
+            // separate switch; it lives under the global Termux integration gate.
             tools.add(transcribeAudioFileTool(context))
             // whisper_status is a free read-only pre-flight check — no approval needed.
             // The LLM calls this BEFORE attempting transcription to know what's set up.
-            tools.add(whisperStatusTool(context, settingsStore))
+            tools.add(whisperStatusTool(context))
         }
         if (options.contains(LocalToolOption.NotificationListener)) {
             tools.add(listRecentNotificationsTool())

@@ -14,6 +14,7 @@ import me.rerere.rikkahub.data.ai.tools.local.NotificationListenerHandle
 import me.rerere.rikkahub.data.ai.tools.local.PermissionHelper
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.preferences.TermuxRuntime
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.ScheduledJobRepository
@@ -56,7 +57,8 @@ private object Capability {
         LocalToolOption.ScreenAutomation,    // take_screenshot, swipe, click_at, scroll, gesture
     )
     val Termux: Set<LocalToolOption> = setOf(
-        LocalToolOption.Termux,
+        LocalToolOption.Termux,              // legacy per-assistant flag (removed from UI; old
+                                             // assistants may still carry it in their localTools)
         LocalToolOption.SpeechToText,        // transcribe_audio_file uses Termux + whisper.cpp
         LocalToolOption.Ssh,                 // ssh_exec calls into termux ssh
     )
@@ -928,9 +930,10 @@ class DoctorChecks(
 
     private fun termuxChecks(enabled: Set<LocalToolOption>): List<DoctorCheck> = buildList {
         val needers = requirersOf(Capability.Termux, enabled)
-        // Skip the entire category when no Termux-using tool is enabled — keeps the
-        // Doctor screen focused on what the user actually configured.
-        if (needers.isEmpty()) return@buildList
+        // The Termux tool group is gated by the GLOBAL integration switch (Settings ->
+        // Termux, default ON), not per-assistant toggles — so the category is relevant
+        // whenever the integration is on, even if no individual tool option needs Termux.
+        if (!TermuxRuntime.integrationEnabled && needers.isEmpty()) return@buildList
 
         val pm = context.packageManager
         val termuxInstalled = runCatching { pm.getPackageInfo("com.termux", 0); true }.getOrDefault(false)
@@ -940,7 +943,9 @@ class DoctorChecks(
                 category = DoctorCategory.Termux,
                 label = "Termux installed",
                 detail = if (termuxInstalled) "com.termux is installed on this device."
-                else "Termux not installed. Required by: ${needers.joinToString(", ") { it.shortName() }}.",
+                else if (needers.isNotEmpty())
+                    "Termux not installed. Required by: ${needers.joinToString(", ") { it.shortName() }}."
+                else "Termux not installed. The Termux integration is enabled in Settings -> Termux.",
                 severity = if (termuxInstalled) Severity.OK else Severity.WARN,
             )
         )
@@ -955,7 +960,7 @@ class DoctorChecks(
                     category = DoctorCategory.Termux,
                     label = "Termux RUN_COMMAND permission",
                     detail = if (runCommandPerm) "Granted — RikkaHub can dispatch shell commands to Termux."
-                    else "Not granted. Re-toggle the Termux row in Local Tools to see the post-grant dialog.",
+                    else "Not granted. Grant it from Settings -> Termux (RUN_COMMAND permission row).",
                     severity = if (runCommandPerm) Severity.OK else Severity.WARN,
                 )
             )

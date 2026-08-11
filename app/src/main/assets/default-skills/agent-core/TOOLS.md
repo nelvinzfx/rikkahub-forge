@@ -47,9 +47,10 @@ Every tool the agent can call, grouped by capability surface. Each entry lists: 
 - **`scan_media`** — tell Android's media scanner about new files so they show up in Gallery / Music.
 - **`download_file`** — fetch URL into Downloads via DownloadManager.
 - **`write_text_file`** — save text to a path. Defaults refuse if file exists.
-- **`whisper_status()`** — check whether whisper.cpp transcription is ready: Termux toggle
-  enabled, Termux app installed, whisper-cli on disk, model (.bin) present. Returns
-  `{termux_enabled_in_assistant, termux_app_installed, whisper_cli_installed, whisper_cli_path,
+- **`whisper_status()`** — check whether whisper.cpp transcription is ready: Termux
+  integration enabled (Settings → Termux, on by default), Termux app installed,
+  whisper-cli on disk, model (.bin) present. Returns
+  `{termux_integration_enabled, termux_app_installed, whisper_cli_installed, whisper_cli_path,
   model_present, model_path, ready_to_transcribe, missing_steps[], install_commands}`.
   Free/no approval. Call this BEFORE `transcribe_audio_file`.
 - **`transcribe_audio_file(path, language?)`** — transcribe speech in an audio file to text
@@ -68,8 +69,8 @@ the FIRST tool you should call is `whisper_status()`. It tells you whether Termu
 enabled, whisper.cpp is installed, and a model is present. Three outcomes:
 
 1. `ready_to_transcribe: true` → call `transcribe_audio_file(path, language?)` directly.
-2. `termux_enabled_in_assistant: false` → tell the user the Termux toggle needs to be on
-   for this assistant in Settings → Local Tools. You cannot enable it for them.
+2. `termux_integration_enabled: false` → tell the user the Termux integration is off
+   globally in Settings → Termux. You cannot enable it for them.
 3. Anything else missing (whisper not installed, model missing) → tell the user what's
    missing AND the install commands from `install_commands`. Ask for explicit confirmation
    BEFORE running them. The whisper.cpp build takes ~5 minutes; the model download is
@@ -144,7 +145,7 @@ Always read the screen *before* gesturing. The right pattern is `read_window_tre
 ## Termux integration
 
 - **`termux_run_command`** — run a shell command in Termux. **Default mode captures output**: the command runs in the background and `stdout` / `stderr` / `exit_code` come back in the JSON envelope so you can reason on them. Examples: *"is python installed?"* → run `which python3 || echo missing`, read stdout, decide. *"how big is my home dir?"* → `du -sh ~`. Pass `interactive=true` for a visible session that the user can watch (no output capture in that mode — only useful when the user wants to see live output or run an interactive program like `nano`).
-  - Setup the user must do once: in Termux run `mkdir -p ~/.termux && echo 'allow-external-apps=true' >> ~/.termux/termux.properties`, then force-stop Termux and reopen it. The toggle row in the assistant Local-tools page has a state indicator (red/orange/yellow/green) and a "tap to verify" affordance that runs an end-to-end smoke test — once it goes green capture mode works.
+  - Setup the user must do once: in Termux run `mkdir -p ~/.termux && echo 'allow-external-apps=true' >> ~/.termux/termux.properties`, then force-stop Termux and reopen it. Settings → Termux has the global on/off switch (on by default) plus status rows with a "tap to verify" affordance that runs an end-to-end smoke test — once it goes green capture mode works.
   - Errors return structured envelopes: `termux_not_installed`, `termux_permission_not_granted`, `termux_permission_denied` (allow-external-apps missing), `timeout`. The recovery field tells the user exactly what to fix; surface it verbatim.
   - **Install source:** ONLY recommend the official GitHub releases page at `https://github.com/termux/termux-app/releases`. Do NOT recommend the Play Store or F-Droid — those builds are unmaintained and have known incompatibilities with newer Android versions. Same applies to addons (Termux:API, Termux:Boot, Termux:Styling, Termux:X11): GitHub releases only.
   - **Local HTTP servers:** When you spin up a server in Termux that the user will hit from a browser on the *same phone*, bind it to `0.0.0.0` and visit `http://127.0.0.1:PORT` — never `localhost`. Some Android browsers and ROMs resolve `localhost` only over IPv6 loopback or fail outright; `127.0.0.1` is reliable. Also `pkill -f <process>` before relaunching, since a recently-killed server can leave the port in TIME_WAIT for ~30s and the new bind silently fails.

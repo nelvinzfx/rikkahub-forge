@@ -1118,26 +1118,10 @@
   <string name="assistant_page_local_tools_app_launcher_desc">فتح التطبيقات المثبتة باسم الحزمة (مثل Termux، الإعدادات) وسرد التطبيقات المتاحة. يقترن بأتمتة الشاشة للتحكم الكامل في الواجهة.</string>
   <string name="assistant_page_local_tools_notifications_title">إدراك الإشعارات</string>
   <string name="assistant_page_local_tools_notifications_desc">السماح للنموذج اللغوي بقراءة الإشعارات الواردة من التطبيقات الأخرى. التطبيقات المدرجة في القائمة البيضاء تُحوَّل أيضًا تلقائيًا إلى دردشة Telegram الافتراضية. كوّن في الإعدادات -&gt; الإشعارات.</string>
-  <string name="assistant_page_local_tools_termux_title">تكامل Termux</string>
-  <string name="assistant_page_local_tools_termux_status_not_installed">Termux غير مثبت - ثبّته من github.com/termux/termux-app/releases</string>
-  <string name="assistant_page_local_tools_termux_status_no_permission">فعّل لمنح إذن RUN_COMMAND</string>
-  <string name="assistant_page_local_tools_termux_status_untested">جاهز تقريبًا. افتح Termux ونفّذ: mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — ثم أوقف Termux إجباريًا وأعد فتحه. انقر للتحقق.</string>
-  <string name="assistant_page_local_tools_termux_status_ok">متصل - تعمل الأوامر مع التقاط الإخراج</string>
-  <string name="assistant_page_local_tools_termux_verify">انقر للتحقق</string>
-  <string name="assistant_page_local_tools_termux_verifying">جارٍ التحقق من التكامل…</string>
-  <string name="assistant_page_local_tools_termux_verify_ok">تم التحقق من تكامل Termux.</string>
-  <string name="assistant_page_local_tools_termux_verify_props_missing">لم يستجب Termux. افتح Termux ونفّذ: mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — ثم أوقف Termux إجباريًا وأعد فتحه.</string>
-  <string name="assistant_page_local_tools_termux_postgrant_title">خطوة أخيرة لـ Termux</string>
-  <string name="assistant_page_local_tools_termux_postgrant_message">تم منح إذن RUN_COMMAND. لا يزال Termux يحتاج إلى `allow-external-apps=true` في `~/.termux/termux.properties` قبل أن يتمكن المساعد من تشغيل الأوامر.\n\nافتح Termux والصق الأمر أدناه، ثم أوقف Termux إجباريًا من معلومات التطبيق وأعد فتحه.\n\nسيتحول الصف إلى الأخضر بعد النقر على «تحقق».</string>
-  <string name="assistant_page_local_tools_termux_postgrant_command">mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copy">نسخ الأمر</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copied">تم نسخ الأمر — الصقه في Termux.</string>
   <string name="assistant_page_local_tools_telegram_notoken_title">بوت Telegram يحتاج إلى رمز</string>
   <string name="assistant_page_local_tools_telegram_notoken_message">المفتاح مُفعَّل، لكن لم يُعيَّن رمز بوت بعد.\n\nالطريقة السهلة: اطلب من المساعد في الدردشة — &quot;أعدّ بوت Telegram، رمزي هو …، معرّف المستخدم الخاص بي …، عيّنّي كدردشة افتراضية، فعّله.&quot;\n\nالطريقة اليدوية: راسل @BotFather على Telegram بـ /newbot للحصول على رمز، و@userinfobot بـ /start لمعرّف المستخدم الرقمي الخاص بك. ثم اطلب من المساعد أو الصقهما في الإعدادات → بوت Telegram.</string>
   <string name="assistant_page_local_tools_cron_jobs_toast_hint">تنبيه: تستخدم المهام المجدوَلة الأدوات التي مكّنتها. إذا استدعت مهمة SSH أو Telegram أو أي أداة أخرى، فيجب أن تكون تلك المفاتيح مُفعَّلة أيضًا.</string>
   <string name="assistant_page_local_tools_dialog_dismiss">فهمت</string>
-  <string name="assistant_page_local_tools_termux_verify_no_permission">إذن RUN_COMMAND غير ممنوح. أوقف Termux ثم فعّله لإعادة محاولة مطالبة النظام.</string>
-  <string name="assistant_page_local_tools_termux_verify_unexpected">رد Termux لكن بإخراج غير متوقع: %1$s</string>
   <string name="assistant_page_local_tools_files_title">الملفات</string>
   <string name="assistant_page_local_tools_files_desc">قراءة الملفات وكتابتها وسردها والبحث فيها ونسخها ونقلها وحذفها.</string>
   <string name="assistant_page_local_tools_section_files">مدير الملفات</string>

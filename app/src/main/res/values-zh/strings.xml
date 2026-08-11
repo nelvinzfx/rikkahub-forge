@@ -1214,22 +1214,6 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="assistant_page_local_tools_telegram_title">Telegram 机器人</string>
   <string name="assistant_page_local_tools_telephony_desc">读取 SIM 卡和网络信息（运营商、网络类型）。需要 READ_PHONE_STATE 权限。</string>
   <string name="assistant_page_local_tools_telephony_title">电话信息</string>
-  <string name="assistant_page_local_tools_termux_postgrant_command">mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copied">命令已复制 — 将其粘贴到 Termux 中。</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copy">复制命令</string>
-  <string name="assistant_page_local_tools_termux_postgrant_message">RUN_COMMAND 权限已授予。在助手能运行命令之前，Termux 还需要在 `~/.termux/termux.properties` 中设置 `allow-external-apps=true`。\n\n打开 Termux 并粘贴下面的命令，然后从应用信息中强制停止 Termux 并重新打开。\n\n点击“验证”后，此行会变为绿色。</string>
-  <string name="assistant_page_local_tools_termux_postgrant_title">Termux 还差一步</string>
-  <string name="assistant_page_local_tools_termux_status_no_permission">打开开关以授予 RUN_COMMAND 权限</string>
-  <string name="assistant_page_local_tools_termux_status_not_installed">未安装 Termux - 从 github.com/termux/termux-app/releases 安装</string>
-  <string name="assistant_page_local_tools_termux_status_ok">已连接 - 命令运行并捕获输出</string>
-  <string name="assistant_page_local_tools_termux_status_untested">即将就绪。打开 Termux 并运行：mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — 然后强制停止 Termux 并重新打开。点击验证。</string>
-  <string name="assistant_page_local_tools_termux_title">Termux 集成</string>
-  <string name="assistant_page_local_tools_termux_verify">点击验证</string>
-  <string name="assistant_page_local_tools_termux_verify_no_permission">未授予 RUN_COMMAND 权限。将 Termux 开关关闭再打开以重试系统提示。</string>
-  <string name="assistant_page_local_tools_termux_verify_ok">Termux 集成已验证。</string>
-  <string name="assistant_page_local_tools_termux_verify_props_missing">Termux 未响应。打开 Termux 并运行：mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — 然后强制停止 Termux 并重新打开。</string>
-  <string name="assistant_page_local_tools_termux_verify_unexpected">Termux 已回复，但输出异常：%1$s</string>
-  <string name="assistant_page_local_tools_termux_verifying">正在验证集成…</string>
   <string name="assistant_page_local_tools_toast_desc">在当前屏幕内容上方显示一个简短的 toast 弹窗。</string>
   <string name="assistant_page_local_tools_toast_title">Toast 提示</string>
   <string name="assistant_page_local_tools_torch_desc">打开或关闭相机闪光灯。</string>

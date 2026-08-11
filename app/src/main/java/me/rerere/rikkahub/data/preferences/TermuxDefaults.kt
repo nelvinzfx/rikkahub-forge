@@ -57,6 +57,11 @@ object TermuxDefaults {
     const val MIN_OUTPUT_TTL_MS = 1L * 60L * 60L * 1_000L
     const val MAX_OUTPUT_TTL_MS = 7L * 24L * 60L * 60L * 1_000L
 
+    // --- Integration master switch -------------------------------------------------------
+    /** ON by default — Termux tools are available to every assistant unless the user
+     *  explicitly disables the integration in Settings -> Termux. */
+    const val DEFAULT_INTEGRATION_ENABLED = true
+
     // --- apt-wrap default ------------------------------------------------------------------
     /** ON by default — preserves the prior behavior for existing users. */
     const val DEFAULT_APT_WRAP_ENABLED = true

@@ -1210,22 +1210,6 @@
   <string name="assistant_page_local_tools_telegram_title">Telegram 機器人</string>
   <string name="assistant_page_local_tools_telephony_desc">讀取 SIM 卡和網路資訊（電信業者、網路類型）。需要 READ_PHONE_STATE 權限。</string>
   <string name="assistant_page_local_tools_telephony_title">電話資訊</string>
-  <string name="assistant_page_local_tools_termux_postgrant_command">mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copied">指令已複製 — 將其貼到 Termux 中。</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copy">複製指令</string>
-  <string name="assistant_page_local_tools_termux_postgrant_message">RUN_COMMAND 權限已授予。在助理能執行指令之前，Termux 還需要在 `~/.termux/termux.properties` 中設定 `allow-external-apps=true`。\n\n開啟 Termux 並貼上下面的指令，然後從應用程式資訊中強制停止 Termux 並重新開啟。\n\n點選「驗證」後，此列會變為綠色。</string>
-  <string name="assistant_page_local_tools_termux_postgrant_title">Termux 還差一步</string>
-  <string name="assistant_page_local_tools_termux_status_no_permission">開啟開關以授予 RUN_COMMAND 權限</string>
-  <string name="assistant_page_local_tools_termux_status_not_installed">未安裝 Termux - 從 github.com/termux/termux-app/releases 安裝</string>
-  <string name="assistant_page_local_tools_termux_status_ok">已連接 - 指令執行並擷取輸出</string>
-  <string name="assistant_page_local_tools_termux_status_untested">即將就緒。開啟 Termux 並執行：mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — 然後強制停止 Termux 並重新開啟。點選驗證。</string>
-  <string name="assistant_page_local_tools_termux_title">Termux 整合</string>
-  <string name="assistant_page_local_tools_termux_verify">點選驗證</string>
-  <string name="assistant_page_local_tools_termux_verify_no_permission">未授予 RUN_COMMAND 權限。將 Termux 開關關閉再開啟以重試系統提示。</string>
-  <string name="assistant_page_local_tools_termux_verify_ok">Termux 整合已驗證。</string>
-  <string name="assistant_page_local_tools_termux_verify_props_missing">Termux 未回應。開啟 Termux 並執行：mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — 然後強制停止 Termux 並重新開啟。</string>
-  <string name="assistant_page_local_tools_termux_verify_unexpected">Termux 已回應，但輸出異常：%1$s</string>
-  <string name="assistant_page_local_tools_termux_verifying">正在驗證整合…</string>
   <string name="assistant_page_local_tools_toast_desc">在目前螢幕內容上方顯示一個簡短的 toast 彈出視窗。</string>
   <string name="assistant_page_local_tools_toast_title">Toast 提示</string>
   <string name="assistant_page_local_tools_torch_desc">開啟或關閉相機閃光燈。</string>

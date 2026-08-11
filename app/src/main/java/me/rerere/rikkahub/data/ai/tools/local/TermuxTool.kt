@@ -763,7 +763,7 @@ fun termuxRunCommandTool(context: Context): Tool = Tool(
                     UIMessagePart.Text(
                         buildJsonObject {
                             put("error", "termux_permission_not_granted")
-                            put("recovery", "Toggle Termux on in Assistant -> Local tools so the runtime permission dialog appears, OR run: adb shell pm grant ${context.packageName} com.termux.permission.RUN_COMMAND")
+                            put("recovery", "Grant the permission from Settings -> Termux so the runtime permission dialog appears, OR run: adb shell pm grant ${context.packageName} com.termux.permission.RUN_COMMAND")
                         }.toString()
                     )
                 )

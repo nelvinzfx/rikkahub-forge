@@ -28,6 +28,7 @@ class TermuxRuntimeWiringTest {
     private var origMaxRetainedJobs: Int = 0
     private var origOutputTtlMs: Long = 0
     private var origAptWrap: Boolean     = true
+    private var origIntegrationEnabled: Boolean = true
 
     @Before
     fun saveDefaults() {
@@ -41,6 +42,7 @@ class TermuxRuntimeWiringTest {
         origMaxRetainedJobs = TermuxRuntime.maxRetainedOutputJobs
         origOutputTtlMs = TermuxRuntime.outputTtlMs
         origAptWrap        = TermuxRuntime.aptWrapEnabled
+        origIntegrationEnabled = TermuxRuntime.integrationEnabled
     }
 
     @After
@@ -55,6 +57,7 @@ class TermuxRuntimeWiringTest {
         TermuxRuntime.maxRetainedOutputJobs = origMaxRetainedJobs
         TermuxRuntime.outputTtlMs = origOutputTtlMs
         TermuxRuntime.aptWrapEnabled    = origAptWrap
+        TermuxRuntime.integrationEnabled = origIntegrationEnabled
     }
 
     @Test
@@ -98,6 +101,14 @@ class TermuxRuntimeWiringTest {
     }
 
     @Test
+    fun integrationEnabled_toggleIsVisibleImmediately() {
+        TermuxRuntime.integrationEnabled = false
+        assertEquals(false, TermuxRuntime.integrationEnabled)
+        TermuxRuntime.integrationEnabled = true
+        assertEquals(true, TermuxRuntime.integrationEnabled)
+    }
+
+    @Test
     fun toolRuntimeLimits_toolCallTimeout_writeIsVisibleImmediately() {
         val prev = me.rerere.rikkahub.data.ai.limits.ToolRuntimeLimits.toolCallTimeoutMs
         try {
@@ -126,5 +137,9 @@ class TermuxRuntimeWiringTest {
         assertEquals(TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS, origMaxRetainedJobs)
         assertEquals(TermuxDefaults.DEFAULT_OUTPUT_TTL_MS, origOutputTtlMs)
         assertEquals(TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,    origAptWrap)
+        // The global Termux integration is ON by default — this is the whole point of the
+        // default-on refactor; a regression here silently hides all Termux tools.
+        assertEquals(TermuxDefaults.DEFAULT_INTEGRATION_ENABLED, origIntegrationEnabled)
+        assertEquals(true, TermuxDefaults.DEFAULT_INTEGRATION_ENABLED)
     }
 }

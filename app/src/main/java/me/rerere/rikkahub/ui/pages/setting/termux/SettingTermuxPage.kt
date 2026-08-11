@@ -111,6 +111,18 @@ fun SettingTermuxPage(
             CardGroup(
                 title = { Text(stringResource(R.string.setting_termux_section_status)) },
             ) {
+                // Master switch: global Termux integration, ON by default. Replaces the old
+                // per-assistant Local tools toggle.
+                item(
+                    headlineContent = { Text(stringResource(R.string.setting_termux_integration)) },
+                    supportingContent = { Text(stringResource(R.string.setting_termux_integration_desc)) },
+                    trailingContent = {
+                        Switch(
+                            checked = config.integrationEnabled,
+                            onCheckedChange = vm::setIntegrationEnabled,
+                        )
+                    },
+                )
                 val appInstalled = integrationState != TermuxIntegration.State.NOT_INSTALLED
                 val hasPermission = integrationState == TermuxIntegration.State.READY
 

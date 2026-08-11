@@ -45,7 +45,7 @@ Tools return structured `{error, recovery, ...}` envelopes when state is degrade
 | `error: "whisper_not_installed"` (from `transcribe_audio_file`) | whisper.cpp isn't in PATH or any known build location | Show the user the install commands from `hint`, ask for confirmation, run them, then retry. Do NOT silently install — the build takes ~5 minutes and downloads ~75 MB. |
 | `error: "whisper_model_missing"` (from `transcribe_audio_file`) | whisper-cli is installed but no `.bin` model file exists | Show the user the model-download command from `hint`, ask for confirmation, then run it. The tiny model is the safe default. |
 | `error: "termux_not_installed"` (from `transcribe_audio_file` / `whisper_status`) | Termux app isn't installed on the device | Tell the user transcription needs Termux from F-Droid. Don't keep retrying. |
-| `error: "termux_permission_not_granted"` (from `transcribe_audio_file` / `whisper_status`) | Termux toggle isn't enabled in this assistant's Local tools | Tell the user to flip Termux on under Settings → Assistant → Local tools. You can't enable it for them. |
+| `error: "termux_permission_not_granted"` (from `transcribe_audio_file` / `whisper_status`) | RUN_COMMAND permission isn't granted, or the global Termux integration is off | Tell the user to open Settings → Termux: grant the permission row / flip the integration switch on. You can't do either for them. |
 
 ## Loop avoidance — token-cost discipline
 

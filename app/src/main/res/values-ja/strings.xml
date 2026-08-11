@@ -1212,22 +1212,6 @@ mDNSアドレス: .localホスト名を使用し、IPを知らなくても同じ
   <string name="assistant_page_local_tools_telegram_title">Telegram ボット</string>
   <string name="assistant_page_local_tools_telephony_desc">SIM とネットワーク情報（キャリア、ネットワークタイプ）を読み取ります。READ_PHONE_STATE が必要です。</string>
   <string name="assistant_page_local_tools_telephony_title">テレフォニー情報</string>
-  <string name="assistant_page_local_tools_termux_postgrant_command">mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copied">コマンドをコピーしました — Termux に貼り付けてください。</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copy">コマンドをコピー</string>
-  <string name="assistant_page_local_tools_termux_postgrant_message">RUN_COMMAND 権限が付与されました。アシスタントがコマンドを実行できるようになる前に、Termux は `~/.termux/termux.properties` に `allow-external-apps=true` が必要です。\n\nTermux を開いて下のコマンドを貼り付け、アプリ情報から Termux を強制停止して再度開いてください。\n\n「検証」をタップすると行が緑色になります。</string>
-  <string name="assistant_page_local_tools_termux_postgrant_title">Termux のあと 1 ステップ</string>
-  <string name="assistant_page_local_tools_termux_status_no_permission">オンにして RUN_COMMAND 権限を付与</string>
-  <string name="assistant_page_local_tools_termux_status_not_installed">Termux がインストールされていません - github.com/termux/termux-app/releases からインストール</string>
-  <string name="assistant_page_local_tools_termux_status_ok">接続済み - コマンドは出力をキャプチャして実行されます</string>
-  <string name="assistant_page_local_tools_termux_status_untested">あと少しです。Termux を開いて実行：mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — その後 Termux を強制停止して再度開いてください。タップして検証。</string>
-  <string name="assistant_page_local_tools_termux_title">Termux 統合</string>
-  <string name="assistant_page_local_tools_termux_verify">タップして検証</string>
-  <string name="assistant_page_local_tools_termux_verify_no_permission">RUN_COMMAND 権限が付与されていません。Termux をオフにしてからオンにしてシステムプロンプトを再試行してください。</string>
-  <string name="assistant_page_local_tools_termux_verify_ok">Termux 統合を検証しました。</string>
-  <string name="assistant_page_local_tools_termux_verify_props_missing">Termux が応答しませんでした。Termux を開いて実行：mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — その後 Termux を強制停止して再度開いてください。</string>
-  <string name="assistant_page_local_tools_termux_verify_unexpected">Termux は応答しましたが、予期しない出力でした：%1$s</string>
-  <string name="assistant_page_local_tools_termux_verifying">統合を検証中…</string>
   <string name="assistant_page_local_tools_toast_desc">現在画面に表示されているものの上に短いトーストポップアップを表示します。</string>
   <string name="assistant_page_local_tools_toast_title">トースト</string>
   <string name="assistant_page_local_tools_torch_desc">カメラのフラッシュライトをオン/オフします。</string>

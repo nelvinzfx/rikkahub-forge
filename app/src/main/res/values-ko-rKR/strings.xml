@@ -1212,22 +1212,6 @@ mDNS 주소: .local 호스트네임을 사용하며, IP를 몰라도 같은 네�
   <string name="assistant_page_local_tools_telegram_title">Telegram 봇</string>
   <string name="assistant_page_local_tools_telephony_desc">SIM 및 네트워크 정보(이동통신사, 네트워크 유형)를 읽습니다. READ_PHONE_STATE가 필요합니다.</string>
   <string name="assistant_page_local_tools_telephony_title">전화 정보</string>
-  <string name="assistant_page_local_tools_termux_postgrant_command">mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copied">명령이 복사되었습니다 — Termux에 붙여넣으세요.</string>
-  <string name="assistant_page_local_tools_termux_postgrant_copy">명령 복사</string>
-  <string name="assistant_page_local_tools_termux_postgrant_message">RUN_COMMAND 권한이 부여되었습니다. 어시스턴트가 명령을 실행하려면 Termux의 `~/.termux/termux.properties`에 `allow-external-apps=true`가 여전히 필요합니다.\n\nTermux를 열고 아래 명령을 붙여넣은 다음, 앱 정보에서 Termux를 강제 종료하고 다시 여세요.\n\n“확인”을 탭하면 행이 녹색으로 바뀝니다.</string>
-  <string name="assistant_page_local_tools_termux_postgrant_title">Termux를 위한 한 단계 더</string>
-  <string name="assistant_page_local_tools_termux_status_no_permission">켜서 RUN_COMMAND 권한 부여</string>
-  <string name="assistant_page_local_tools_termux_status_not_installed">Termux가 설치되지 않음 - github.com/termux/termux-app/releases 에서 설치</string>
-  <string name="assistant_page_local_tools_termux_status_ok">연결됨 - 명령이 출력을 캡처하여 실행됩니다</string>
-  <string name="assistant_page_local_tools_termux_status_untested">거의 준비됨. Termux를 열고 실행: mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — 그런 다음 Termux를 강제 종료하고 다시 여세요. 탭하여 확인.</string>
-  <string name="assistant_page_local_tools_termux_title">Termux 통합</string>
-  <string name="assistant_page_local_tools_termux_verify">탭하여 확인</string>
-  <string name="assistant_page_local_tools_termux_verify_no_permission">RUN_COMMAND 권한이 부여되지 않았습니다. Termux를 껐다가 켜서 시스템 프롬프트를 다시 시도하세요.</string>
-  <string name="assistant_page_local_tools_termux_verify_ok">Termux 통합이 확인되었습니다.</string>
-  <string name="assistant_page_local_tools_termux_verify_props_missing">Termux가 응답하지 않았습니다. Termux를 열고 실행: mkdir -p ~/.termux &amp;&amp; echo \'allow-external-apps=true\' &gt;&gt; ~/.termux/termux.properties — 그런 다음 Termux를 강제 종료하고 다시 여세요.</string>
-  <string name="assistant_page_local_tools_termux_verify_unexpected">Termux가 응답했지만 예상치 못한 출력입니다: %1$s</string>
-  <string name="assistant_page_local_tools_termux_verifying">통합 확인 중…</string>
   <string name="assistant_page_local_tools_toast_desc">현재 화면에 있는 것 위에 짧은 토스트 팝업을 표시합니다.</string>
   <string name="assistant_page_local_tools_toast_title">토스트</string>
   <string name="assistant_page_local_tools_torch_desc">카메라 플래시를 켜거나 끕니다.</string>

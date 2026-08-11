@@ -48,6 +48,7 @@ class TermuxPreferences(private val context: Context) {
     private val maxRetainedOutputJobsKey = intPreferencesKey("max_retained_output_jobs")
     private val outputTtlKey = longPreferencesKey("output_ttl_ms")
     private val aptWrapKey        = booleanPreferencesKey("apt_wrap_enabled")
+    private val integrationEnabledKey = booleanPreferencesKey("integration_enabled")
 
     init {
         // Seed the runtime holders SYNCHRONOUSLY from DataStore before starting the async
@@ -69,6 +70,7 @@ class TermuxPreferences(private val context: Context) {
         TermuxRuntime.maxRetainedOutputJobs = initial.maxRetainedOutputJobs
         TermuxRuntime.outputTtlMs = initial.outputTtlMs
         TermuxRuntime.aptWrapEnabled     = initial.aptWrapEnabled
+        TermuxRuntime.integrationEnabled = initial.integrationEnabled
         ToolRuntimeLimits.toolCallTimeoutMs = initial.toolCallTimeoutMs
 
         // Async collectors keep the holders live on subsequent user edits. This scope is
@@ -142,6 +144,12 @@ class TermuxPreferences(private val context: Context) {
                 .onEach { TermuxRuntime.aptWrapEnabled = it }
                 .collect {}
         }
+        scope.launch {
+            integrationEnabledFlow()
+                .distinctUntilChanged()
+                .onEach { TermuxRuntime.integrationEnabled = it }
+                .collect {}
+        }
     }
 
     // --- Flow accessors -------------------------------------------------------------------
@@ -211,6 +219,10 @@ class TermuxPreferences(private val context: Context) {
         prefs[aptWrapKey] ?: TermuxDefaults.DEFAULT_APT_WRAP_ENABLED
     }
 
+    fun integrationEnabledFlow(): Flow<Boolean> = store.data.map { prefs ->
+        prefs[integrationEnabledKey] ?: TermuxDefaults.DEFAULT_INTEGRATION_ENABLED
+    }
+
     // --- Suspend writers (clamped before persist) -----------------------------------------
 
     suspend fun setCommandTimeoutMs(ms: Long) {
@@ -260,6 +272,10 @@ class TermuxPreferences(private val context: Context) {
         store.edit { it[aptWrapKey] = enabled }
     }
 
+    suspend fun setIntegrationEnabled(enabled: Boolean) {
+        store.edit { it[integrationEnabledKey] = enabled }
+    }
+
     /**
      * One-shot suspend snapshot for callers that need all fields at once (e.g. the VM's
      * combined state flow). Fields are clamped on read, same as the individual flow accessors.
@@ -281,6 +297,7 @@ class TermuxPreferences(private val context: Context) {
             maxRetainedOutputJobs = TermuxDefaults.clampMaxRetainedOutputJobs(prefs[maxRetainedOutputJobsKey] ?: TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS),
             outputTtlMs        = TermuxDefaults.clampOutputTtlMs(prefs[outputTtlKey] ?: TermuxDefaults.DEFAULT_OUTPUT_TTL_MS),
             aptWrapEnabled     = prefs[aptWrapKey]                                              ?: TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,
+            integrationEnabled = prefs[integrationEnabledKey]                                   ?: TermuxDefaults.DEFAULT_INTEGRATION_ENABLED,
         )
     }
 
@@ -304,4 +321,5 @@ data class TermuxRuntimeConfig(
     val maxRetainedOutputJobs: Int,
     val outputTtlMs: Long,
     val aptWrapEnabled: Boolean,
+    val integrationEnabled: Boolean,
 )

@@ -11,9 +11,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.rikkahub.data.ai.tools.LocalToolOption
-import me.rerere.rikkahub.data.datastore.SettingsStore
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
+import me.rerere.rikkahub.data.preferences.TermuxRuntime
 import java.io.File
 
 // Whisper model paths that whisper-cli checks by default, in preference order.
@@ -116,7 +114,7 @@ fun transcribeAudioFileTool(context: Context): Tool = Tool(
             TermuxIntegration.State.NO_PERMISSION ->
                 return@Tool errEnv(
                     "termux_permission_not_granted",
-                    "Termux RUN_COMMAND permission is not granted. Enable the Termux toggle in Local tools first."
+                    "Termux RUN_COMMAND permission is not granted. Grant it from Settings -> Termux."
                 )
             TermuxIntegration.State.READY -> Unit
         }
@@ -375,11 +373,11 @@ private suspend fun findWhisperModelViaShell(context: Context): String? {
  * The LLM should call this FIRST when the user sends an audio file or asks for
  * transcription.
  */
-fun whisperStatusTool(context: Context, settingsStore: SettingsStore): Tool = Tool(
+fun whisperStatusTool(context: Context): Tool = Tool(
     name = "whisper_status",
     description = """
         Check whether whisper.cpp transcription is ready to use. Returns a structured
-        report: whether Termux is enabled in this assistant, whether the Termux app is
+        report: whether the Termux integration is enabled globally (Settings -> Termux), whether the Termux app is
         installed and reachable, whether whisper-cli is on disk, and whether a model
         (.bin) file is present. Also returns install commands for anything missing.
         Call this BEFORE calling transcribe_audio_file, especially when the user sends
@@ -392,10 +390,9 @@ fun whisperStatusTool(context: Context, settingsStore: SettingsStore): Tool = To
     execute = { _ ->
         val missingSteps = mutableListOf<String>()
 
-        // 1. Is Termux enabled in this assistant's local tools?
-        val assistant = settingsStore.settingsFlow.value.getCurrentAssistant()
-        val termuxEnabledInAssistant = assistant.localTools.contains(LocalToolOption.Termux)
-        if (!termuxEnabledInAssistant) missingSteps.add("enable_termux_toggle")
+        // 1. Is the Termux integration enabled globally? (Settings -> Termux master switch)
+        val termuxIntegrationEnabled = TermuxRuntime.integrationEnabled
+        if (!termuxIntegrationEnabled) missingSteps.add("enable_termux_integration")
 
         // 2. Is Termux app installed and permission granted?
         val termuxState = TermuxIntegration.state(context)
@@ -449,10 +446,10 @@ fun whisperStatusTool(context: Context, settingsStore: SettingsStore): Tool = To
             missingSteps.add("download_model")
         }
 
-        val readyToTranscribe = termuxEnabledInAssistant && termuxAppInstalled && whisperCliInstalled && modelPresent
+        val readyToTranscribe = termuxIntegrationEnabled && termuxAppInstalled && whisperCliInstalled && modelPresent
 
         listOf(UIMessagePart.Text(buildJsonObject {
-            put("termux_enabled_in_assistant", termuxEnabledInAssistant)
+            put("termux_integration_enabled", termuxIntegrationEnabled)
             put("termux_app_installed", termuxAppInstalled)
             put("whisper_cli_installed", whisperCliInstalled)
             if (whisperCliPath != null) put("whisper_cli_path", whisperCliPath) else put("whisper_cli_path", kotlinx.serialization.json.JsonNull)

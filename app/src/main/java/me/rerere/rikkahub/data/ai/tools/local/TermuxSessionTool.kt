@@ -343,7 +343,7 @@ private fun preflight(context: Context): List<UIMessagePart>? =
         )
         TermuxIntegration.State.NO_PERMISSION -> sessionErrorEnvelope(
             "termux_permission_not_granted",
-            "Toggle Termux on in Assistant -> Local tools, or run: adb shell pm grant ${context.packageName} com.termux.permission.RUN_COMMAND"
+            "Grant the permission from Settings -> Termux, or run: adb shell pm grant ${context.packageName} com.termux.permission.RUN_COMMAND"
         )
         TermuxIntegration.State.READY -> null
     }

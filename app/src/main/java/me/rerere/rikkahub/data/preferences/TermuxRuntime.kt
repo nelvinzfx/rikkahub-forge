@@ -10,6 +10,9 @@ package me.rerere.rikkahub.data.preferences
  * TermuxPreferences collector has emitted) gets sensible behavior.
  */
 object TermuxRuntime {
+    /** Global master switch for the Termux tool group (replaces the removed per-assistant
+     *  LocalToolOption.Termux gate). Read by LocalTools.getTools on every tool assembly. */
+    @Volatile var integrationEnabled: Boolean = TermuxDefaults.DEFAULT_INTEGRATION_ENABLED
     @Volatile var commandTimeoutMs: Long  = TermuxDefaults.DEFAULT_COMMAND_TIMEOUT_MS
     @Volatile var verifyTimeoutMs: Long   = TermuxDefaults.DEFAULT_VERIFY_TIMEOUT_MS
     @Volatile var defaultWorkingDir: String = TermuxDefaults.DEFAULT_WORKING_DIR

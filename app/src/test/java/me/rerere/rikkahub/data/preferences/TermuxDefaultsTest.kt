@@ -216,6 +216,13 @@ class TermuxDefaultsTest {
     }
 
     @Test
+    fun integrationEnabled_defaultIsOn() {
+        // The Termux integration must be active by default for fresh installs AND for
+        // existing installs that never touched the old per-assistant toggle.
+        assertEquals(true, TermuxDefaults.DEFAULT_INTEGRATION_ENABLED)
+    }
+
+    @Test
     fun commandTimeout_maxSecondsAligns600() {
         // Ceiling raised from 300 to 600 per spec override.
         assertEquals(600, TermuxDefaults.MAX_COMMAND_TIMEOUT_SECONDS)

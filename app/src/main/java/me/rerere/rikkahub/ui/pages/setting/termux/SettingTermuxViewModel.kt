@@ -39,7 +39,8 @@ class SettingTermuxViewModel(
             LimitsPartial(maxStderr, textLines, textBytes, maxJobs, outputTtl)
         },
         prefs.aptWrapEnabledFlow(),
-    ) { partial, limits, aptWrap ->
+        prefs.integrationEnabledFlow(),
+    ) { partial, limits, aptWrap, integrationEnabled ->
         TermuxRuntimeConfig(
             commandTimeoutMs  = partial.commandTimeoutMs,
             toolCallTimeoutMs = partial.toolCallTimeoutMs,
@@ -52,6 +53,7 @@ class SettingTermuxViewModel(
             maxRetainedOutputJobs = limits.maxRetainedOutputJobs,
             outputTtlMs       = limits.outputTtlMs,
             aptWrapEnabled    = aptWrap,
+            integrationEnabled = integrationEnabled,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -68,6 +70,7 @@ class SettingTermuxViewModel(
             maxRetainedOutputJobs = TermuxDefaults.DEFAULT_MAX_RETAINED_OUTPUT_JOBS,
             outputTtlMs       = TermuxDefaults.DEFAULT_OUTPUT_TTL_MS,
             aptWrapEnabled    = TermuxDefaults.DEFAULT_APT_WRAP_ENABLED,
+            integrationEnabled = TermuxDefaults.DEFAULT_INTEGRATION_ENABLED,
         ),
     )
 
@@ -118,6 +121,10 @@ class SettingTermuxViewModel(
 
     fun setAptWrapEnabled(enabled: Boolean) {
         viewModelScope.launch { prefs.setAptWrapEnabled(enabled) }
+    }
+
+    fun setIntegrationEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setIntegrationEnabled(enabled) }
     }
 
     // Private intermediate holder to avoid 7-flow combine vararg.
