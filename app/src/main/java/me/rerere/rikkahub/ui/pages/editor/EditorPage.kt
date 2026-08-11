@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -372,10 +374,18 @@ fun EditorPage(vm: EditorVM = koinViewModel()) {
                     },
                     containerColor = CustomColors.topBarColors.containerColor,
                 ) { innerPadding ->
+                    // edge-to-edge + adjustResize delivers the IME purely as insets;
+                    // the default Scaffold contentWindowInsets excludes them, so the
+                    // AndroidView CodeEditor kept full height under the keyboard and
+                    // its scroll range could never lift the last lines above it.
+                    // imePadding shrinks the editor area (consumeWindowInsets avoids
+                    // double-counting the nav bar already in innerPadding).
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
+                            .consumeWindowInsets(innerPadding)
+                            .imePadding()
                     ) {
                         if (activeTab != null) {
                             Column(Modifier.fillMaxSize()) {
