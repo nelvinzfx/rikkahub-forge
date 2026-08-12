@@ -298,11 +298,13 @@ class ToolAvailabilityTest {
 
     @Test
     fun `baseline excludes tombstones so a returning tool sheds its tombstone`() {
-        // Simulates ChatService's per-generation rule: baseline := REAL tool names only.
+        // Simulates ChatService's per-generation rule: the tombstone baseline is
+        // CUMULATIVE (ever-advertised names), so a still-absent tool keeps its tombstone
+        // and a returning tool sheds it because it is back in the current set.
         var baseline: Set<String>? = null
         fun generation(real: Set<String>): Set<String> {
             val tombstones = ToolAvailability.tombstoneNames(baseline, real)
-            baseline = real // real tools only — tombstones never re-baselined
+            baseline = baseline.orEmpty() + real // accumulate ever-advertised names
             return tombstones
         }
         assertEquals(emptySet<String>(), generation(setOf("a", "termux_run_command"))) // gen 1: no baseline

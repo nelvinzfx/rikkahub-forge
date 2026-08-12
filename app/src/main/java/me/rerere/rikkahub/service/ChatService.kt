@@ -298,6 +298,11 @@ class ChatService(
     // note is appended to the system addendum so the model isn't acting on stale tool
     // context. See ToolAvailability.toolSetChangeNotice.
     private val lastGenerationToolNames = ConcurrentHashMap<String, Set<String>>()
+    // Cumulative "ever advertised in this conversation" set, feeding tombstones: a tool
+    // that was advertised once and is now absent keeps its tombstone until it returns.
+    // (A replace-style baseline would drop the tombstone one generation after the flip,
+    // reopening the vanished-definition hole on turn 3+.)
+    private val everAdvertisedToolNames = ConcurrentHashMap<String, Set<String>>()
     // Guarded by parentStopEpochLock. One epoch absorbs repeated stop requests and all
     // parent jobs detached by them until the full parent+worker tree is quiescent.
     private val parentStopEpochLock = Any()
@@ -442,6 +447,7 @@ class ChatService(
             // Evict the tool-set baseline too; a cold restart simply re-baselines without
             // emitting a change notice.
             lastGenerationToolNames.remove(conversationId.toString())
+            everAdvertisedToolNames.remove(conversationId.toString())
             Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})")
         }
     }
@@ -459,6 +465,7 @@ class ChatService(
         _sessionsVersion.value++
         compactionMutexes.remove(conversationId)
         lastGenerationToolNames.remove(conversationId.toString())
+        everAdvertisedToolNames.remove(conversationId.toString())
         Log.i(TAG, "dropSession: $conversationId (remaining: ${sessions.size})")
     }
 
@@ -1232,10 +1239,10 @@ class ChatService(
             }
             // Captured from the tools argument below — named arguments evaluate in source
             // order, so the tools buildList runs before the systemAddendum that reads this.
-            // The same ordering is what makes the tombstone step inside the tools argument
-            // safe: it reads lastGenerationToolNames BEFORE the systemAddendum block below
-            // advances the baseline with put(). Captured from the REAL assembly only —
-            // tombstones are appended after this capture and never enter the baseline.
+            // The tombstone step inside the tools argument reads+updates
+            // everAdvertisedToolNames (cumulative); the change-notice baseline
+            // (lastGenerationToolNames) is advanced by the systemAddendum block AFTER the
+            // tools argument has run — both rely on that source-order evaluation.
             var assembledToolNames: Set<String>? = null
 
             // start generating
@@ -1451,6 +1458,13 @@ class ChatService(
                     // again — no tombstone, no cleanup step.
                     val currentNames = assembled.mapTo(mutableSetOf()) { it.name }
                     assembledToolNames = currentNames
+                    // Accumulate the cumulative tombstone baseline BEFORE deriving the
+                    // missing set below... the key line: ever-advertised unions the real
+                    // set every generation, so a still-absent tool keeps its tombstone
+                    // until the generation it returns in.
+                    val convKey = conversationId.toString()
+                    everAdvertisedToolNames[convKey] =
+                        everAdvertisedToolNames[convKey].orEmpty() + currentNames
                     // TOMBSTONES — kill the "definition vanished, name persists" hole.
                     // Live-observed: when a definition is absent but the model knows the
                     // name from earlier turns, its attempted call materializes as calls
@@ -1465,7 +1479,7 @@ class ChatService(
                     // assistant) — that would bloat context and change assistant-scoping
                     // semantics. First generation (no baseline) tombstones nothing;
                     // headless direct-mode paths never reach this assembly at all.
-                    val previous = lastGenerationToolNames[conversationId.toString()]
+                    val previous = everAdvertisedToolNames[conversationId.toString()]
                     val missing = me.rerere.rikkahub.data.ai.tools.ToolAvailability
                         .tombstoneNames(previous, currentNames)
                     if (missing.isEmpty()) assembled else assembled + missing.sorted().map { name ->
