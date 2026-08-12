@@ -32,20 +32,17 @@ class RecallSearchTest {
         )
     }
 
-    @Test
-    fun `conversation score rewards coverage across separate snippets`() {
-        val plan = RecallSearch.plan("UnifiedProxy pricing bug")
-        val coveredAcrossSnippets = RecallSearch.scoreConversation(
-            title = "api probe",
-            matchedTexts = listOf("UnifiedProxy gateway trace", "pricing page returned stale bug"),
-            plan = plan,
-        )
-        val oneTermOnly = RecallSearch.scoreConversation(
-            title = "api probe",
-            matchedTexts = listOf("pricing details only"),
-            plan = plan,
-        )
+    // The former `conversation score rewards coverage across separate snippets` test was removed
+    // together with RecallSearch.scoreConversation: relevance now comes from FTS5 bm25
+    // (see RecallScoreTest / ConversationRecallMergeTest).
 
-        assertTrue(coveredAcrossSnippets > oneTermOnly)
+    @Test
+    fun `plain text for jieba_query strips fts operator characters`() {
+        assertEquals(
+            "why did UnifiedProxy fail",
+            RecallSearch.toFtsPlainText("why did (UnifiedProxy) fail?"),
+        )
+        assertEquals("cost NEAR limit", RecallSearch.toFtsPlainText("  cost \"NEAR\" -limit  "))
+        assertEquals("", RecallSearch.toFtsPlainText("?! --"))
     }
 }

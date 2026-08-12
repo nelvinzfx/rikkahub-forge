@@ -19,6 +19,21 @@ data class MessageSearchResult(
     val snippet: String,
 )
 
+/**
+ * One conversation-level content match produced by [MessageFtsManager.searchConversationRecall]
+ * for the agent-facing `search_conversations` tool.
+ *
+ * [rawRank] is the FTS5 bm25 value (negative, lower = better); callers normalize it through
+ * [me.rerere.rikkahub.data.search.RecallScore] instead of interpreting it directly.
+ */
+data class ConversationRecallHit(
+    val conversationId: String,
+    val title: String,
+    val updateAt: Long,
+    val snippet: String,
+    val rawRank: Double,
+)
+
 enum class MessageSearchSort(val orderBy: String) {
     RELEVANCE("rank, update_at DESC"),
     NEWEST_FIRST("update_at DESC, rank"),
@@ -90,6 +105,84 @@ class MessageFtsManager(private val database: AppDatabase) {
 
     suspend fun deleteAll() = withContext(Dispatchers.IO) {
         db.execSQL("DELETE FROM message_fts")
+    }
+
+    /**
+     * Conversation-level recall over the same message_fts index the human search screen uses,
+     * so the agent's `search_conversations` tool stops full-scanning `json_each(node.messages)`
+     * with LIKE. Returns at most one row per conversation: the best-ranked matching message,
+     * with the FTS5 snippet around it.
+     *
+     * [fallbackTerms] restores the OR-style multi-term recall the old LIKE query had: the
+     * primary MATCH goes through `jieba_query`, whose multi-word expressions are conjunctive,
+     * so if a multi-word query matches nothing we retry the individual planned terms and keep
+     * the best rank per conversation.
+     */
+    suspend fun searchConversationRecall(
+        keyword: String,
+        limit: Int,
+        fallbackTerms: List<String> = emptyList(),
+    ): List<ConversationRecallHit> = withContext(Dispatchers.IO) {
+        val candidateLimit = limit.coerceIn(1, 1000)
+        val primary = queryConversationRecall(keyword, candidateLimit)
+        if (primary.isNotEmpty() || fallbackTerms.size <= 1) return@withContext primary
+        val merged = LinkedHashMap<String, ConversationRecallHit>()
+        fallbackTerms.forEach { term ->
+            queryConversationRecall(term, candidateLimit).forEach { hit ->
+                val previous = merged[hit.conversationId]
+                if (previous == null || hit.rawRank < previous.rawRank) {
+                    merged[hit.conversationId] = hit
+                }
+            }
+        }
+        merged.values.sortedBy { it.rawRank }.take(candidateLimit)
+    }
+
+    private fun queryConversationRecall(keyword: String, limit: Int): List<ConversationRecallHit> {
+        if (keyword.isBlank()) return emptyList()
+        // One row per conversation is picked in Kotlin rather than with GROUP BY: SQLite's
+        // bare-column guarantee only holds for a single min()/max() aggregate, and we need the
+        // snippet + rank of the specific best-ranked message row.
+        //
+        // The whole statement (not just db.query) is wrapped: SQLiteCursor compiles and steps
+        // lazily, so a malformed MATCH expression or a missing libsimple extension can surface on
+        // the first moveToNext(). Either way this must degrade to "no content matches" instead of
+        // failing the tool call — title recall still works.
+        return runCatching {
+            val best = LinkedHashMap<String, ConversationRecallHit>()
+            db.query(
+                """
+                SELECT conversation_id, title, update_at,
+                       simple_snippet(message_fts, 0, '[', ']', '...', 30) AS snippet,
+                       bm25(message_fts) AS rank_score
+                FROM message_fts
+                WHERE text MATCH jieba_query(?)
+                ORDER BY rank_score ASC, update_at DESC
+                LIMIT ?
+                """.trimIndent(),
+                // Over-fetch messages so that collapsing to one row per conversation still fills
+                // the requested conversation count, but keep the scan bounded.
+                arrayOf<Any?>(keyword, (limit * 5).coerceAtMost(2000)),
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val conversationId = cursor.getString(0)
+                    val hit = ConversationRecallHit(
+                        conversationId = conversationId,
+                        title = cursor.getString(1),
+                        updateAt = cursor.getLong(2),
+                        snippet = cursor.getString(3),
+                        rawRank = cursor.getDouble(4),
+                    )
+                    val previous = best[conversationId]
+                    if (previous == null || hit.rawRank < previous.rawRank) {
+                        best[conversationId] = hit
+                    }
+                }
+            }
+            best.values.sortedBy { it.rawRank }.take(limit)
+        }.onFailure { error ->
+            Log.w(TAG, "searchConversationRecall failed for '$keyword'", error)
+        }.getOrDefault(emptyList())
     }
 
     suspend fun search(

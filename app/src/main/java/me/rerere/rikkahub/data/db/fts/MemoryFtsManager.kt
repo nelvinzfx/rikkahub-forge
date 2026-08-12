@@ -4,7 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
+import me.rerere.rikkahub.data.search.RecallScore
 import me.rerere.rikkahub.data.search.RecallSearch
+import me.rerere.rikkahub.data.search.RecallSearchPlan
 
 const val MEMORY_FTS_CREATE_SQL = """
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
@@ -26,6 +28,7 @@ data class MemorySearchHit(
     val importance: Int,
     val updatedAt: Long,
     val sourceConversationId: String?,
+    /** Relevance in 0..1 (higher = more relevant), normalized from FTS5 bm25 by [RecallScore]. */
     val score: Double,
     val snippet: String,
 )
@@ -82,19 +85,7 @@ class MemoryFtsManager(private val database: AppDatabase) {
                     )
                 }
             }
-            hits
-                .map { hit ->
-                    hit.copy(
-                        score = RecallSearch.scoreMemory(hit.title, hit.content, hit.tags, plan).toDouble(),
-                        snippet = RecallSearch.bestSnippet(hit.title, hit.content, hit.tags, plan),
-                    )
-                }
-                .sortedWith(
-                    compareByDescending<MemorySearchHit> { it.score }
-                        .thenByDescending { it.importance }
-                        .thenByDescending { it.updatedAt }
-                )
-                .take(requestedLimit)
+            rankMemoryHits(hits, plan, requestedLimit)
         }
 
     suspend fun rebuild(memories: List<MemoryEntity>) = withContext(Dispatchers.IO) {
@@ -107,3 +98,28 @@ class MemoryFtsManager(private val database: AppDatabase) {
         }
     }
 }
+
+/**
+ * Turn raw memory_fts rows into the list handed to the model. The bm25 value the query selected
+ * IS the ranking signal — it is only converted to a comparable 0..1 score here (see [RecallScore])
+ * so it means the same thing as the score on search_conversations results — and rows below
+ * [RecallScore.FLOOR] are dropped. Pure function, so it is unit-testable without Room or FTS5.
+ */
+internal fun rankMemoryHits(
+    hits: List<MemorySearchHit>,
+    plan: RecallSearchPlan,
+    limit: Int,
+): List<MemorySearchHit> = hits
+    .map { hit ->
+        hit.copy(
+            score = RecallScore.normalize(hit.score),
+            snippet = RecallSearch.bestSnippet(hit.title, hit.content, hit.tags, plan),
+        )
+    }
+    .filter { RecallScore.passesFloor(it.score) }
+    .sortedWith(
+        compareByDescending<MemorySearchHit> { it.score }
+            .thenByDescending { it.importance }
+            .thenByDescending { it.updatedAt }
+    )
+    .take(limit)

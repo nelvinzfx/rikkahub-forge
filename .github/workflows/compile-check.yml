@@ -84,6 +84,12 @@ jobs:
             --tests 'me.rerere.rikkahub.ui.pages.editor.EditorSessionCodecTest' \
             --tests 'me.rerere.rikkahub.ui.pages.editor.EditorSessionStoreTest' \
             --tests 'me.rerere.rikkahub.reliability.GitHubReleaseCheckerTest' \
+            --tests 'me.rerere.rikkahub.data.search.RecallSearchTest' \
+            --tests 'me.rerere.rikkahub.data.search.RecallScoreTest' \
+            --tests 'me.rerere.rikkahub.data.db.fts.MemoryRecallScoringTest' \
+            --tests 'me.rerere.rikkahub.data.repository.ConversationRecallMergeTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.SearchConversationsToolTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.local.ConversationRecallToolsTest' \
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \

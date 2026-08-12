@@ -15,12 +15,18 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.data.repository.ConversationRecallResult
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import kotlin.uuid.Uuid
 
-fun searchConversationsTool(repository: ConversationRepository): Tool = Tool(
+fun searchConversationsTool(repository: ConversationRepository): Tool =
+    searchConversationsTool { query, limit -> repository.searchConversationRecall(query, limit) }
+
+internal fun searchConversationsTool(
+    recall: suspend (query: String, limit: Int) -> List<ConversationRecallResult>,
+): Tool = Tool(
     name = "search_conversations",
-    description = "Search saved conversation titles and message content with broad multi-term recall. Queries may contain several related words; results are ranked by phrase match, term coverage, title/content relevance, and recency. Returns one result per conversation with a snippet around the best match; use read_conversation to inspect its contents.",
+    description = "Search saved conversation titles and message content with broad multi-term recall. Queries may contain several related words. Returns one result per conversation with a snippet around the best match and a relevance score from 0 to 1 (higher = more relevant); use read_conversation to inspect its contents.",
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
@@ -42,7 +48,7 @@ fun searchConversationsTool(repository: ConversationRepository): Tool = Tool(
             return@Tool listOf(UIMessagePart.Text(buildJsonObject { put("error", "query must not be empty") }.toString()))
         }
         val limit = (input.jsonObject["limit"]?.jsonPrimitive?.intOrNull ?: 10).coerceIn(1, 100)
-        val results = repository.searchConversationRecall(query, limit)
+        val results = recall(query, limit)
         listOf(UIMessagePart.Text(buildJsonArray {
             results.forEach { result ->
                 add(buildJsonObject {
@@ -51,6 +57,7 @@ fun searchConversationsTool(repository: ConversationRepository): Tool = Tool(
                     put("matchedSnippet", result.matchedSnippet)
                     put("matchType", result.matchType)
                     put("timestamp", result.timestamp)
+                    put("score", result.score)
                 })
             }
         }.toString()))

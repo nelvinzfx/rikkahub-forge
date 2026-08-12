@@ -45,6 +45,20 @@ interface ConversationDAO {
     @Query("SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, update_at as updateAt FROM conversationentity WHERE assistant_id = :assistantId AND title LIKE '%' || :searchText || '%' ORDER BY is_pinned DESC, update_at DESC")
     fun searchConversationsOfAssistantPaging(assistantId: String, searchText: String): PagingSource<Int, LightConversationEntity>
 
+    /**
+     * Title-only recall used by the agent's `search_conversations` tool. A LIKE scan is fine
+     * here: `conversationentity` holds one row per conversation, and the pattern is built by
+     * [me.rerere.rikkahub.data.search.RecallSearch.likePatterns] (already `\`-escaped).
+     * Message content is matched through message_fts instead.
+     */
+    @Query(
+        "SELECT id, assistant_id as assistantId, title, is_pinned as isPinned, create_at as createAt, " +
+            "update_at as updateAt FROM conversationentity " +
+            "WHERE title COLLATE NOCASE LIKE :pattern ESCAPE '\\' " +
+            "ORDER BY update_at DESC LIMIT :limit"
+    )
+    suspend fun searchConversationTitlesForRecall(pattern: String, limit: Int): List<LightConversationEntity>
+
     @Query("SELECT * FROM conversationentity WHERE id = :id")
     fun getConversationFlowById(id: String): Flow<ConversationEntity?>
 

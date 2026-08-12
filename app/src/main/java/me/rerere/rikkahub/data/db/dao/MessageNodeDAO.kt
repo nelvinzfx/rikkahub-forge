@@ -46,9 +46,6 @@ interface MessageNodeDAO {
 
     @RawQuery
     suspend fun getMessageCountPerDayRaw(query: SupportSQLiteQuery): List<MessageDayCount>
-
-    @RawQuery
-    suspend fun searchConversationRecallRaw(query: SupportSQLiteQuery): List<ConversationRecallCandidate>
 }
 
 data class MessageTokenStats(
@@ -60,58 +57,10 @@ data class MessageTokenStats(
 
 data class MessageDayCount(val day: String, val count: Int)
 
-data class ConversationRecallCandidate(
-    val conversationId: String,
-    val title: String,
-    val matchedText: String,
-    val matchType: String,
-    val timestamp: Long,
-    val matchRank: Int,
-)
-
-suspend fun MessageNodeDAO.searchConversationRecall(
-    patterns: List<String>,
-    limit: Int,
-): List<ConversationRecallCandidate> {
-    if (patterns.isEmpty()) return emptyList()
-    val textExpression = "CAST(json_extract(part.value, '$.text') AS TEXT)"
-    val titleWhere = patterns.joinToString(" OR ") { "c.title LIKE ? ESCAPE '\\' COLLATE NOCASE" }
-    val contentWhere = patterns.joinToString(" OR ") { "$textExpression LIKE ? ESCAPE '\\' COLLATE NOCASE" }
-    return searchConversationRecallRaw(
-        SimpleSQLiteQuery(
-            """
-            SELECT conversationId, title, matchedText, matchType, timestamp, matchRank FROM (
-                SELECT c.id AS conversationId, c.title AS title, c.title AS matchedText,
-                       'title' AS matchType, c.update_at AS timestamp, 0 AS matchRank
-                FROM conversationentity c
-                WHERE $titleWhere
-                UNION ALL
-                SELECT c.id AS conversationId, c.title AS title,
-                       $textExpression AS matchedText,
-                       'content' AS matchType,
-                       COALESCE(
-                           CAST(strftime('%s', json_extract(message.value, '$.createdAt')) AS INTEGER) * 1000,
-                           c.update_at
-                       ) AS timestamp,
-                       1 AS matchRank
-                FROM conversationentity c
-                JOIN message_node node ON node.conversation_id = c.id
-                JOIN json_each(node.messages) message
-                JOIN json_each(json_extract(message.value, '$.parts')) part
-                WHERE json_extract(part.value, '$.text') IS NOT NULL
-                  AND ($contentWhere)
-            )
-            ORDER BY matchRank ASC, timestamp DESC
-            LIMIT ?
-            """.trimIndent(),
-            buildList<Any?> {
-                addAll(patterns)
-                addAll(patterns)
-                add(limit.coerceIn(1, 1000))
-            }.toTypedArray(),
-        )
-    )
-}
+// ConversationRecallCandidate + searchConversationRecall (a LIKE '%term%' scan over
+// json_each(node.messages)) were removed: agent conversation recall now matches message content
+// through the message_fts index via MessageFtsManager.searchConversationRecall, and titles through
+// ConversationDAO.searchConversationTitlesForRecall.
 
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private val TOKEN_STATS_SQL = SimpleSQLiteQuery(

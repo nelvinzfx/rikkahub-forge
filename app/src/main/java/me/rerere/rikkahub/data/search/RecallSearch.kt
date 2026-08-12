@@ -11,6 +11,8 @@ internal data class RecallSearchPlan(
 
 internal object RecallSearch {
     private val tokenRegex = Regex("[\\p{L}\\p{N}]+")
+    private val nonSearchableRegex = Regex("[^\\p{L}\\p{N}\\s]")
+    private val whitespaceRegex = Regex("\\s+")
     private val stopWords = setOf(
         "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it",
         "of", "on", "or", "the", "to", "with", "di", "dan", "dari", "ini", "itu", "ke", "yang",
@@ -39,6 +41,16 @@ internal object RecallSearch {
     fun toFtsOrQuery(plan: RecallSearchPlan): String = plan.terms
         .joinToString(" OR ") { term -> "\"${term.replace("\"", "\"\"")}\"*" }
 
+    /**
+     * Plain text safe to hand to `jieba_query()`, which expects natural language and builds the
+     * FTS5 MATCH expression itself: every non letter/digit character is dropped so a query such
+     * as `"why did X fail?"` cannot be reinterpreted as FTS5 operator syntax.
+     */
+    fun toFtsPlainText(value: String): String = value
+        .replace(nonSearchableRegex, " ")
+        .trim()
+        .replace(whitespaceRegex, " ")
+
     fun likePattern(value: String): String = "%${escapeLike(value)}%"
 
     fun likePatterns(plan: RecallSearchPlan): List<String> =
@@ -46,26 +58,11 @@ internal object RecallSearch {
             .distinct()
             .map(::likePattern)
 
-    fun scoreMemory(title: String, content: String, tags: String, plan: RecallSearchPlan): Int =
-        scoreText(title, plan, phraseWeight = 90, termWeight = 14) +
-            scoreText(tags, plan, phraseWeight = 70, termWeight = 10) +
-            scoreText(content, plan, phraseWeight = 45, termWeight = 6) +
-            coverageScore("$title\n$tags\n$content", plan)
-
-    fun scoreConversationCandidate(matchType: String, text: String, plan: RecallSearchPlan): Int {
-        val title = matchType == "title"
-        return scoreText(
-            text = text,
-            plan = plan,
-            phraseWeight = if (title) 90 else 45,
-            termWeight = if (title) 14 else 8,
-        )
-    }
-
-    fun scoreConversation(title: String, matchedTexts: List<String>, plan: RecallSearchPlan): Int =
-        scoreText(title, plan, phraseWeight = 90, termWeight = 14) +
-            matchedTexts.sumOf { text -> scoreText(text, plan, phraseWeight = 45, termWeight = 8) } +
-            coverageScore((listOf(title) + matchedTexts).joinToString("\n"), plan) * 2
+    // scoreMemory / scoreConversation / scoreConversationCandidate (and their coverageScore
+    // helper) used to produce the relevance number shown to the model. They were substring
+    // tallies that overrode the FTS5 bm25 ranking, so they were deleted in favour of
+    // RecallScore.normalize(bm25). scoreText survives because snippet selection still needs a
+    // cheap "which field mentions the query most" comparison.
 
     fun bestSnippet(title: String, content: String, tags: String, plan: RecallSearchPlan, maxLength: Int = 120): String {
         val choices = listOf(
@@ -101,9 +98,6 @@ internal object RecallSearch {
         }
         return score
     }
-
-    private fun coverageScore(text: String, plan: RecallSearchPlan): Int =
-        plan.terms.count { term -> text.contains(term, ignoreCase = true) } * 12
 
     private fun firstMatchIndex(text: String, plan: RecallSearchPlan): Int {
         if (plan.phrase.isNotBlank()) {

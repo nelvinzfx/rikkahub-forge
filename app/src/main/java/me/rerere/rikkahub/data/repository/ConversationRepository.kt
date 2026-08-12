@@ -12,18 +12,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.db.AppDatabase
+import me.rerere.rikkahub.data.db.fts.ConversationRecallHit
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
-import me.rerere.rikkahub.data.db.dao.ConversationRecallCandidate
-import me.rerere.rikkahub.data.db.dao.searchConversationRecall
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.search.RecallScore
 import me.rerere.rikkahub.data.search.RecallSearch
 import me.rerere.rikkahub.data.search.RecallSearchPlan
 import me.rerere.rikkahub.utils.JsonInstant
@@ -35,6 +35,15 @@ data class ConversationRecallResult(
     val title: String,
     val matchedSnippet: String,
     val matchType: String,
+    val timestamp: Long,
+    /** Relevance in 0..1 (higher = more relevant); see [RecallScore]. */
+    val score: Double,
+)
+
+/** A conversation title matched by LIKE, before it is merged with the message_fts hits. */
+internal data class ConversationTitleMatch(
+    val conversationId: String,
+    val title: String,
     val timestamp: Long,
 )
 
@@ -169,14 +178,32 @@ class ConversationRepository(
             }
     }
 
+    /**
+     * Agent-facing recall (`search_conversations`). Message content is matched through the
+     * message_fts index — the same index the human search screen uses — instead of the previous
+     * LIKE-over-`json_each(node.messages)` full scan, and the resulting FTS5 bm25 rank is what
+     * ranks and scores the output. Titles are still matched with LIKE (one row per
+     * conversation, so a scan is cheap) and merged into the same one-result-per-conversation
+     * list.
+     */
     suspend fun searchConversationRecall(query: String, limit: Int = 10): List<ConversationRecallResult> {
         val plan = RecallSearch.plan(query)
         if (plan.isEmpty) return emptyList()
 
         val requestedLimit = limit.coerceIn(1, 100)
         val candidateLimit = (requestedLimit * 20).coerceAtLeast(100).coerceAtMost(1000)
-        return rankConversationRecall(
-            candidates = messageNodeDAO.searchConversationRecall(RecallSearch.likePatterns(plan), candidateLimit),
+        val contentHits = messageFtsManager.searchConversationRecall(
+            keyword = RecallSearch.toFtsPlainText(plan.phrase),
+            limit = candidateLimit,
+            fallbackTerms = plan.terms,
+        )
+        val titleMatches = RecallSearch.likePatterns(plan)
+            .flatMap { pattern -> conversationDAO.searchConversationTitlesForRecall(pattern, candidateLimit) }
+            .distinctBy { it.id }
+            .map { ConversationTitleMatch(it.id, it.title, it.updateAt) }
+        return mergeConversationRecall(
+            contentHits = contentHits,
+            titleMatches = titleMatches,
             plan = plan,
         ).take(requestedLimit)
     }
@@ -460,37 +487,63 @@ class ConversationRepository(
     }
 }
 
-internal fun rankConversationRecall(
-    candidates: List<ConversationRecallCandidate>,
+/**
+ * Pure merge of the two recall sources into one result per conversation, so it can be unit-tested
+ * without Room or the FTS5 extension.
+ *
+ * Content hits carry a bm25 rank normalized by [RecallScore.normalize]; title hits are scored by
+ * query coverage ([RecallScore.titleCoverage]). When both fire for one conversation the higher
+ * score wins and decides `matchType`/`matchedSnippet`, so the model always sees the strongest
+ * reason the conversation came back. Results below [RecallScore.FLOOR] are dropped.
+ */
+internal fun mergeConversationRecall(
+    contentHits: List<ConversationRecallHit>,
+    titleMatches: List<ConversationTitleMatch>,
     plan: RecallSearchPlan,
-): List<ConversationRecallResult> = candidates
-    .groupBy { it.conversationId }
-    .values
-    .map { group ->
-        val title = group.first().title
-        val best = group.maxWith(
-            compareBy<ConversationRecallCandidate> {
-                RecallSearch.scoreConversationCandidate(it.matchType, it.matchedText, plan)
-            }.thenBy { it.timestamp }
+): List<ConversationRecallResult> {
+    val merged = LinkedHashMap<String, ConversationRecallResult>()
+    contentHits.forEach { hit ->
+        val score = RecallScore.normalize(hit.rawRank)
+        val candidate = ConversationRecallResult(
+            conversationId = hit.conversationId,
+            title = hit.title,
+            matchedSnippet = hit.snippet,
+            matchType = "content",
+            timestamp = hit.updateAt,
+            score = score,
         )
-        val score = RecallSearch.scoreConversation(
-            title = title,
-            matchedTexts = group.map { it.matchedText }.distinct(),
-            plan = plan,
-        )
-        score to ConversationRecallResult(
-            conversationId = group.first().conversationId,
-            title = title,
-            matchedSnippet = RecallSearch.snippetAround(best.matchedText, plan),
-            matchType = best.matchType,
-            timestamp = group.maxOf { it.timestamp },
+        val previous = merged[hit.conversationId]
+        if (previous == null || candidate.score > previous.score) {
+            merged[hit.conversationId] = candidate
+        }
+    }
+    titleMatches.forEach { match ->
+        val score = RecallScore.titleCoverage(match.title, plan)
+        val previous = merged[match.conversationId]
+        if (previous != null && previous.score >= score) {
+            // Content match already explains this conversation better; keep its snippet but do not
+            // lose the fact that the title matched too — the newer timestamp still wins below.
+            merged[match.conversationId] = previous.copy(
+                timestamp = maxOf(previous.timestamp, match.timestamp),
+            )
+            return@forEach
+        }
+        merged[match.conversationId] = ConversationRecallResult(
+            conversationId = match.conversationId,
+            title = match.title,
+            matchedSnippet = RecallSearch.snippetAround(match.title, plan),
+            matchType = "title",
+            timestamp = maxOf(previous?.timestamp ?: match.timestamp, match.timestamp),
+            score = score,
         )
     }
-    .sortedWith(
-        compareByDescending<Pair<Int, ConversationRecallResult>> { it.first }
-            .thenByDescending { it.second.timestamp }
-    )
-    .map { it.second }
+    return merged.values
+        .filter { RecallScore.passesFloor(it.score) }
+        .sortedWith(
+            compareByDescending<ConversationRecallResult> { it.score }
+                .thenByDescending { it.timestamp }
+        )
+}
 
 /**
  * 轻量级的会话查询结果，不包含 nodes 和 suggestions 字段
