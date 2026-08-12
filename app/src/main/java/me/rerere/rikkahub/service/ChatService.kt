@@ -1218,7 +1218,7 @@ class ChatService(
             // WHY (disabled / not enabled for this assistant / disconnected / its tool list
             // re-synced) instead of returning an opaque "not found".
             val mcpServerSnapshots = settings.mcpServers.map { cfg ->
-                me.rerere.rikkahub.data.ai.tools.ToolAvailability.McpServerSnapshot(
+                me.rerere.rikkahub.data.ai.tools.McpServerSnapshot(
                     slugPrefix = me.rerere.rikkahub.data.ai.mcp.mcpServerSlug(cfg.id),
                     name = cfg.commonOptions.name,
                     enabled = cfg.commonOptions.enable,
