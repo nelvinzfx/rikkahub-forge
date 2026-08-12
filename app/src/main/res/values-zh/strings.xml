@@ -1159,7 +1159,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="assistant_page_local_tools_listening_toast">正在聆听 — 请讲话…</string>
   <string name="assistant_page_local_tools_location_desc">读取设备当前位置（纬度、经度、精度）。</string>
   <string name="assistant_page_local_tools_location_title">位置</string>
-  <string name="assistant_page_local_tools_mcp_control_desc">让助手添加、编辑和移除 MCP 服务器。助手可以在 Termux 或远程 SSH 主机上安装 MCP，然后将其接入应用 — 无需你打开设置。</string>
+  <string name="assistant_page_local_tools_mcp_control_desc">让助手添加、编辑和移除 MCP 服务器。助手可以在 Termux 或远程 SSH 主机上安装 MCP，然后将其接入应用，无需你打开设置。</string>
   <string name="assistant_page_local_tools_mcp_control_title">MCP 控制</string>
   <string name="assistant_page_local_tools_media_player_desc">从文件路径或网址播放和停止音频。</string>
   <string name="assistant_page_local_tools_media_player_title">媒体播放器</string>
@@ -1388,7 +1388,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_page_browser_desc">AI 驱动的网页浏览器和技能查看器。</string>
   <string name="setting_page_doctor">诊断工具</string>
   <string name="setting_page_doctor_copy_report">复制报告</string>
-  <string name="setting_page_doctor_desc">诊断并修复应用 — 权限、服务、数据库、网络、Termux。</string>
+  <string name="setting_page_doctor_desc">诊断并修复应用：权限、服务、数据库、网络、Termux。</string>
   <string name="setting_page_doctor_report_copied">诊断报告已复制到剪贴板。</string>
   <string name="setting_page_doctor_run_again">重新运行</string>
   <string name="setting_page_doctor_running">正在运行…</string>

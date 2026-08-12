@@ -1386,7 +1386,7 @@ mDNSアドレス: .localホスト名を使用し、IPを知らなくても同じ
   <string name="setting_page_browser_desc">AI 駆動のウェブブラウザとスキルビューア。</string>
   <string name="setting_page_doctor">診断ツール</string>
   <string name="setting_page_doctor_copy_report">レポートをコピー</string>
-  <string name="setting_page_doctor_desc">アプリを診断して修正 — 権限、サービス、データベース、ネットワーク、Termux。</string>
+  <string name="setting_page_doctor_desc">アプリを診断して修正: 権限、サービス、データベース、ネットワーク、Termux。</string>
   <string name="setting_page_doctor_report_copied">診断レポートをクリップボードにコピーしました。</string>
   <string name="setting_page_doctor_run_again">再実行</string>
   <string name="setting_page_doctor_running">実行中…</string>

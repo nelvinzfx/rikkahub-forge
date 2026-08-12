@@ -1157,7 +1157,7 @@
   <string name="assistant_page_local_tools_listening_toast">Слушаю — говорите…</string>
   <string name="assistant_page_local_tools_location_desc">Чтение текущего местоположения устройства (широта, долгота, точность).</string>
   <string name="assistant_page_local_tools_location_title">Местоположение</string>
-  <string name="assistant_page_local_tools_mcp_control_desc">Позволяет ассистенту добавлять, изменять и удалять MCP-серверы. Ассистент может установить MCP в Termux или на удалённом SSH-хосте, а затем подключить его к приложению — без открытия настроек вами.</string>
+  <string name="assistant_page_local_tools_mcp_control_desc">Позволяет ассистенту добавлять, изменять и удалять MCP-серверы. Ассистент может установить MCP в Termux или на удалённом SSH-хосте, а затем подключить его к приложению, без открытия настроек вами.</string>
   <string name="assistant_page_local_tools_mcp_control_title">Управление MCP</string>
   <string name="assistant_page_local_tools_media_player_desc">Воспроизведение и остановка аудио по пути к файлу или URL.</string>
   <string name="assistant_page_local_tools_media_player_title">Медиаплеер</string>
@@ -1386,7 +1386,7 @@
   <string name="setting_page_browser_desc">Веб-браузер на основе ИИ и просмотрщик навыков.</string>
   <string name="setting_page_doctor">Диагностика</string>
   <string name="setting_page_doctor_copy_report">Копировать отчёт</string>
-  <string name="setting_page_doctor_desc">Диагностика и исправление приложения — разрешения, службы, база данных, сеть, Termux.</string>
+  <string name="setting_page_doctor_desc">Диагностика и исправление приложения: разрешения, службы, база данных, сеть, Termux.</string>
   <string name="setting_page_doctor_report_copied">Отчёт диагностики скопирован в буфер обмена.</string>
   <string name="setting_page_doctor_run_again">Запустить снова</string>
   <string name="setting_page_doctor_running">Выполняется…</string>

@@ -1179,7 +1179,7 @@
   <string name="setting_page_scheduled_jobs">Scheduled jobs</string>
   <string name="setting_page_scheduled_jobs_desc">Time-based jobs the assistant scheduled — one-shots and recurring cron expressions.</string>
   <string name="setting_page_doctor">Doctor</string>
-  <string name="setting_page_doctor_desc">Diagnose and fix the app — permissions, services, database, network, Termux.</string>
+  <string name="setting_page_doctor_desc">Diagnose and fix the app: permissions, services, database, network, Termux.</string>
   <string name="setting_page_doctor_run_again">Run again</string>
   <string name="setting_page_doctor_running">Running…</string>
   <string name="setting_page_doctor_copy_report">Copy report</string>
@@ -1305,7 +1305,7 @@
   <string name="assistant_page_local_tools_files_desc">Read, write, list, search, copy, move, delete files.</string>
   <string name="assistant_page_local_tools_section_files">File manager</string>
   <string name="assistant_page_local_tools_mcp_control_title">MCP control</string>
-  <string name="assistant_page_local_tools_mcp_control_desc">Let the assistant add, edit, and remove MCP servers. The assistant can install an MCP in Termux or on a remote SSH host, then wire it into the app — without you opening Settings.</string>
+  <string name="assistant_page_local_tools_mcp_control_desc">Let the assistant add, edit, and remove MCP servers. The assistant can install an MCP in Termux or on a remote SSH host, then wire it into the app, without you opening Settings.</string>
   <string name="assistant_page_local_tools_external_automation_title">External automation</string>
   <string name="assistant_page_local_tools_external_automation_desc">Let the assistant manage the External Automation Intent API — the path that lets Tasker / MacroDroid / Locale / ADB fire RUN_TASK intents at the assistant. Defaults to OFF; the assistant can flip it on, add trusted caller packages, and audit the recent invocation log.</string>
   <string name="assistant_page_local_tools_reliability_title">Reliability</string>
@@ -1557,21 +1557,21 @@
   <string name="setting_termux_integration">Termux integration</string>
   <string name="setting_termux_integration_desc">Allow assistants to run shell commands and file operations through Termux. On by default; turn off to hide all Termux tools from every assistant.</string>
   <string name="setting_termux_status_app">Termux app</string>
-  <string name="setting_termux_status_app_installed">Installed — tap to open</string>
-  <string name="setting_termux_status_app_missing">Not installed — tap to download</string>
+  <string name="setting_termux_status_app_installed">Installed. Tap to open.</string>
+  <string name="setting_termux_status_app_missing">Not installed. Tap to download.</string>
   <string name="setting_termux_status_open">Open Termux</string>
   <string name="setting_termux_status_open_desc">Launch the Termux app</string>
   <string name="setting_termux_status_permission">RUN_COMMAND permission</string>
-  <string name="setting_termux_status_permission_granted">Granted — tap to re-request</string>
+  <string name="setting_termux_status_permission_granted">Granted. Tap to re-request.</string>
   <string name="setting_termux_toast_permission_granted">Permission granted</string>
-  <string name="setting_termux_status_permission_missing">Not granted — tap to request</string>
+  <string name="setting_termux_status_permission_missing">Not granted. Tap to request.</string>
   <string name="setting_termux_status_verify">allow-external-apps</string>
   <string name="setting_termux_status_verify_ok">Verified OK in this session</string>
-  <string name="setting_termux_status_verify_unknown">Not yet verified — tap to run smoke test</string>
+  <string name="setting_termux_status_verify_unknown">Not yet verified. Tap to run smoke test.</string>
   <string name="setting_termux_verify_ok">Termux verified OK.</string>
   <string name="setting_termux_verify_not_installed">Termux is not installed.</string>
   <string name="setting_termux_verify_no_permission">RUN_COMMAND permission not granted.</string>
-  <string name="setting_termux_verify_allow_external_apps">Timed out — allow-external-apps=true may not be set in ~/.termux/termux.properties.</string>
+  <string name="setting_termux_verify_allow_external_apps">Timed out. allow-external-apps=true may not be set in ~/.termux/termux.properties.</string>
   <string name="setting_termux_verify_unexpected_output">Unexpected output from smoke test.</string>
   <string name="setting_termux_verify_other_error">Verify failed: %s</string>
   <string name="setting_termux_section_timeouts">Timeouts</string>
@@ -1605,7 +1605,10 @@
   <string name="setting_termux_apt_wrap_desc">Prepend DEBIAN_FRONTEND=noninteractive so apt upgrades do not hang waiting for interactive prompts.</string>
   <string name="setting_termux_section_help">Setup help</string>
   <string name="setting_termux_help_allow_external_apps_title">How to enable allow-external-apps</string>
-  <string name="setting_termux_help_allow_external_apps_body">In Termux, run:\n\n  mkdir -p ~/.termux\n  echo \'allow-external-apps=true\' >> ~/.termux/termux.properties\n\nThen force-stop Termux from Android App Info and reopen it. After that, tap the verify row above to confirm the link is working.</string>
+  <string name="setting_termux_help_allow_external_apps_body">Tap to show a one-paste command that enables allow-external-apps and reloads Termux settings.</string>
+  <string name="setting_termux_help_dialog_body">Paste this command into Termux to finish setup:</string>
+  <string name="setting_termux_help_dialog_paste_hint">Paste it into Termux and it runs by itself. Termux closes when it finishes, then tap Done here to verify.</string>
+  <string name="setting_termux_help_dialog_done">Done</string>
   <string name="browser_address_bar_close">Close browser</string>
   <string name="browser_address_bar_back">Browser back</string>
   <string name="browser_address_bar_forward">Browser forward</string>

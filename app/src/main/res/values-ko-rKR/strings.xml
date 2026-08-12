@@ -1386,7 +1386,7 @@ mDNS 주소: .local 호스트네임을 사용하며, IP를 몰라도 같은 네�
   <string name="setting_page_browser_desc">AI 기반 웹 브라우저 및 스킬 뷰어.</string>
   <string name="setting_page_doctor">진단 도구</string>
   <string name="setting_page_doctor_copy_report">보고서 복사</string>
-  <string name="setting_page_doctor_desc">앱을 진단하고 수정 — 권한, 서비스, 데이터베이스, 네트워크, Termux.</string>
+  <string name="setting_page_doctor_desc">앱을 진단하고 수정: 권한, 서비스, 데이터베이스, 네트워크, Termux.</string>
   <string name="setting_page_doctor_report_copied">진단 보고서를 클립보드에 복사했습니다.</string>
   <string name="setting_page_doctor_run_again">다시 실행</string>
   <string name="setting_page_doctor_running">실행 중…</string>

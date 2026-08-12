@@ -1,23 +1,34 @@
 package me.rerere.rikkahub.ui.pages.setting.termux
 
+import android.content.ClipData
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,16 +37,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.tools.local.PermissionHelper
 import me.rerere.rikkahub.data.ai.tools.local.TermuxIntegration
@@ -46,13 +63,23 @@ import me.rerere.rikkahub.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 
 /**
+ * Exact command shown in the setup-help dialog. The final `exit` line makes Termux close
+ * itself after the setup runs, which matters when it is the only open Termux tab. The
+ * dialog copies this with a trailing newline so a paste into Termux executes immediately.
+ */
+private const val TERMUX_SETUP_COMMAND =
+    "mkdir -p ~/.termux && grep -q '^allow-external-apps=true' ~/.termux/termux.properties 2>/dev/null || " +
+        "echo 'allow-external-apps=true' >> ~/.termux/termux.properties; termux-reload-settings\nexit"
+
+/**
  * Settings -> Termux. Four sections:
  *
  *  1. Status — integration indicators with tap actions (Termux installed, RUN_COMMAND
  *     permission request, Open Termux, verify smoke test).
  *  2. Timeouts — command timeout, per-tool call timeout (all tools), verify timeout.
  *  3. Defaults & limits — working directory, stdout/stderr caps, apt-wrap toggle.
- *  4. Help — expandable setup instructions for allow-external-apps=true.
+ *  4. Help — tap to open a dialog with the one-paste command that enables
+ *     allow-external-apps=true and reloads Termux settings.
  */
 @Composable
 fun SettingTermuxPage(
@@ -67,6 +94,39 @@ fun SettingTermuxPage(
     // State-backed so the UI refreshes after permission grants or verify actions.
     var integrationState by remember { mutableStateOf(TermuxIntegration.State.NOT_INSTALLED) }
     var lastVerifiedOk by remember { mutableStateOf(false) }
+    var showSetupHelpDialog by remember { mutableStateOf(false) }
+
+    // Always-tappable Termux launcher, shared by the Open-Termux row and the help dialog.
+    val openTermux: () -> Unit = {
+        runCatching {
+            ctx.packageManager
+                .getLaunchIntentForPackage("com.termux")
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                ?.let { ctx.startActivity(it) }
+        }
+    }
+
+    // Smoke test + status refresh, shared by the verify row and the help dialog's Done button.
+    fun runVerify() {
+        scope.launch {
+            val result = TermuxIntegration.verify(ctx, timeoutMs = config.verifyTimeoutMs)
+            if (result == TermuxIntegration.VerifyResult.Ok) {
+                TermuxIntegration.markVerifiedOk()
+            }
+            lastVerifiedOk = TermuxIntegration.lastVerifiedOkAtMs > 0L
+            integrationState = TermuxIntegration.state(ctx)
+            val msg = when (result) {
+                TermuxIntegration.VerifyResult.Ok -> ctx.getString(R.string.setting_termux_verify_ok)
+                TermuxIntegration.VerifyResult.NotInstalled -> ctx.getString(R.string.setting_termux_verify_not_installed)
+                TermuxIntegration.VerifyResult.NoPermission -> ctx.getString(R.string.setting_termux_verify_no_permission)
+                TermuxIntegration.VerifyResult.AllowExternalAppsMissing -> ctx.getString(R.string.setting_termux_verify_allow_external_apps)
+                is TermuxIntegration.VerifyResult.UnexpectedOutput -> ctx.getString(R.string.setting_termux_verify_unexpected_output)
+                is TermuxIntegration.VerifyResult.OtherError -> ctx.getString(R.string.setting_termux_verify_other_error, result.message)
+            }
+            val type = if (result == TermuxIntegration.VerifyResult.Ok) ToastType.Success else ToastType.Error
+            toaster.show(msg, type = type)
+        }
+    }
 
     LaunchedEffect(Unit) {
         integrationState = TermuxIntegration.state(ctx)
@@ -190,40 +250,13 @@ fun SettingTermuxPage(
                     },
                 )
                 item(
-                    onClick = {
-                        // Always-tappable: fire the launch Intent to com.termux.
-                        runCatching {
-                            ctx.packageManager
-                                .getLaunchIntentForPackage("com.termux")
-                                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                ?.let { ctx.startActivity(it) }
-                        }
-                    },
+                    onClick = openTermux,
                     headlineContent = { Text(stringResource(R.string.setting_termux_status_open)) },
                     supportingContent = { Text(stringResource(R.string.setting_termux_status_open_desc)) },
                 )
                 item(
-                    onClick = {
-                        // Re-run smoke test on tap.
-                        scope.launch {
-                            val result = TermuxIntegration.verify(ctx, timeoutMs = config.verifyTimeoutMs)
-                            if (result == TermuxIntegration.VerifyResult.Ok) {
-                                TermuxIntegration.markVerifiedOk()
-                            }
-                            lastVerifiedOk = TermuxIntegration.lastVerifiedOkAtMs > 0L
-                            integrationState = TermuxIntegration.state(ctx)
-                            val msg = when (result) {
-                                TermuxIntegration.VerifyResult.Ok -> ctx.getString(R.string.setting_termux_verify_ok)
-                                TermuxIntegration.VerifyResult.NotInstalled -> ctx.getString(R.string.setting_termux_verify_not_installed)
-                                TermuxIntegration.VerifyResult.NoPermission -> ctx.getString(R.string.setting_termux_verify_no_permission)
-                                TermuxIntegration.VerifyResult.AllowExternalAppsMissing -> ctx.getString(R.string.setting_termux_verify_allow_external_apps)
-                                is TermuxIntegration.VerifyResult.UnexpectedOutput -> ctx.getString(R.string.setting_termux_verify_unexpected_output)
-                                is TermuxIntegration.VerifyResult.OtherError -> ctx.getString(R.string.setting_termux_verify_other_error, result.message)
-                            }
-                            val type = if (result == TermuxIntegration.VerifyResult.Ok) ToastType.Success else ToastType.Error
-                            toaster.show(msg, type = type)
-                        }
-                    },
+                    // Re-run smoke test on tap.
+                    onClick = { runVerify() },
                     headlineContent = { Text(stringResource(R.string.setting_termux_status_verify)) },
                     supportingContent = {
                         Text(
@@ -378,12 +411,103 @@ fun SettingTermuxPage(
                 title = { Text(stringResource(R.string.setting_termux_section_help)) },
             ) {
                 item(
+                    onClick = { showSetupHelpDialog = true },
                     headlineContent = { Text(stringResource(R.string.setting_termux_help_allow_external_apps_title)) },
                     supportingContent = { Text(stringResource(R.string.setting_termux_help_allow_external_apps_body)) },
                 )
             }
         }
     }
+
+    if (showSetupHelpDialog) {
+        SetupHelpDialog(
+            onDismiss = { showSetupHelpDialog = false },
+            onOpenTermux = openTermux,
+            onDone = {
+                showSetupHelpDialog = false
+                runVerify()
+            },
+        )
+    }
+}
+
+/**
+ * Setup-help dialog: shows [TERMUX_SETUP_COMMAND] in a monospace box with a copy affordance
+ * (icon button and tapping the command both copy). The clipboard text gets a trailing
+ * newline after the final `exit` line so pasting into Termux runs it immediately.
+ */
+@Composable
+private fun SetupHelpDialog(
+    onDismiss: () -> Unit,
+    onOpenTermux: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    val toaster = LocalToaster.current
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    val copyCommand: () -> Unit = {
+        scope.launch {
+            // Trailing newline acts as Enter on paste, so the command runs immediately.
+            clipboard.setClipEntry(
+                ClipEntry(ClipData.newPlainText("termux-setup", TERMUX_SETUP_COMMAND + "\n"))
+            )
+            toaster.show(ctx.getString(R.string.copied), type = ToastType.Success)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.setting_termux_help_allow_external_apps_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.setting_termux_help_dialog_body))
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = TERMUX_SETUP_COMMAND,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            softWrap = false,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClick = copyCommand)
+                                .horizontalScroll(rememberScrollState())
+                                .padding(8.dp),
+                        )
+                        IconButton(onClick = copyCommand) {
+                            Icon(
+                                imageVector = HugeIcons.Copy01,
+                                contentDescription = stringResource(R.string.copy),
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.setting_termux_help_dialog_paste_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDone) {
+                Text(stringResource(R.string.setting_termux_help_dialog_done))
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.cancel))
+                }
+                TextButton(onClick = onOpenTermux) {
+                    Text(stringResource(R.string.setting_termux_status_open))
+                }
+            }
+        },
+    )
 }
 
 private enum class StatusColor { Green, Orange, Red }

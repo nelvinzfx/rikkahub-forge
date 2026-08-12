@@ -107,7 +107,7 @@
   <string name="setting_page_scheduled_jobs">المهام المجدوَلة</string>
   <string name="setting_page_scheduled_jobs_desc">مهام قائمة على الوقت جدوَلها المساعد — مهام لمرة واحدة وتعبيرات cron متكررة.</string>
   <string name="setting_page_doctor">التشخيص</string>
-  <string name="setting_page_doctor_desc">تشخيص التطبيق وإصلاحه — الأذونات والخدمات وقاعدة البيانات والشبكة وTermux.</string>
+  <string name="setting_page_doctor_desc">تشخيص التطبيق وإصلاحه: الأذونات والخدمات وقاعدة البيانات والشبكة وTermux.</string>
   <string name="setting_page_doctor_run_again">تشغيل مرة أخرى</string>
   <string name="setting_page_doctor_running">جارٍ التشغيل…</string>
   <string name="setting_page_doctor_copy_report">نسخ التقرير</string>
@@ -1126,7 +1126,7 @@
   <string name="assistant_page_local_tools_files_desc">قراءة الملفات وكتابتها وسردها والبحث فيها ونسخها ونقلها وحذفها.</string>
   <string name="assistant_page_local_tools_section_files">مدير الملفات</string>
   <string name="assistant_page_local_tools_mcp_control_title">التحكم بـ MCP</string>
-  <string name="assistant_page_local_tools_mcp_control_desc">السماح للمساعد بإضافة خوادم MCP وتعديلها وإزالتها. يمكن للمساعد تثبيت MCP في Termux أو على مضيف SSH بعيد، ثم ربطه بالتطبيق — دون أن تفتح الإعدادات.</string>
+  <string name="assistant_page_local_tools_mcp_control_desc">السماح للمساعد بإضافة خوادم MCP وتعديلها وإزالتها. يمكن للمساعد تثبيت MCP في Termux أو على مضيف SSH بعيد، ثم ربطه بالتطبيق، دون أن تفتح الإعدادات.</string>
   <string name="assistant_page_local_tools_external_automation_title">الأتمتة الخارجية</string>
   <string name="assistant_page_local_tools_external_automation_desc">السماح للمساعد بإدارة واجهة Intent للأتمتة الخارجية — المسار الذي يتيح لـ Tasker / MacroDroid / Locale / ADB إطلاق نوايا RUN_TASK إلى المساعد. الافتراضي مُعطَّل؛ يمكن للمساعد تفعيله وإضافة حزم مستدعِين موثوقة ومراجعة سجل الاستدعاءات الأخير.</string>
   <string name="assistant_page_local_tools_reliability_title">الموثوقية</string>
