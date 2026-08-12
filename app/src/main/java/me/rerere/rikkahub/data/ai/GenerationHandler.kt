@@ -435,6 +435,13 @@ class GenerationHandler(
         // closure that reads ToolApprovalAllowList + ToolApprovalPreferences. Default
         // returns false so callers that don't care still get vanilla approval gating.
         isToolAutoApproved: suspend (toolName: String) -> Boolean = { false },
+        // Best-effort cause lookup when a model-emitted tool call resolves to NO Tool in
+        // the active set (Termux gate flipped mid-conversation, MCP server disabled /
+        // disconnected / re-synced, hallucinated name, …). ChatService supplies the
+        // closure; the default keeps a generic-but-explicit envelope. The dispatch site
+        // below turns any unresolved call into an in-band tool_unavailable error so the
+        // failure can never be silent. See tools/ToolAvailability.kt.
+        unavailableToolInfo: (toolName: String) -> me.rerere.rikkahub.data.ai.tools.UnavailableToolInfo? = { null },
         // Called before EVERY provider request (including post-tool loop requests). It may
         // persist/compact the transcript and return a replacement effective context.
         onBeforeProviderRequest: suspend (List<UIMessage>) -> List<UIMessage> = { it },
@@ -924,7 +931,28 @@ class GenerationHandler(
                         }
                         runCatching {
                             val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
-                                ?: error("Tool ${tool.toolName} not found")
+                            if (toolDef == null) {
+                                // The model called a tool that is not in the active set. This is
+                                // NOT a hallucination by default: the tool may have been gated off
+                                // mid-conversation (Termux switch) or its MCP source may have
+                                // dropped while earlier turns still reference it. Return an explicit
+                                // in-band envelope (with the likely cause + remedy when the caller's
+                                // inspector knows it) instead of an opaque "not found" exception, so
+                                // the model can pivot or tell the user — never a silent dead-end.
+                                Log.w(TAG, "generateText: model called '${tool.toolName}' which is not in the active tool set; returning tool_unavailable envelope")
+                                executedTools += tool.copy(
+                                    output = listOf(
+                                        UIMessagePart.Text(
+                                            me.rerere.rikkahub.data.ai.tools.ToolAvailability
+                                                .buildUnavailableEnvelope(
+                                                    tool.toolName,
+                                                    unavailableToolInfo(tool.toolName),
+                                                )
+                                        )
+                                    )
+                                )
+                                return@forEach
+                            }
                             val args = parsedArgs.getOrThrow()
                             Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: ${redactSecrets(args)}")
                             // Mark the tool as "execution started" BEFORE actually running.

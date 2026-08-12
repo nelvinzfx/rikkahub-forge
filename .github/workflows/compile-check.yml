@@ -60,6 +60,7 @@ jobs:
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxEditShellSimulationTest' \
             --tests 'me.rerere.rikkahub.ui.components.message.tools.TermuxToolUIModelsTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.ToolSchemaArrayItemsTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.ToolAvailabilityTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.LocalToolsDescriptionTest' \
             --tests 'me.rerere.rikkahub.ui.components.richtext.DiffLayoutTest' \
             --tests 'me.rerere.rikkahub.ui.components.message.GroupMessagePartsTest' \

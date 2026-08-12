@@ -5,9 +5,12 @@ import kotlinx.serialization.Serializable
 import me.rerere.ai.core.InputSchema
 import kotlin.uuid.Uuid
 
+/** Slug embedded in model-facing MCP tool names; also used by tool-unavailability
+ *  diagnostics to map an unresolved `mcp__*` call back to its server. */
+internal fun mcpServerSlug(serverId: Uuid): String = serverId.toString().take(8).replace("-", "")
+
 internal fun modelFacingMcpToolName(serverId: Uuid, serverName: String, toolName: String): String {
-    val serverSlug = serverId.toString().take(8).replace("-", "")
-    return "mcp__${serverSlug}_${serverName}__${toolName}"
+    return "mcp__${mcpServerSlug(serverId)}_${serverName}__${toolName}"
 }
 
 internal fun availableMcpToolsForAssistant(

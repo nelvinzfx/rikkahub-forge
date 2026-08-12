@@ -291,6 +291,13 @@ class ChatService(
     }
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
+
+    // Last assembled tool-name set per conversation, feeding the tool-set change notice:
+    // when a generation's advertised definitions differ from the previous one (Termux
+    // gate flipped mid-conversation, MCP server dropped/re-synced, …), a short in-band
+    // note is appended to the system addendum so the model isn't acting on stale tool
+    // context. See ToolAvailability.toolSetChangeNotice.
+    private val lastGenerationToolNames = ConcurrentHashMap<String, Set<String>>()
     // Guarded by parentStopEpochLock. One epoch absorbs repeated stop requests and all
     // parent jobs detached by them until the full parent+worker tree is quiescent.
     private val parentStopEpochLock = Any()
@@ -432,6 +439,9 @@ class ChatService(
             sessionMutexes.remove(conversationId)
             _sessionsVersion.value++
             compactionMutexes.remove(conversationId)
+            // Evict the tool-set baseline too; a cold restart simply re-baselines without
+            // emitting a change notice.
+            lastGenerationToolNames.remove(conversationId.toString())
             Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})")
         }
     }
@@ -448,6 +458,7 @@ class ChatService(
         sessionMutexes.remove(conversationId)
         _sessionsVersion.value++
         compactionMutexes.remove(conversationId)
+        lastGenerationToolNames.remove(conversationId.toString())
         Log.i(TAG, "dropSession: $conversationId (remaining: ${sessions.size})")
     }
 
@@ -1201,6 +1212,28 @@ class ChatService(
                 else -> conversation.orchestratorMode
             }
 
+            // Snapshot of every configured MCP server for tool-unavailable diagnostics:
+            // when the model calls an mcp__* tool that no longer resolves to a live Tool,
+            // the inspector passed to generateText maps it back to its server and explains
+            // WHY (disabled / not enabled for this assistant / disconnected / its tool list
+            // re-synced) instead of returning an opaque "not found".
+            val mcpServerSnapshots = settings.mcpServers.map { cfg ->
+                me.rerere.rikkahub.data.ai.tools.ToolAvailability.McpServerSnapshot(
+                    slugPrefix = me.rerere.rikkahub.data.ai.mcp.mcpServerSlug(cfg.id),
+                    name = cfg.commonOptions.name,
+                    enabled = cfg.commonOptions.enable,
+                    enabledForAssistant = cfg.id in assistant.mcpServers,
+                    knownToolNames = cfg.commonOptions.tools
+                        .filter { it.enable }
+                        .map { it.name }
+                        .toSet(),
+                    connected = mcpManager.isClientConnected(cfg.id),
+                )
+            }
+            // Captured from the tools argument below — named arguments evaluate in source
+            // order, so the tools buildList runs before the systemAddendum that reads this.
+            var assembledToolNames: Set<String>? = null
+
             // start generating
             val session = getOrCreateSession(conversationId)
             generationHandler.generateText(
@@ -1208,10 +1241,6 @@ class ChatService(
                 model = model,
                 maxSteps = generationMaxSteps ?: me.rerere.rikkahub.data.ai.DEFAULT_MAX_GENERATION_STEPS,
                 processingStatus = session.processingStatus,
-                // Combine the surface runtime context with any skills explicitly activated
-                // by @mention in the latest user turn. Both are rebuilt per generation and
-                // never persisted into conversation history.
-                systemAddendum = systemAddendum,
                 conversationId = conversationId.toString(),
                 isToolAutoApproved = { toolName ->
                     // YOLO mode ("I AM STUPID" toggle in Settings → Tool approvals): every
@@ -1409,6 +1438,40 @@ class ChatService(
                         }
                         available.filter { it.name in allowed }
                     } ?: available
+                }.also { assembled ->
+                    assembledToolNames = assembled.mapTo(mutableSetOf()) { it.name }
+                },
+                // Cause lookup for calls that resolve to NO tool in the active set (see
+                // GenerationHandler's dispatch site). Reads the Termux gate at dispatch
+                // time, so a mid-turn flip of Settings > Termux is honoured immediately.
+                unavailableToolInfo = { toolName ->
+                    me.rerere.rikkahub.data.ai.tools.ToolAvailability.inspect(
+                        toolName = toolName,
+                        termuxIntegrationEnabled = me.rerere.rikkahub.data.preferences
+                            .TermuxRuntime.integrationEnabled,
+                        mcpServers = mcpServerSnapshots,
+                    )
+                },
+                // Combine the surface runtime context with any skills explicitly activated
+                // by @mention in the latest user turn, PLUS a one-line in-band notice when
+                // the advertised tool set changed since the previous generation in this
+                // conversation (e.g. the Termux switch flipped, an MCP server dropped).
+                // Without this the definitions silently vanish while the model's earlier
+                // context still references them. All rebuilt per generation and never
+                // persisted into conversation history.
+                systemAddendum = run {
+                    val key = conversationId.toString()
+                    val current = assembledToolNames
+                    val previous = if (current != null) {
+                        lastGenerationToolNames.put(key, current)
+                    } else {
+                        lastGenerationToolNames[key]
+                    }
+                    val notice = me.rerere.rikkahub.data.ai.tools.ToolAvailability
+                        .toolSetChangeNotice(previous, current.orEmpty())
+                    listOfNotNull(systemAddendum, notice)
+                        .joinToString("\n\n")
+                        .takeIf { it.isNotBlank() }
                 },
             ).conflateLatest(STREAM_UPDATE_WINDOW_MS).onCompletion {
                 // 取消 Live Update 通知

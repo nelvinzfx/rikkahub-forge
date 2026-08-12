@@ -37,6 +37,8 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.AppScope
@@ -178,10 +180,38 @@ class McpManager(
         return availableMcpToolsForAssistant(settings.mcpServers, assistant.mcpServers)
     }
 
+    /** Live connection state for diagnostics (tool-unavailable envelopes). */
+    fun isClientConnected(serverId: Uuid): Boolean {
+        val client = clients.entries.find { it.key.id == serverId }?.value ?: return false
+        return client.transport != null
+    }
+
     suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
         val entry = clients.entries.find { it.key.id == serverId }
         val client = entry?.value
-            ?: return listOf(UIMessagePart.Text("Failed to execute tool, because no such mcp client for the tool"))
+            ?: return listOf(
+                UIMessagePart.Text(
+                    buildJsonObject {
+                        put("error", JsonPrimitive("mcp_server_unavailable"))
+                        put("tool", JsonPrimitive(toolName))
+                        put(
+                            "detail",
+                            JsonPrimitive(
+                                "No live MCP client for this server — it was disabled, removed, " +
+                                    "or lost its connection after this conversation started."
+                            ),
+                        )
+                        put(
+                            "recovery",
+                            JsonPrimitive(
+                                "Do not retry in a loop. Tell the user the MCP server appears " +
+                                    "unavailable; they can check it in Settings > MCP servers. " +
+                                    "Retry only after it reconnects."
+                            ),
+                        )
+                    }.toString()
+                )
+            )
         val config = entry.key
         Log.i(TAG, "callTool: $toolName / $args (server: ${config.commonOptions.name})")
 
