@@ -190,6 +190,10 @@ sealed class LocalToolOption {
     @Serializable @SerialName("system_intents")      data object SystemIntents      : LocalToolOption()
     @Serializable @SerialName("browser")             data object Browser            : LocalToolOption()
     @Serializable @SerialName("web_fetch")           data object WebFetch           : LocalToolOption()
+    // LEGACY: the per-assistant conversation-recall toggle was removed (search_conversations /
+    // read_conversation / open_conversation are now registered unconditionally for every
+    // assistant). The object stays so old assistants whose stored localTools still contain
+    // "conversation_recall" decode cleanly; nothing reads it for gating anymore.
     @Serializable @SerialName("conversation_recall") data object ConversationRecall : LocalToolOption()
 
     // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.
@@ -991,11 +995,13 @@ class LocalTools(
             // Lightweight HTTP GET/POST (item 1.2) — backed by the shared OkHttp singleton.
             tools.add(webFetchTool(okHttpClient))
         }
-        if (options.contains(LocalToolOption.ConversationRecall)) {
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.searchConversationsTool(conversationRepo))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.readConversationTool(conversationRepo))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.openConversationTool(context, conversationRepo))
-        }
+        // Conversation recall is ALWAYS ON: no switch, no menu entry, no per-assistant option.
+        // The removed LocalToolOption.ConversationRecall survives only as a legacy decode target.
+        // These three tools are read-only over the local conversation store, so there is nothing
+        // to gate — every assistant (chat / cron / sub-agent / workflow) gets them.
+        tools.add(me.rerere.rikkahub.data.ai.tools.local.searchConversationsTool(conversationRepo))
+        tools.add(me.rerere.rikkahub.data.ai.tools.local.readConversationTool(conversationRepo))
+        tools.add(me.rerere.rikkahub.data.ai.tools.local.openConversationTool(context, conversationRepo))
         // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.
         if (options.contains(LocalToolOption.SmsSend)) {
             tools.add(me.rerere.rikkahub.data.ai.tools.local.smsSendTool(context))

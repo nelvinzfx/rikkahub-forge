@@ -44,7 +44,7 @@ This fork tracks upstream and adds five major systems on top: native Termux tool
 ### Memory, recall & context
 
 - **Searchable memory bank**: tiered core/bank memories with semantic tags, searchable and editable by the agent itself.
-- **Conversation recall**: the agent can search past conversations and read their full contents; deep links open a specific chat directly.
+- **Conversation recall**: always on for every assistant — the agent can search past conversations and read their full contents; deep links open a specific chat directly.
 - **Auto-compaction**: pi-style checkpoints compress old history when the context window fills, with token-based keep windows, a pre-generation budget gate, and turn continuation after compression.
 - **Context gauge**: live context-window usage in the chat top bar with a flowing liquid animation, fed by provider `context_window` metadata.
 - **Per-conversation drafts**: unsent messages survive leaving the chat.

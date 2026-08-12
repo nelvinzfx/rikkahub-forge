@@ -1171,20 +1171,9 @@ private fun AssistantLocalToolContent(
                     )
                 }
             )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_conversation_recall_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_conversation_recall_desc))
-                },
-                trailingContent = {
-                    PermissionedSwitch(
-                        checked = assistant.localTools.contains(LocalToolOption.ConversationRecall),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.ConversationRecall, it) },
-                    )
-                }
-            )
+            // Conversation recall (search_conversations / read_conversation / open_conversation)
+            // has no row: it is always on for every assistant, registered unconditionally in
+            // LocalTools.getTools().
         }
 
         // Phase 25 — Phase 3 second cut + ExternalStorage + Archive.

@@ -90,6 +90,7 @@ jobs:
             --tests 'me.rerere.rikkahub.data.repository.ConversationRecallMergeTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.SearchConversationsToolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.ConversationRecallToolsTest' \
+            --tests 'me.rerere.rikkahub.data.ai.tools.ConversationRecallAlwaysOnTest' \
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \
