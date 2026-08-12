@@ -1232,6 +1232,10 @@ class ChatService(
             }
             // Captured from the tools argument below — named arguments evaluate in source
             // order, so the tools buildList runs before the systemAddendum that reads this.
+            // The same ordering is what makes the tombstone step inside the tools argument
+            // safe: it reads lastGenerationToolNames BEFORE the systemAddendum block below
+            // advances the baseline with put(). Captured from the REAL assembly only —
+            // tombstones are appended after this capture and never enter the baseline.
             var assembledToolNames: Set<String>? = null
 
             // start generating
@@ -1438,8 +1442,43 @@ class ChatService(
                         }
                         available.filter { it.name in allowed }
                     } ?: available
-                }.also { assembled ->
-                    assembledToolNames = assembled.mapTo(mutableSetOf()) { it.name }
+                }.let { assembled ->
+                    // Baseline = REAL tools only. Tombstones (appended below) must never
+                    // be re-baselined, or one gate flip would tombstone the name forever
+                    // (previous would keep containing it). Because the baseline is real
+                    // tools and tombstones are recomputed per generation, a tool that
+                    // comes back (gate flipped on again) is simply the real definition
+                    // again — no tombstone, no cleanup step.
+                    val currentNames = assembled.mapTo(mutableSetOf()) { it.name }
+                    assembledToolNames = currentNames
+                    // TOMBSTONES — kill the "definition vanished, name persists" hole.
+                    // Live-observed: when a definition is absent but the model knows the
+                    // name from earlier turns, its attempted call materializes as calls
+                    // to RANDOM other tools, so the dispatch-layer toolDef==null envelope
+                    // never fires. Keeping the name advertised as a screaming-disabled
+                    // stub makes the call form correctly and resolve through the NORMAL
+                    // dispatch path into the same tool_unavailable envelope.
+                    //
+                    // Scope: ONLY tools advertised earlier in THIS conversation that are
+                    // now absent (previous − current). Never tombstone a tool that was
+                    // never advertised here (e.g. an MCP server never enabled for this
+                    // assistant) — that would bloat context and change assistant-scoping
+                    // semantics. First generation (no baseline) tombstones nothing;
+                    // headless direct-mode paths never reach this assembly at all.
+                    val previous = lastGenerationToolNames[conversationId.toString()]
+                    val missing = me.rerere.rikkahub.data.ai.tools.ToolAvailability
+                        .tombstoneNames(previous, currentNames)
+                    if (missing.isEmpty()) assembled else assembled + missing.sorted().map { name ->
+                        me.rerere.rikkahub.data.ai.tools.ToolAvailability.buildTombstoneTool(
+                            toolName = name,
+                            info = me.rerere.rikkahub.data.ai.tools.ToolAvailability.inspect(
+                                toolName = name,
+                                termuxIntegrationEnabled = me.rerere.rikkahub.data.preferences
+                                    .TermuxRuntime.integrationEnabled,
+                                mcpServers = mcpServerSnapshots,
+                            ),
+                        )
+                    }
                 },
                 // Cause lookup for calls that resolve to NO tool in the active set (see
                 // GenerationHandler's dispatch site). Reads the Termux gate at dispatch

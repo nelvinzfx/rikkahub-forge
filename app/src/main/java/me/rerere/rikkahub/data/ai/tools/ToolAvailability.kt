@@ -1,7 +1,11 @@
 package me.rerere.rikkahub.data.ai.tools
 
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import me.rerere.ai.core.InputSchema
+import me.rerere.ai.core.Tool
+import me.rerere.ai.ui.UIMessagePart
 
 /**
  * General "called while unavailable" diagnostics for the tool-resolution layer.
@@ -14,7 +18,10 @@ import kotlinx.serialization.json.buildJsonObject
  * because the definitions vanished without notice). [inspect] attaches the likely cause
  * and a user-actionable remedy; [buildUnavailableEnvelope] is the in-band error the model
  * receives; [toolSetChangeNotice] produces the per-generation system addendum that tells
- * the model when the advertised tool set changed.
+ * the model when the advertised tool set changed; [ToolAvailability.buildTombstoneTool]
+ * keeps a vanished tool's NAME advertised as a stub so the model's call forms correctly
+ * and resolves into the envelope instead of materializing as hallucinated calls to
+ * unrelated tools (live-observed when definitions vanish while names persist in context).
  *
  * Pure functions only — every caller-facing decision is unit-testable on the JVM.
  */
@@ -166,6 +173,55 @@ object ToolAvailability {
         }.toString()
 
     private const val MAX_LISTED_NAMES = 8
+
+    /**
+     * Names that must be tombstoned this generation: advertised to the model in the
+     * previous generation of this conversation but absent from the current assembly.
+     *
+     * Scope boundary (deliberate): ONLY present-then-absent within the SAME conversation.
+     * A name that was never advertised here — e.g. a tool on an MCP server that was never
+     * enabled for this assistant — is never tombstoned: advertising it would bloat the
+     * context and silently widen assistant-scoping semantics. The first generation of a
+     * conversation (previous == null) therefore tombstones nothing.
+     */
+    fun tombstoneNames(previous: Set<String>?, current: Set<String>): Set<String> =
+        previous.orEmpty() - current
+
+    /** Model-facing description for a tombstone definition. Deliberately terse — the
+     *  tombstone count is bounded by the previous set size, but every description still
+     *  costs context budget in each generation it appears in. */
+    fun tombstoneDescription(info: UnavailableToolInfo?): String =
+        if (info != null) {
+            "CURRENTLY DISABLED — ${info.reason} DO NOT CALL. If the user asks for this " +
+                "capability, tell them how to re-enable it."
+        } else {
+            "CURRENTLY UNAVAILABLE — no longer offered. DO NOT CALL; inform the user."
+        }
+
+    /**
+     * A stub [Tool] that keeps a vanished tool's NAME valid in the model's context.
+     *
+     * When a definition silently disappears while earlier turns still reference the name,
+     * the model's attempted call cannot form against the current definitions and was
+     * live-observed materializing as calls to RANDOM other tools — which means the
+     * dispatch-layer toolDef==null backstop never fires. A tombstone keeps the name
+     * addressable: the call forms correctly, resolves through the NORMAL dispatch path
+     * (toolDef != null), and its execute returns the same explicit [buildUnavailableEnvelope]
+     * output. Tombstones are recomputed per generation from the real-tools-only baseline,
+     * so when a tool comes back the real definition simply replaces the stub.
+     */
+    fun buildTombstoneTool(toolName: String, info: UnavailableToolInfo?): Tool = Tool(
+        name = toolName,
+        description = tombstoneDescription(info),
+        // Minimal empty object schema — some providers reject definitions without one.
+        parameters = { InputSchema.Obj(properties = JsonObject(emptyMap())) },
+        // Never approval-gate a tombstone: the whole point is that a call resolves
+        // immediately and cheaply into the explicit tool_unavailable envelope.
+        needsApproval = { false },
+        execute = {
+            listOf(UIMessagePart.Text(buildUnavailableEnvelope(toolName, info)))
+        },
+    )
 
     /**
      * Short system-addendum note for when the assembled tool definitions differ from the

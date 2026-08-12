@@ -1,9 +1,14 @@
 package me.rerere.rikkahub.data.ai.tools
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import me.rerere.ai.core.InputSchema
+import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -227,5 +232,83 @@ class ToolAvailabilityTest {
         requireNotNull(notice)
         assertTrue(notice.contains("(+12 more)"))
         assertTrue(!notice.contains("tool_20"))
+    }
+
+    // ---- tombstone tools ----
+
+    @Test
+    fun `tombstone names are previous minus current and never fire on first generation`() {
+        assertEquals(emptySet<String>(), ToolAvailability.tombstoneNames(null, setOf("a")))
+        assertEquals(emptySet<String>(), ToolAvailability.tombstoneNames(setOf("a"), setOf("a")))
+        assertEquals(setOf("b"), ToolAvailability.tombstoneNames(setOf("a", "b"), setOf("a")))
+        // Never-advertised names (only in current, or in neither) are never tombstoned.
+        assertEquals(emptySet<String>(), ToolAvailability.tombstoneNames(setOf("a"), setOf("a", "new")))
+    }
+
+    @Test
+    fun `tombstone for termux gate keeps the name and screams disabled with the cause`() {
+        val info = ToolAvailability.inspect(
+            "termux_run_command",
+            termuxIntegrationEnabled = false,
+            mcpServers = emptyList(),
+        )
+        val tool = ToolAvailability.buildTombstoneTool("termux_run_command", info)
+        assertEquals("termux_run_command", tool.name)
+        assertTrue(tool.description.startsWith("CURRENTLY DISABLED"))
+        assertTrue(tool.description.contains("Termux integration is switched off"))
+        assertTrue(tool.description.contains("DO NOT CALL"))
+        assertTrue(tool.description.contains("tell them how to re-enable it"))
+    }
+
+    @Test
+    fun `tombstone without a known cause uses the generic unavailable text`() {
+        val tool = ToolAvailability.buildTombstoneTool("mystery_tool", null)
+        assertEquals("mystery_tool", tool.name)
+        assertTrue(tool.description.startsWith("CURRENTLY UNAVAILABLE"))
+        assertTrue(tool.description.contains("DO NOT CALL"))
+        assertTrue(tool.description.contains("inform the user"))
+    }
+
+    @Test
+    fun `tombstone never needs approval and has a minimal object schema`() {
+        val tool = ToolAvailability.buildTombstoneTool("termux_run_command", null)
+        assertFalse(tool.needsApproval(JsonNull))
+        val schema = tool.parameters()
+        assertTrue(schema is InputSchema.Obj)
+        assertTrue((schema as InputSchema.Obj).properties.isEmpty())
+    }
+
+    @Test
+    fun `tombstone execute returns the tool_unavailable envelope through normal dispatch`() = runBlocking {
+        val info = ToolAvailability.inspect(
+            "termux_run_command",
+            termuxIntegrationEnabled = false,
+            mcpServers = emptyList(),
+        )
+        val output = ToolAvailability.buildTombstoneTool("termux_run_command", info)
+            .execute(JsonNull)
+        assertEquals(1, output.size)
+        val text = (output.single() as UIMessagePart.Text).text
+        val obj = json.parseToJsonElement(text).jsonObject
+        assertEquals("tool_unavailable", obj.getValue("error").jsonPrimitive.content)
+        assertEquals("termux_run_command", obj.getValue("tool").jsonPrimitive.content)
+        assertTrue(obj.getValue("detail").jsonPrimitive.content.contains("Termux integration is switched off"))
+        assertTrue(obj.getValue("recovery").jsonPrimitive.content.contains("Settings > Termux"))
+    }
+
+    @Test
+    fun `baseline excludes tombstones so a returning tool sheds its tombstone`() {
+        // Simulates ChatService's per-generation rule: baseline := REAL tool names only.
+        var baseline: Set<String>? = null
+        fun generation(real: Set<String>): Set<String> {
+            val tombstones = ToolAvailability.tombstoneNames(baseline, real)
+            baseline = real // real tools only — tombstones never re-baselined
+            return tombstones
+        }
+        assertEquals(emptySet<String>(), generation(setOf("a", "termux_run_command"))) // gen 1: no baseline
+        assertEquals(setOf("termux_run_command"), generation(setOf("a")))              // gate off → tombstone
+        assertEquals(emptySet<String>(), generation(setOf("a", "termux_run_command"))) // gate back on → real def again
+        assertEquals(setOf("termux_run_command"), generation(setOf("a")))              // flip-flop still works
+        assertEquals(setOf("termux_run_command"), generation(setOf("a")))              // NOT tombstoned-forever growth
     }
 }
