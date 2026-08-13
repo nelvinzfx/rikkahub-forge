@@ -394,6 +394,45 @@ class TermuxToolUIModelsTest {
     }
 
     @Test
+    fun elapsedMsFieldIsAdditiveAndBackwardCompatible() {
+        // Absent (old sessions / other tools), null content, non-objects, strings,
+        // and negative values all read as "no elapsed time" instead of failing.
+        assertNull(parseTermuxElapsedMs(null))
+        assertNull(parseTermuxElapsedMs(json("""{"success":true}""")))
+        assertNull(parseTermuxElapsedMs(json("[1]")))
+        assertNull(parseTermuxElapsedMs(json("""{"elapsed_ms":"250"}""")))
+        assertNull(parseTermuxElapsedMs(json("""{"elapsed_ms":-1}""")))
+        assertEquals(0L, parseTermuxElapsedMs(json("""{"elapsed_ms":0}""")))
+        assertEquals(347L, parseTermuxElapsedMs(json("""{"error":"boom","elapsed_ms":347}""")))
+
+        // A stamped envelope must still parse into the strict success/error models:
+        // elapsed_ms is additive, older-shaped validators ignore unknown keys.
+        val path = "src/Main.kt"
+        val text = "fun main() {}"
+        val stamped = parseTermuxWriteUIModel(
+            "termux_write_file",
+            json("""{"path":"$path","content":"$text"}"""),
+            json(
+                """{"success":true,"ok":true,"operation":"write","actual_path":"/home/u/src/Main.kt","path_request_sha256":"${sha(path)}","content_sha256":"${sha(text)}","bytes_written":13,"total_bytes":13,"sha256":"${sha(text)}","error":null,"elapsed_ms":42}""",
+            ),
+        )
+        assertEquals(listOf(TermuxUIBadge.APPLIED), stamped!!.badges)
+    }
+
+    @Test
+    fun formatTermuxElapsedFollowsTookLabelRules() {
+        assertEquals("<0.1s", formatTermuxElapsed(0L))
+        assertEquals("<0.1s", formatTermuxElapsed(99L))
+        assertEquals("0.1s", formatTermuxElapsed(100L))
+        assertEquals("0.3s", formatTermuxElapsed(340L))
+        assertEquals("1.0s", formatTermuxElapsed(999L))
+        assertEquals("9.9s", formatTermuxElapsed(9_940L))
+        assertEquals("10s", formatTermuxElapsed(10_000L))
+        assertEquals("12s", formatTermuxElapsed(12_900L))
+        assertEquals("601s", formatTermuxElapsed(601_000L))
+    }
+
+    @Test
     fun partialJsonStringExtractionDecodesEscapesAndToleratesTruncation() {
         assertEquals(
             "a\nb\"c",

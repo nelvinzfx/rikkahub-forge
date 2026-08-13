@@ -112,6 +112,7 @@ import me.rerere.rikkahub.data.ai.tools.local.batchCopyTool
 import me.rerere.rikkahub.data.ai.tools.local.batchMoveTool
 import me.rerere.rikkahub.data.ai.tools.local.batchDeleteTool
 import me.rerere.rikkahub.data.ai.tools.local.webFetchTool
+import me.rerere.rikkahub.data.ai.tools.local.withTermuxElapsedTime
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.preferences.TermuxRuntime
@@ -846,21 +847,24 @@ class LocalTools(
         // The Termux app-install / RUN_COMMAND permission checks stay inside the individual
         // tools (TermuxIntegration.state) and are unaffected by this gate.
         if (TermuxRuntime.integrationEnabled) {
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxRunCommandTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadOutputTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileBytesTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFilesTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxWriteFileTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxEditFileTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxEditFilesTool(context))
+            // Every native termux tool is wrapped with withTermuxElapsedTime() at this
+            // single registration choke point so success AND error envelopes uniformly
+            // gain an additive elapsed_ms field (monotonic clock, rendered as "took 0.3s").
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxRunCommandTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadOutputTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFileBytesTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxReadFilesTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxWriteFileTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxEditFileTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxEditFilesTool(context).withTermuxElapsedTime())
             // Persistent interactive (tmux-backed) sessions: ssh-with-prompts, sudo, REPLs,
             // stateful shells. start is approval-gated; send is hardline-guarded per call.
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionStartTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionSendTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionReadTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionKillTool(context))
-            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionListTool(context))
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionStartTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionSendTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionReadTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionKillTool(context).withTermuxElapsedTime())
+            tools.add(me.rerere.rikkahub.data.ai.tools.local.termuxSessionListTool(context).withTermuxElapsedTime())
             // transcribe_audio_file shells out to whisper-cli via Termux's RUN_COMMAND
             // service — it has a hard transitive dependency on Termux being present. No
             // separate switch; it lives under the global Termux integration gate.

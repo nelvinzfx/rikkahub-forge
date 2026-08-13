@@ -1858,6 +1858,7 @@
   <string name="tool_ui_termux_truncated">truncated</string>
   <string name="tool_ui_termux_bytes">%s written</string>
   <string name="tool_ui_termux_bytes_written">%1$s written, %2$s total</string>
+  <string name="tool_ui_termux_took">took %s</string>
   <string name="tool_ui_list_files">List: %s</string>
   <string name="tool_ui_list_files_default">List files</string>
   <string name="tool_ui_list_files_empty">Empty</string>

@@ -54,6 +54,7 @@ import me.rerere.hugeicons.stroke.BubbleChatQuestion
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.Tick01
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.ui.components.message.tools.TermuxElapsedLabel
 import me.rerere.rikkahub.ui.components.message.tools.ToolStepStatus
 import me.rerere.rikkahub.ui.components.message.tools.ToolUIContext
 import me.rerere.rikkahub.ui.components.message.tools.ToolUIRegistry
@@ -249,6 +250,13 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                     overflow = TextOverflow.Ellipsis,
                 )
                 renderer.LabelExtras(context)
+                // Native termux tools stamp an additive elapsed_ms on their result
+                // envelope (TermuxToolTiming); render it as a subtle "took 0.3s"
+                // label next to the title for success AND error results. The label
+                // renders nothing when the field is absent (old sessions).
+                if (tool.toolName.startsWith("termux_")) {
+                    TermuxElapsedLabel(context.content)
+                }
             }
         },
         extra = if (isPending && onToolApproval != null) {
