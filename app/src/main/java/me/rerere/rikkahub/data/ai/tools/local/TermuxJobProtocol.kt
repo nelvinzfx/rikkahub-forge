@@ -9,6 +9,8 @@ internal const val MAX_STDOUT_HEAD_BYTES = 49_152
 internal const val MAX_STDERR_HEAD_BYTES = 12_288
 internal const val MAX_COMBINED_HEAD_BYTES = 61_440
 internal const val MAX_RETAINED_OUTPUT_STREAM_BYTES = 8 * 1024 * 1024
+/** Minimum seconds between timer-driven retention passes; cap breaches bypass this. */
+internal const val RETENTION_MIN_INTERVAL_SECONDS = 600
 private const val MAX_PROTOCOL_CHARS = 100_000
 private val JOB_ID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
@@ -190,69 +192,141 @@ internal fun outputJobsToDelete(
 
 // Caller owns jobs.lock. protected_job is counted but never deleted by this pass.
 internal val JOB_RETENTION_LOCKED_SCRIPT = """
+    # Caller owns jobs.lock. protected_job is counted but never deleted by this pass.
+    # Amortized: the full pass runs only when the job-dir count exceeds max_jobs or the
+    # previous completed pass is older than RETENTION_MIN_INTERVAL_SECONDS (marker file
+    # .retention_last_run in jobs_root). Retention is NEVER fatal to the wrapping call:
+    # every failure path degrades to "cleanup skipped" (exit 0).
     set +e
     max_jobs=${'$'}1; ttl_seconds=${'$'}2; protected_job=${'$'}3
     jobs_root=${'$'}HOME/.cache/rikkahub/jobs
+    marker=${'$'}jobs_root/.retention_last_run
     [[ ${'$'}max_jobs =~ ^(0|[1-9][0-9]*)${'$'} ]] || exit 0
     [[ ${'$'}ttl_seconds =~ ^(0|[1-9][0-9]*)${'$'} ]] || exit 0
     [ "${'$'}max_jobs" -ge 1 ] && [ "${'$'}max_jobs" -le 200 ] || exit 0
     [ "${'$'}ttl_seconds" -ge 3600 ] && [ "${'$'}ttl_seconds" -le 604800 ] || exit 0
     if [ -n "${'$'}protected_job" ]; then [[ ${'$'}protected_job =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] || exit 0; fi
     [ -d "${'$'}jobs_root" ] && [ ! -L "${'$'}jobs_root" ] || exit 0
-    now=${'$'}(date +%s) || exit 0
-    completed_list=${'$'}(mktemp "${'$'}jobs_root/.retention.XXXXXX") || exit 0
-    chmod 600 -- "${'$'}completed_list" || { rm -f -- "${'$'}completed_list"; exit 0; }
-    for job_dir in "${'$'}jobs_root"/*; do
-        [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || continue
-        job_id=${'$'}{job_dir##*/}
-        [[ ${'$'}job_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] || continue
-        unsafe=false
-        for f in state meta stdout stderr stdout.live stderr.live stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do [ -L "${'$'}job_dir/${'$'}f" ] && unsafe=true; done
-        [ "${'$'}unsafe" = false ] || continue
-        # A terminal result can still have inherited writers being drained through bounded FIFOs.
-        # Keep it out of count-based retention while those readers are active; TTL remains the
-        # upper bound for abandoned descendants.
-        if { [ -p "${'$'}job_dir/stdout.pipe" ] || [ -p "${'$'}job_dir/stderr.pipe" ]; } &&
-            [ "${'$'}job_id" != "${'$'}protected_job" ]; then
-            drain_stamp=${'$'}(stat -c %Y -- "${'$'}job_dir" 2>/dev/null)
-            if [[ ${'$'}drain_stamp =~ ^(0|[1-9][0-9]*)${'$'} ]] && [ "${'$'}((now - drain_stamp))" -le "${'$'}ttl_seconds" ]; then continue; fi
+    now=${'$'}{EPOCHSECONDS:-${'$'}(date +%s)}
+    [[ ${'$'}now =~ ^[1-9][0-9]*${'$'} ]] || exit 0
+
+    # --- Amortization gate: bash builtins only, zero forks on the skip path. ---
+    dir_count=0
+    for job_dir in "${'$'}jobs_root"/*/; do [ -d "${'$'}job_dir" ] && dir_count=${'$'}((dir_count + 1)); done
+    pass_due=false
+    if [ "${'$'}dir_count" -gt "${'$'}max_jobs" ]; then
+        pass_due=true
+    elif [ -f "${'$'}marker" ] && [ ! -L "${'$'}marker" ]; then
+        last_run=
+        read -r last_run _ < "${'$'}marker"
+        # A marker from the future (clock skew) is invalid: never let it suppress passes.
+        if ! [[ ${'$'}last_run =~ ^[1-9][0-9]*${'$'} ]] || [ "${'$'}last_run" -gt "${'$'}now" ] || [ "${'$'}((now - last_run))" -ge ${RETENTION_MIN_INTERVAL_SECONDS} ]; then
+            pass_due=true
         fi
-        live=false
-        if [ -f "${'$'}job_dir/state" ]; then
-            read -r mode pid root_start extra < "${'$'}job_dir/state"
-            if [ "${'$'}mode" = group ] && [ -z "${'$'}extra" ] && [[ ${'$'}pid =~ ^[1-9][0-9]*${'$'} ]] && [[ ${'$'}root_start =~ ^[1-9][0-9]*${'$'} ]]; then
-                live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
-                live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
-                if [ "${'$'}live_pgrp" = "${'$'}pid" ] && [ "${'$'}live_start" = "${'$'}root_start" ]; then live=true; fi
+    else
+        pass_due=true
+    fi
+    [ "${'$'}pass_due" = true ] || exit 0
+
+    run_retention_pass() {
+        local completed_list screened_dirs meta_files job_dir job_id f unsafe
+        local -A meta_status=() meta_completed=()
+        completed_list=${'$'}(mktemp "${'$'}jobs_root/.retention.XXXXXX") || return 0
+        chmod 600 -- "${'$'}completed_list" || { rm -f -- "${'$'}completed_list"; return 0; }
+
+        # Phase A: screen dirs with builtins; never hand a symlinked meta to awk.
+        screened_dirs=(); meta_files=()
+        for job_dir in "${'$'}jobs_root"/*; do
+            [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || continue
+            job_id=${'$'}{job_dir##*/}
+            [[ ${'$'}job_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] || continue
+            unsafe=false
+            for f in state meta stdout stderr stdout.live stderr.live stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do
+                [ -L "${'$'}job_dir/${'$'}f" ] && unsafe=true
+            done
+            [ "${'$'}unsafe" = false ] || continue
+            screened_dirs+=("${'$'}job_dir")
+            [ -f "${'$'}job_dir/meta" ] && meta_files+=("${'$'}job_dir/meta")
+        done
+
+        # Phase B: one awk pass over every meta file replaces 2 sed forks per job dir.
+        # Emits "job_id<TAB>status<TAB>completed_at"; invalid fields are emitted empty,
+        # matching the old per-job sed + case sanitization. Duplicate keys count as
+        # invalid too (the old multi-line sed output always failed validation).
+        if [ "${'$'}{#meta_files[@]}" -gt 0 ]; then
+            local m_job m_status m_completed
+            while IFS=${'$'}'\t' read -r m_job m_status m_completed; do
+                [[ ${'$'}m_job =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] || continue
+                meta_status[${'$'}m_job]=${'$'}m_status
+                meta_completed[${'$'}m_job]=${'$'}m_completed
+            done < <(awk -F= '
+                function emit(   n, parts, id) {
+                    n = split(prev, parts, "/"); id = parts[n - 1]
+                    if (s_n != 1 || status !~ /^(completed|timed_out|cancelled|output_limited)${'$'}/) status = ""
+                    if (c_n != 1 || completed !~ /^(0|[1-9][0-9]*)${'$'}/) completed = ""
+                    printf "%s\t%s\t%s\n", id, status, completed
+                }
+                FNR == 1 { if (prev != "") emit(); prev = FILENAME; status = ""; completed = ""; s_n = 0; c_n = 0 }
+                ${'$'}1 == "status" && NF >= 2 { s_n++; if (NF == 2) status = ${'$'}2 }
+                ${'$'}1 == "completed_at" && NF >= 2 { c_n++; if (NF == 2) completed = ${'$'}2 }
+                END { if (prev != "") emit() }
+            ' "${'$'}{meta_files[@]}" 2>/dev/null)
+        fi
+
+        # Phase C: decision loop — semantics identical to the previous per-dir script.
+        local drain_stamp live mode pid root_start extra live_info live_pgrp live_start
+        local status completed_at stamp
+        for job_dir in "${'$'}{screened_dirs[@]}"; do
+            job_id=${'$'}{job_dir##*/}
+            # A terminal result can still have inherited writers draining through bounded
+            # FIFOs. Keep it out of count-based retention while readers are active; TTL
+            # remains the upper bound for abandoned descendants.
+            if { [ -p "${'$'}job_dir/stdout.pipe" ] || [ -p "${'$'}job_dir/stderr.pipe" ]; } &&
+                [ "${'$'}job_id" != "${'$'}protected_job" ]; then
+                drain_stamp=${'$'}(stat -c %Y -- "${'$'}job_dir" 2>/dev/null)
+                if [[ ${'$'}drain_stamp =~ ^(0|[1-9][0-9]*)${'$'} ]] && [ "${'$'}((now - drain_stamp))" -le "${'$'}ttl_seconds" ]; then continue; fi
             fi
-        fi
-        [ "${'$'}live" = true ] && continue
-        completed_at=; status=
-        if [ -f "${'$'}job_dir/meta" ]; then
-            status=${'$'}(sed -n 's/^status=//p' "${'$'}job_dir/meta")
-            completed_at=${'$'}(sed -n 's/^completed_at=//p' "${'$'}job_dir/meta")
-            case "${'$'}status" in completed|timed_out|cancelled|output_limited) ;; *) status= ;; esac
-            [[ ${'$'}completed_at =~ ^(0|[1-9][0-9]*)${'$'} ]] || completed_at=
-        fi
-        stamp=${'$'}completed_at
-        [ -n "${'$'}stamp" ] || stamp=${'$'}(stat -c %Y -- "${'$'}job_dir" 2>/dev/null)
-        [[ ${'$'}stamp =~ ^(0|[1-9][0-9]*)${'$'} ]] || continue
-        if [ "${'$'}job_id" != "${'$'}protected_job" ] && [ "${'$'}((now - stamp))" -gt "${'$'}ttl_seconds" ]; then
-            rm -rf -- "${'$'}job_dir"
-        elif [ -n "${'$'}status" ]; then
-            printf '%s\t%s\n' "${'$'}completed_at" "${'$'}job_id" >> "${'$'}completed_list"
-        fi
-    done
-    count=0
-    if [ -n "${'$'}protected_job" ] && awk -F '\t' -v id="${'$'}protected_job" '${'$'}2 == id { found=1 } END { exit !found }' "${'$'}completed_list"; then count=1; fi
-    while IFS=${'$'}'\t' read -r completed_at job_id; do
-        [ "${'$'}job_id" = "${'$'}protected_job" ] && continue
-        count=${'$'}((count + 1))
-        [ "${'$'}count" -le "${'$'}max_jobs" ] && continue
-        [[ ${'$'}job_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] &&
-            [ -d "${'$'}jobs_root/${'$'}job_id" ] && [ ! -L "${'$'}jobs_root/${'$'}job_id" ] && rm -rf -- "${'$'}jobs_root/${'$'}job_id"
-    done < <(sort -rn -- "${'$'}completed_list")
-    rm -f -- "${'$'}completed_list"
+            live=false
+            if [ -f "${'$'}job_dir/state" ]; then
+                read -r mode pid root_start extra < "${'$'}job_dir/state"
+                if [ "${'$'}mode" = group ] && [ -z "${'$'}extra" ] && [[ ${'$'}pid =~ ^[1-9][0-9]*${'$'} ]] && [[ ${'$'}root_start =~ ^[1-9][0-9]*${'$'} ]]; then
+                    live_info=${'$'}(awk '{ line=${'$'}0; sub(/^.*\) /, "", line); split(line, f, " "); print f[3], f[20] }' "/proc/${'$'}pid/stat" 2>/dev/null)
+                    live_pgrp=${'$'}{live_info%% *}; live_start=${'$'}{live_info#* }
+                    if [ "${'$'}live_pgrp" = "${'$'}pid" ] && [ "${'$'}live_start" = "${'$'}root_start" ]; then live=true; fi
+                fi
+            fi
+            [ "${'$'}live" = true ] && continue
+            status=${'$'}{meta_status[${'$'}job_id]-}
+            completed_at=${'$'}{meta_completed[${'$'}job_id]-}
+            stamp=${'$'}completed_at
+            [ -n "${'$'}stamp" ] || stamp=${'$'}(stat -c %Y -- "${'$'}job_dir" 2>/dev/null)
+            [[ ${'$'}stamp =~ ^(0|[1-9][0-9]*)${'$'} ]] || continue
+            if [ "${'$'}job_id" != "${'$'}protected_job" ] && [ "${'$'}((now - stamp))" -gt "${'$'}ttl_seconds" ]; then
+                rm -rf -- "${'$'}job_dir"
+            elif [ -n "${'$'}status" ]; then
+                printf '%s\t%s\n' "${'$'}completed_at" "${'$'}job_id" >> "${'$'}completed_list"
+            fi
+        done
+
+        local count=0 marker_tmp
+        if [ -n "${'$'}protected_job" ] && awk -F '\t' -v id="${'$'}protected_job" '${'$'}2 == id { found=1 } END { exit !found }' "${'$'}completed_list"; then count=1; fi
+        while IFS=${'$'}'\t' read -r completed_at job_id; do
+            [ "${'$'}job_id" = "${'$'}protected_job" ] && continue
+            count=${'$'}((count + 1))
+            [ "${'$'}count" -le "${'$'}max_jobs" ] && continue
+            [[ ${'$'}job_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}${'$'} ]] &&
+                [ -d "${'$'}jobs_root/${'$'}job_id" ] && [ ! -L "${'$'}jobs_root/${'$'}job_id" ] && rm -rf -- "${'$'}jobs_root/${'$'}job_id"
+        done < <(sort -rn -- "${'$'}completed_list")
+        rm -f -- "${'$'}completed_list"
+
+        # Record the completed pass; failure to persist the marker is non-fatal (the next
+        # call simply runs another pass).
+        marker_tmp=${'$'}(mktemp "${'$'}jobs_root/.retention_last_run.XXXXXX") || return 0
+        { printf '%s\n' "${'$'}now" > "${'$'}marker_tmp" && chmod 600 -- "${'$'}marker_tmp" && mv -f -- "${'$'}marker_tmp" "${'$'}marker"; } || rm -f -- "${'$'}marker_tmp"
+        return 0
+    }
+    run_retention_pass || true
+    exit 0
 """.trimIndent()
 
 internal val SPOOL_CAPTURE_LEADER_SCRIPT = """
@@ -355,7 +429,6 @@ internal val SPOOL_CAPTURE_SCRIPT = """
     [ ! -L "${'$'}jobs_root" ] || exit 125; mkdir -p -m 700 -- "${'$'}jobs_root" || exit 125; [ -d "${'$'}jobs_root" ] || exit 125; chmod 700 -- "${'$'}jobs_root" || exit 125
     [ ! -L "${'$'}lock_file" ] || exit 125; [ ! -e "${'$'}lock_file" ] || [ -f "${'$'}lock_file" ] || exit 125
     exec 9>>"${'$'}lock_file" || exit 125; chmod 600 -- "${'$'}lock_file"; flock -x 9 || exit 125
-    bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1
     tombstone=false
     if [ -e "${'$'}job_dir" ]; then
         [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || exit 125
@@ -389,11 +462,17 @@ internal val SPOOL_CAPTURE_SCRIPT = """
         chmod 600 -- "${'$'}stdout_file" "${'$'}stderr_file" || return 1
     }
     drain_root_output() {
+        # Fast path: this runs only after root_done was observed, so the root command has
+        # exited; only inherited descendants can still append through the bounded FIFOs.
+        # Two identical samples (~50 ms apart) instead of three: a descendant writing inside
+        # the removed third window may now miss the snapshot. That race existed before (the
+        # snapshot was always a point-in-time cut, immutable after publication); this only
+        # narrows the window. Never reduce below two samples.
         last_out=-1; last_err=-1; stable=0; n=0
         while [ "${'$'}n" -lt 40 ]; do
             out_size=${'$'}(stat -c %s -- "${'$'}stdout_live") || return 1; err_size=${'$'}(stat -c %s -- "${'$'}stderr_live") || return 1
             if [ "${'$'}out_size" = "${'$'}last_out" ] && [ "${'$'}err_size" = "${'$'}last_err" ]; then stable=${'$'}((stable + 1)); else stable=0; fi
-            [ "${'$'}stable" -ge 3 ] && return 0
+            [ "${'$'}stable" -ge 2 ] && return 0
             last_out=${'$'}out_size; last_err=${'$'}err_size; n=${'$'}((n + 1)); sleep 0.05
         done
         return 0
@@ -450,7 +529,8 @@ internal val SPOOL_CAPTURE_SCRIPT = """
     # Keep the release marker until retention. A limiter can reach its EXIT trap after metadata
     # publication; retaining this immutable marker prevents a missed wake and 10-second cleanup lag.
     rm -f -- "${'$'}state_file" "${'$'}done_file"
-    bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1
+    # Single retention point per call; the script self-amortizes and is never fatal.
+    bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1 || true
     stdout_b64=${'$'}(head -c "${'$'}stdout_head_bytes" -- "${'$'}stdout_file" | base64 -w 0) || exit 125; stderr_b64=${'$'}(head -c "${'$'}stderr_head_bytes" -- "${'$'}stderr_file" | base64 -w 0) || exit 125
     flock -u 9; trap - EXIT HUP INT TERM
     printf 'RIKKAHUB_JOB_V2\njob_id=%s\nstatus=%s\nexit_code=%s\nstdout_total_bytes=%s\nstderr_total_bytes=%s\nstdout_head_bytes=%s\nstderr_head_bytes=%s\nstdout_output_limited=%s\nstderr_output_limited=%s\nstdout_head_b64=%s\nstderr_head_b64=%s\n' "${'$'}job_id" "${'$'}status" "${'$'}exit_code" "${'$'}stdout_total" "${'$'}stderr_total" "${'$'}stdout_head_bytes" "${'$'}stderr_head_bytes" "${'$'}stdout_output_limited" "${'$'}stderr_output_limited" "${'$'}stdout_b64" "${'$'}stderr_b64"
@@ -511,7 +591,7 @@ internal val READ_OUTPUT_SCRIPT = """
     [ -d "${'$'}base" ] && [ ! -L "${'$'}base" ] && [ -d "${'$'}jobs_root" ] && [ ! -L "${'$'}jobs_root" ] || { printf 'RIKKAHUB_READ_V1\nerror=job_not_found\n'; exit 0; }
     [ ! -L "${'$'}lock_file" ] && { [ ! -e "${'$'}lock_file" ] || [ -f "${'$'}lock_file" ]; } || { printf 'RIKKAHUB_READ_V1\nerror=corrupt_job_state\n'; exit 0; }
     exec 9>>"${'$'}lock_file" || { printf 'RIKKAHUB_READ_V1\nerror=output_unreadable\n'; exit 0; }; flock -x 9 || exit 0
-    bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1
+    bash -c "${'$'}retention_script" rikka-retention "${'$'}max_jobs" "${'$'}ttl_seconds" "${'$'}job_id" >/dev/null 2>&1 || true
     [ -d "${'$'}job_dir" ] && [ ! -L "${'$'}job_dir" ] || { printf 'RIKKAHUB_READ_V1\nerror=job_not_found\n'; exit 0; }
     for f in stdout stderr stdout.live stderr.live meta state stop_reason stdout.pipe stderr.pipe stdout_limited stderr_limited root_done release; do [ -L "${'$'}job_dir/${'$'}f" ] && { printf 'RIKKAHUB_READ_V1\nerror=corrupt_job_state\n'; exit 0; }; done
     if [ -f "${'$'}job_dir/meta" ]; then

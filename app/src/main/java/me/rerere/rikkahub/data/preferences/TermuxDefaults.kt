@@ -49,7 +49,15 @@ object TermuxDefaults {
     const val MAX_TEXT_READ_MAX_BYTES = 61_440
 
     // --- Native output-spool retention ----------------------------------------------------
-    const val DEFAULT_MAX_RETAINED_OUTPUT_JOBS = 50
+    /**
+     * Lowered from 50 → 15: retention cost scales with retained dirs, and 15 completed
+     * jobs comfortably covers paging back through recent output. Stored preference wins:
+     * maxRetainedOutputJobsFlow (TermuxPreferences.kt:206-209) only falls back to this
+     * default when the user never saved a value, so existing installs that explicitly
+     * configured the knob keep their setting; installs on the old implicit default
+     * silently move to 15. No datastore migration required.
+     */
+    const val DEFAULT_MAX_RETAINED_OUTPUT_JOBS = 15
     const val MIN_MAX_RETAINED_OUTPUT_JOBS = 1
     const val MAX_MAX_RETAINED_OUTPUT_JOBS = 200
 
