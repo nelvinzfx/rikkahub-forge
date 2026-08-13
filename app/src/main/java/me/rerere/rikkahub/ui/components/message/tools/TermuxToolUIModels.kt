@@ -798,6 +798,27 @@ private fun sha256(bytes: ByteArray): String =
         "%02x".format(it.toInt() and 0xff)
     }
 
+/**
+ * Additive `elapsed_ms` field stamped on every native termux result envelope
+ * (see TermuxToolTiming). Absent on old sessions and non-termux tools: returns
+ * null and the UI simply renders nothing. Non-numeric or negative values are
+ * treated as absent so a malformed envelope can never break rendering.
+ */
+internal fun parseTermuxElapsedMs(content: JsonElement?): Long? =
+    (content as? JsonObject)?.long("elapsed_ms")?.takeIf { it >= 0 }
+
+/**
+ * Formats an elapsed duration for the "took 0.3s" label.
+ * Rules: under 100 ms -> "<0.1s" (covers the sub-millisecond edge without
+ * showing a misleading "0.0s"); under 10 s -> one-decimal seconds ("0.3s",
+ * "9.6s"); 10 s and above -> whole seconds, truncated ("12s").
+ */
+internal fun formatTermuxElapsed(elapsedMs: Long): String = when {
+    elapsedMs < 100 -> "<0.1s"
+    elapsedMs < 10_000 -> "%.1fs".format(elapsedMs / 1000.0)
+    else -> "${elapsedMs / 1000}s"
+}
+
 private fun JsonObject.strictString(key: String): String? =
     (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 

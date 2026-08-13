@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.serialization.json.JsonElement
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.metadataAs
 import me.rerere.highlight.HighlightText
@@ -506,6 +507,23 @@ private fun PreviewOverflowFooter(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * Subtle "took 0.3s" label for native termux tool results, fed by the additive
+ * `elapsed_ms` envelope field (see TermuxToolTiming). Renders for success AND
+ * error envelopes; renders nothing when the field is absent (old sessions,
+ * non-termux tools), so it can safely sit in the shared tool-step label row.
+ */
+@Composable
+internal fun TermuxElapsedLabel(content: JsonElement?) {
+    val elapsedMs = remember(content) { parseTermuxElapsedMs(content) } ?: return
+    Text(
+        text = stringResource(R.string.tool_ui_termux_took, formatTermuxElapsed(elapsedMs)),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+        maxLines = 1,
     )
 }
 
