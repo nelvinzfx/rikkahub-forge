@@ -208,6 +208,10 @@ object ToolApprovalDefaults {
         "browser_click",
         "browser_type",
         "browser_scroll",
+        // Item C.6 — precise-scroll variants; same viewport-mutation trust footprint as
+        // browser_scroll, so they inherit the same approval gate.
+        "browser_scroll_to",
+        "browser_scroll_by",
         "browser_submit",
         "browser_select",
         "browser_press_key",

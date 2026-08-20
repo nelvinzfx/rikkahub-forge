@@ -27,6 +27,14 @@ object BrowserToolDefaults {
     const val CLICK = "browser_click"
     const val TYPE = "browser_type"
     const val SCROLL = "browser_scroll"
+    /**
+     * Reliability overhaul, item C.6 — precise scrolling. scroll_to brings a CSS-selected
+     * element into view (collapses the "scroll down N times hunting for the element" loop);
+     * scroll_by moves by an exact pixel delta. Both are write tools (they mutate viewport
+     * state) and follow browser_scroll's approval posture.
+     */
+    const val SCROLL_TO = "browser_scroll_to"
+    const val SCROLL_BY = "browser_scroll_by"
     const val SUBMIT = "browser_submit"
     const val SELECT = "browser_select"
     const val PRESS_KEY = "browser_press_key"
@@ -46,7 +54,7 @@ object BrowserToolDefaults {
     )
 
     val WRITE_TOOLS: Set<String> = setOf(
-        CLICK, TYPE, SCROLL, SUBMIT, SELECT, PRESS_KEY, EVAL_JS, CLICK_AND_READ,
+        CLICK, TYPE, SCROLL, SCROLL_TO, SCROLL_BY, SUBMIT, SELECT, PRESS_KEY, EVAL_JS, CLICK_AND_READ,
     )
 
     val LOOP_CONTROL_TOOLS: Set<String> = setOf(DONE)
@@ -54,7 +62,7 @@ object BrowserToolDefaults {
     /** Stable display order for the Settings page. Read first, then write, then loop-control. */
     val ALL_TOOLS: List<String> = listOf(
         OPEN, CURRENT_URL, SCREENSHOT, GET_TEXT, GET_DOM, GET_LINKS, BACK, FORWARD, WAIT_FOR,
-        CLICK, TYPE, SCROLL, SUBMIT, SELECT, PRESS_KEY, EVAL_JS, CLICK_AND_READ,
+        CLICK, TYPE, SCROLL, SCROLL_TO, SCROLL_BY, SUBMIT, SELECT, PRESS_KEY, EVAL_JS, CLICK_AND_READ,
         DONE,
     )
 

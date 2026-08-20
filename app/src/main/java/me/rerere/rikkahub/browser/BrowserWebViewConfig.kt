@@ -49,7 +49,15 @@ internal fun configureWebViewForRikka(webView: WebView) {
         allowFileAccessFromFileURLs = true
         allowContentAccess = false
         useWideViewPort = true
-        loadWithOverviewMode = true
+        // Reliability overhaul, item E (stretched-wide rendering). loadWithOverviewMode
+        // lets the WebView pick its own zoom-out scale at load time so the "wide
+        // viewport" fits the view. On device that produced pages laid out ~2x wider than
+        // the real device CSS width (screenshot bitmap 1080 physical px wide while
+        // window.innerWidth reported 782 CSS px instead of ~393) — the classic
+        // "stretched wide sideways, tiny text" render. We pin the initial scale to the
+        // display density below instead (Chrome's 100% zoom), which makes layout width
+        // deterministic: viewWidthPx / density CSS px on every device.
+        loadWithOverviewMode = false
         setSupportMultipleWindows(false)
         javaScriptCanOpenWindowsAutomatically = false
         mediaPlaybackRequiresUserGesture = false
@@ -58,6 +66,14 @@ internal fun configureWebViewForRikka(webView: WebView) {
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         userAgentString = userAgentString.replace("; wv)", ")")
     }
+    // Item E companion fix: pin the initial zoom to the display density so 1 CSS px ==
+    // density physical px, exactly like Chrome at 100% zoom. Pages with a proper
+    // `meta viewport width=device-width` now lay out at the true device CSS width
+    // (window.innerWidth == viewWidthPx / density). Tradeoff: desktop-only pages
+    // without a viewport meta tag overflow horizontally instead of being zoomed out —
+    // agents can browser_scroll / browser_get_text those, and a correct CSS layout
+    // width for the 95% case wins over a prettier overview of the 5% case.
+    webView.setInitialScale((webView.resources.displayMetrics.density * 100).toInt())
     // Hardware layer hint. For the foreground Activity's WebView this fixes a Compose
     // AndroidView interop quirk that produces all-white pages. For headless capture via
     // `webView.draw(canvas)` onto a software bitmap the framework falls back to the
