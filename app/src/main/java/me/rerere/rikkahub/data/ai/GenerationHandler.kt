@@ -206,6 +206,19 @@ private val FRESHNESS_TTL_MS_BY_TOOL: Map<String, Long> = mapOf(
     "read_window_tree" to 5_000L,
     "list_active_notifications" to 5_000L,
     "list_jobs" to 60_000L,
+    // Reliability overhaul, item A.4: browser READ tools are observation tools too — an
+    // agent recovering from a broken page state legitimately repeats browser_screenshot /
+    // browser_get_dom with identical args after each browser ACTION (open / click /
+    // scroll), and the guard was false-positive blocking that. Listing them here (a) gives
+    // them the observation-reset rule — any browser action, including browser_open
+    // navigation, resets their repeat count — and (b) a short TTL so even action-less
+    // re-reads of a page that may still be loading pass after 5 s.
+    "browser_screenshot" to 5_000L,
+    "browser_current_url" to 5_000L,
+    "browser_get_text" to 5_000L,
+    "browser_get_dom" to 5_000L,
+    "browser_get_links" to 5_000L,
+    "browser_wait_for" to 5_000L,
 )
 
 /**
@@ -229,6 +242,13 @@ internal data class PriorToolCall(
     val toolName: String,
     val signature: String,
     val epochMs: Long,
+    /**
+     * Item A.4: true when the call's recorded output was an error envelope ({"error": …}).
+     * Failed calls don't count toward the loop threshold — a model retrying after an error
+     * (browser recovering from a broken page state, transient tool failure) is recovery,
+     * not a loop. Default false keeps existing constructors/tests source-compatible.
+     */
+    val wasError: Boolean = false,
 )
 
 internal data class LoopGuardDecision(
@@ -261,7 +281,9 @@ internal object LoopGuard {
         } else {
             priorCalls
         }
-        val matching = relevant.filter { it.signature == signature }
+        // Item A.4: calls that RETURNED AN ERROR don't count — retrying after a failure is
+        // recovery, not a loop. Only successful identical calls indicate true spinning.
+        val matching = relevant.filter { it.signature == signature && !it.wasError }
         val priorOccurrences = matching.size
         if (priorOccurrences < threshold) return LoopGuardDecision(false, priorOccurrences)
         // Freshness-TTL bypass: a real-time reader re-called after its TTL is a refresh, not
@@ -844,7 +866,24 @@ class GenerationHandler(
                                 .toInstant(TimeZone.currentSystemDefault()).toEpochMilliseconds()
                             msg.parts.filterIsInstance<UIMessagePart.Tool>()
                                 .filter { it.isExecuted }
-                                .map { PriorToolCall(it.toolName, it.toolName + "::" + it.input, epochMs) }
+                                .map { executed ->
+                                    // Item A.4: mark calls whose output was an error envelope
+                                    // so LoopGuard can exclude them from the repeat count.
+                                    val wasError = executed.output
+                                        .filterIsInstance<UIMessagePart.Text>()
+                                        .firstOrNull()?.text?.let { t ->
+                                            runCatching {
+                                                (json.parseToJsonElement(t) as? JsonObject)
+                                                    ?.containsKey("error") == true
+                                            }.getOrDefault(false)
+                                        } == true
+                                    PriorToolCall(
+                                        executed.toolName,
+                                        executed.toolName + "::" + executed.input,
+                                        epochMs,
+                                        wasError,
+                                    )
+                                }
                         }
                         val loopDecision = LoopGuard.evaluate(
                             priorCalls = priorCalls,

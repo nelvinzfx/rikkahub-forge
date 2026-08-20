@@ -3,6 +3,7 @@ package me.rerere.rikkahub.data.ai.tools.local
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.webkit.WebSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -28,8 +29,12 @@ import me.rerere.rikkahub.browser.BrowserDiffHelper
 import me.rerere.rikkahub.browser.BrowserToolDefaults
 import me.rerere.rikkahub.browser.HeadlessBrowserSessionPool
 import me.rerere.rikkahub.browser.ReadabilityRunner.runReadability
-import me.rerere.rikkahub.browser.awaitReadyState
+import me.rerere.rikkahub.browser.awaitActionSettled
+import me.rerere.rikkahub.browser.awaitFirstPaint
+import me.rerere.rikkahub.browser.awaitNavigationSettled
 import me.rerere.rikkahub.browser.evaluateJavascriptAsync
+import me.rerere.rikkahub.browser.markPreNavigation
+import me.rerere.rikkahub.browser.scrollToFragment
 import me.rerere.rikkahub.data.ai.tools.HeadlessConversations
 import me.rerere.rikkahub.data.ai.tools.ToolInvocationContext
 import java.io.File
@@ -126,11 +131,49 @@ private fun textPart(obj: JsonObject): List<UIMessagePart> =
  */
 private fun jsString(s: String): String = JsonPrimitive(s).toString()
 
+/**
+ * Reliability overhaul — shared navigation body for browser_open (items A.1/A.3/B).
+ * Order matters:
+ *  1. [markPreNavigation] stamps the CURRENT document so the settle wait can tell it apart
+ *     from the incoming one (fixes the stale-title/DOM cross-page contamination).
+ *  2. Cache handling (item B): the load itself always runs under LOAD_NO_CACHE so the
+ *     network is re-validated — changing a CSS/JS file on disk behind a dev server is
+ *     picked up on the next browser_open without any query-string tricks. `fresh` further
+ *     clears the on-disk cache so even in-page runtime re-requests can't see old entries.
+ *     LOAD_DEFAULT is restored after the settle so ordinary in-page fetches keep caching.
+ *  3. [awaitNavigationSettled] waits for a NEW document at readyState complete — what the
+ *     tool returns now always describes the page at the current URL.
+ *  4. [scrollToFragment] performs the #anchor jump the WebView skips (item A.3).
+ */
+private suspend fun BrowserControllerHandle.WithControllerScope.navigateAndSettle(
+    url: String,
+    fresh: Boolean,
+) {
+    webView.markPreNavigation()
+    withContext(Dispatchers.Main) {
+        if (fresh) {
+            // Clears the process-wide WebView HTTP cache (memory + disk). Cookies and
+            // localStorage are untouched — fresh means "refetch assets", not "log me out".
+            webView.clearCache(true)
+        }
+        webView.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+        webView.loadUrl(url)
+    }
+    webView.awaitNavigationSettled(
+        timeoutMs = 12_000L,
+        requireNonBlank = !url.trim().startsWith("about:", ignoreCase = true),
+    )
+    withContext(Dispatchers.Main) {
+        webView.settings.cacheMode = WebSettings.LOAD_DEFAULT
+    }
+    webView.scrollToFragment(url)
+}
+
 // ---- Read tools ---------------------------------------------------------------------------
 
 fun browserOpenTool(context: Context, invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.OPEN,
-    description = "Navigate the in-app browser to a URL. Launches the browser if it isn't open. Returns {success, current_url, title}. Resets the per-task 5-minute timer.$TELEGRAM_HEADLESS_CUE",
+    description = "Navigate the in-app browser to a URL. Launches the browser if it isn't open. Returns {success, current_url, title}. Resets the per-task 5-minute timer. Pass fresh:true to clear the WebView cache first — use after editing files a local dev server serves.$TELEGRAM_HEADLESS_CUE",
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
@@ -138,12 +181,17 @@ fun browserOpenTool(context: Context, invocationContext: ToolInvocationContext? 
                     put("type", "string")
                     put("description", "The full URL to navigate to (https://...)")
                 })
+                put("fresh", buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "If true, clear the WebView's HTTP cache before navigating so all assets (CSS/JS) are refetched. The navigation itself always bypasses cached responses; fresh also drops previously cached entries that in-page code may re-request. Default false.")
+                })
             },
             required = listOf("url"),
         )
     },
     execute = { input ->
         val url = input.jsonObject["url"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        val fresh = input.jsonObject["fresh"]?.jsonPrimitive?.booleanOrNull == true
         // Heuristic exfil-shape check: if the URL's QUERY (not path — CDN asset hashes
         // would false-positive) carries something that looks like an opaque blob, JWT,
         // API key, or credit-card-shaped digit run, attach a warning so the LLM treats
@@ -197,11 +245,16 @@ fun browserOpenTool(context: Context, invocationContext: ToolInvocationContext? 
                     if (!BrowserController.bindHeadless(callerConvId, webView)) {
                         return@withTimeoutOrNull BrowserController.bindBusyEnvelope()
                     }
+                    // Item D: claim session ownership for this conversation. bindHeadless just
+                    // passed the same takeover rule, so this only fails on a lost race with a
+                    // concurrent open — surface the standard busy envelope in that case.
+                    if (!BrowserController.claimOwnership(callerConvId)) {
+                        return@withTimeoutOrNull BrowserController.bindBusyEnvelope()
+                    }
                     BrowserController.startTaskWindow()
                     BrowserController.appendAction("Open: $url")
-                    val result = BrowserControllerHandle.withController {
-                        withContext(Dispatchers.Main) { webView.loadUrl(url) }
-                        webView.awaitReadyState(8_000L)
+                    val result = BrowserControllerHandle.withController(callerConvId) {
+                        navigateAndSettle(url, fresh)
                         buildJsonObject {
                             put("success", true)
                             put("current_url", webView.url ?: url)
@@ -231,18 +284,31 @@ fun browserOpenTool(context: Context, invocationContext: ToolInvocationContext? 
                             }
                         }
                     }
+                    // Item D: claim session ownership. Fails only while a DIFFERENT
+                    // conversation's task window is genuinely in flight.
+                    if (!BrowserController.claimOwnership(callerConvId)) {
+                        return@withTimeoutOrNull BrowserController.bindBusyEnvelope()
+                    }
                     // (Re)start the 5-minute task window on every browser_open.
                     BrowserController.startTaskWindow()
                     BrowserController.appendAction("Open: $url")
-                    BrowserControllerHandle.withController {
+                    BrowserControllerHandle.withController(callerConvId) {
                         // When the Activity was just freshly launched, the URL was already
                         // passed as EXTRA_INITIAL_URL and the WebView began loading it
                         // before bind() returned. Skip a redundant second loadUrl — it
                         // would abort the in-flight load and restart from the top.
                         if (wasAlreadyBound) {
-                            withContext(Dispatchers.Main) { webView.loadUrl(url) }
+                            navigateAndSettle(url, fresh)
+                        } else {
+                            // The in-flight initial load can't be stamped (the target document
+                            // may already be committing), but the initial about:blank doc is
+                            // unstamped too — requireNonBlank makes the settle wait skip it.
+                            webView.awaitNavigationSettled(
+                                timeoutMs = 12_000L,
+                                requireNonBlank = !url.trim().startsWith("about:", ignoreCase = true),
+                            )
+                            webView.scrollToFragment(url)
                         }
-                        webView.awaitReadyState(8_000L)
                         buildJsonObject {
                             put("success", true)
                             put("current_url", webView.url ?: url)
@@ -269,13 +335,13 @@ fun browserOpenTool(context: Context, invocationContext: ToolInvocationContext? 
     },
 )
 
-fun browserCurrentUrlTool(): Tool = Tool(
+fun browserCurrentUrlTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.CURRENT_URL,
     description = "Return the browser's current URL and page title. {url, title}. browser_not_open if the browser isn't open.$TELEGRAM_HEADLESS_CUE",
     parameters = { InputSchema.Obj(properties = buildJsonObject { }) },
     execute = {
         val out = withTimeoutOrNull(toolTimeoutMs) {
-            BrowserControllerHandle.withController {
+            BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                 buildJsonObject {
                     put("url", webView.url.orEmpty())
                     put("title", webView.title.orEmpty())
@@ -286,15 +352,15 @@ fun browserCurrentUrlTool(): Tool = Tool(
     },
 )
 
-fun browserScreenshotTool(context: Context): Tool = Tool(
+fun browserScreenshotTool(context: Context, invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.SCREENSHOT,
-    description = "Capture the visible viewport of the browser as a PNG vision attachment. Use browser_get_text first if you only need the page's text — screenshots cost vision tokens. full_page=true is best-effort and currently captures the viewport only (viewport_only:true in the response).$TELEGRAM_HEADLESS_CUE",
+    description = "Capture the visible viewport of the browser as a PNG vision attachment. Use browser_get_text first if you only need the page's text — screenshots cost vision tokens. full_page=true captures the entire document height (capped at 8192px; capped_height:true when the page is taller).$TELEGRAM_HEADLESS_CUE",
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("full_page", buildJsonObject {
                     put("type", "boolean")
-                    put("description", "If true, attempt to capture the entire scroll height (currently no-op; viewport-only)")
+                    put("description", "If true, capture the entire scroll height of the document (up to 8192px) instead of just the visible viewport")
                 })
             },
         )
@@ -303,12 +369,36 @@ fun browserScreenshotTool(context: Context): Tool = Tool(
         val fullPage = input.jsonObject["full_page"]?.jsonPrimitive?.booleanOrNull == true
         val parts = mutableListOf<UIMessagePart>()
         val out = withTimeoutOrNull(toolTimeoutMs) {
-            BrowserControllerHandle.withController {
-                val (path, w, h) = withContext(Dispatchers.Main) {
+            BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
+                // Item A.2: readyState=complete does NOT imply the renderer has produced a
+                // frame — capturing at that instant returns the blank white backing. Wait for
+                // the visual-state callback (bounded; on timeout we capture what's there).
+                webView.awaitFirstPaint(2_500L)
+                val (path, dims, capped) = withContext(Dispatchers.Main) {
                     val width = webView.width.coerceAtLeast(1)
-                    val height = webView.height.coerceAtLeast(1).coerceAtMost(MAX_SCREENSHOT_HEIGHT_PX)
+                    // Item 7: real full-page capture. enableSlowWholeDocumentDraw() (set before
+                    // WebView creation in both hosts) makes draw() render the entire document
+                    // when the canvas is tall enough. contentHeight is in CSS px; scale
+                    // converts to physical px. Cap at MAX_SCREENSHOT_HEIGHT_PX to bound bitmap
+                    // memory (8192px × 1080 × 4B ≈ 34 MB worst case).
+                    @Suppress("DEPRECATION")
+                    val fullHeightPx = (webView.contentHeight * webView.scale).toInt()
+                    val rawHeight = if (fullPage) {
+                        fullHeightPx.coerceAtLeast(webView.height.coerceAtLeast(1))
+                    } else {
+                        webView.height.coerceAtLeast(1)
+                    }
+                    val height = rawHeight.coerceAtLeast(1).coerceAtMost(MAX_SCREENSHOT_HEIGHT_PX)
+                    val wasCapped = fullPage && rawHeight > MAX_SCREENSHOT_HEIGHT_PX
                     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val canvas = Canvas(bitmap)
+                    if (fullPage) {
+                        // WebView.draw renders the document shifted by the current scroll
+                        // (document y = docY - scrollY on the canvas). Translate by +scrollY
+                        // to put the document top back at the canvas origin, so full_page
+                        // captures start at the top of the page regardless of scroll state.
+                        canvas.translate(0f, webView.scrollY.toFloat())
+                    }
                     webView.draw(canvas)
                     val cacheDir = File(context.cacheDir, SCREENSHOT_CACHE_SUBDIR).apply { mkdirs() }
                     val out = File(cacheDir, "screenshot-${System.currentTimeMillis()}.png")
@@ -323,15 +413,16 @@ fun browserScreenshotTool(context: Context): Tool = Tool(
                     } finally {
                         bitmap.recycle()
                     }
-                    Triple(out.absolutePath, width, height)
+                    Triple(out.absolutePath, width to height, wasCapped)
                 }
                 BrowserController.appendAction("Screenshot")
                 buildJsonObject {
                     put("success", true)
                     put("file_path", path)
-                    put("width", w)
-                    put("height", h)
-                    if (fullPage) put("viewport_only", true)
+                    put("width", dims.first)
+                    put("height", dims.second)
+                    if (fullPage) put("full_page", true)
+                    if (capped) put("capped_height", true)
                 }
             }
         } ?: timeoutEnvelope(BrowserToolDefaults.SCREENSHOT)
@@ -343,18 +434,18 @@ fun browserScreenshotTool(context: Context): Tool = Tool(
     },
 )
 
-fun browserGetTextTool(): Tool = Tool(
+fun browserGetTextTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.GET_TEXT,
     description = "Returns the main article content via Readability.js by default, falling back to selector-based extraction if Readability fails. Pass extract_mode:'raw' for the unfiltered text. Pass selector (e.g. 'article', 'main', '.content') for explicit scoping — selectors override Readability. max_chars (default 8000) caps the result. Use this BEFORE screenshot if you only need text content. {text, truncated, extract_mode}.$TELEGRAM_HEADLESS_CUE",
     parameters = { getTextSchema(defaultMax = 8000) },
-    execute = { input -> textPart(runGetText(input)) },
+    execute = { input -> textPart(runGetText(input, invocationContext?.callerConversationId)) },
 )
 
-fun browserGetDomTool(): Tool = Tool(
+fun browserGetDomTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.GET_DOM,
     description = "Extract a simplified outerHTML of a CSS selector (default 'body'). Strips <script>/<style>. Truncates at max_chars (default 4000). Use scoped selectors like 'article' / 'main' rather than 'body' for relevance — body usually includes nav and footer chrome that costs tokens without value. {html, truncated}.$TELEGRAM_HEADLESS_CUE",
     parameters = { selectorAndMaxCharsSchema(defaultMax = 4000, required = false) },
-    execute = { input -> textPart(runReadHelper(input, BrowserToolDefaults.GET_DOM, defaultMax = 4000) { selector, maxChars ->
+    execute = { input -> textPart(runReadHelper(input, BrowserToolDefaults.GET_DOM, defaultMax = 4000, invocationContext?.callerConversationId) { selector, maxChars ->
         """(function(){
             try {
                 var el = document.querySelector(${jsString(selector)});
@@ -370,7 +461,7 @@ fun browserGetDomTool(): Tool = Tool(
     }) },
 )
 
-fun browserGetLinksTool(): Tool = Tool(
+fun browserGetLinksTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.GET_LINKS,
     description = "List up to 100 anchor links inside a CSS selector (default 'body') as {links:[{href, text}], count}. {error:'selector_not_found'} if the root selector doesn't match.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -385,7 +476,7 @@ fun browserGetLinksTool(): Tool = Tool(
         val selector = (input.jsonObject["selector"]?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() }) ?: "body"
         val out = withTimeoutOrNull(toolTimeoutMs) {
-            BrowserControllerHandle.withController {
+            BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                 val js = """(function(){
                     try {
                         var root = document.querySelector(${jsString(selector)});
@@ -409,18 +500,18 @@ fun browserGetLinksTool(): Tool = Tool(
     },
 )
 
-fun browserBackTool(): Tool = Tool(
+fun browserBackTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.BACK,
     description = "Navigate the browser one step back in history. {success, current_url}.$TELEGRAM_HEADLESS_CUE",
     parameters = { InputSchema.Obj(properties = buildJsonObject { }) },
-    execute = { textPart(runHistoryNav(BrowserToolDefaults.BACK, forward = false)) },
+    execute = { textPart(runHistoryNav(BrowserToolDefaults.BACK, forward = false, invocationContext?.callerConversationId)) },
 )
 
-fun browserForwardTool(): Tool = Tool(
+fun browserForwardTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.FORWARD,
     description = "Navigate the browser one step forward in history. {success, current_url}.$TELEGRAM_HEADLESS_CUE",
     parameters = { InputSchema.Obj(properties = buildJsonObject { }) },
-    execute = { textPart(runHistoryNav(BrowserToolDefaults.FORWARD, forward = true)) },
+    execute = { textPart(runHistoryNav(BrowserToolDefaults.FORWARD, forward = true, invocationContext?.callerConversationId)) },
 )
 
 /** Valid values for browser_wait_for's `state` arg. `attached` preserves the original behavior. */
@@ -477,7 +568,7 @@ internal fun buildWaitForPredicate(selector: String, state: String, containsText
     }
 }
 
-fun browserWaitForTool(): Tool = Tool(
+fun browserWaitForTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.WAIT_FOR,
     description = "Pause until a CSS selector reaches a target state. Polls every 200 ms up to timeout_ms (default 10_000). state is one of attached (default — element present in DOM), detached (element gone), visible (present AND rendered), hidden (none rendered). Optional contains_text waits until a matching element contains that text. {found, elapsed_ms}.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -521,7 +612,7 @@ fun browserWaitForTool(): Tool = Tool(
                     .toLong()
                     .coerceIn(200L, toolTimeoutMs)
                 withTimeoutOrNull(toolTimeoutMs) {
-                    BrowserControllerHandle.withController {
+                    BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                         val started = System.currentTimeMillis()
                         val deadline = started + timeoutMs
                         val js = buildWaitForPredicate(selector, state, containsText)
@@ -547,7 +638,7 @@ fun browserWaitForTool(): Tool = Tool(
 
 // ---- Write tools --------------------------------------------------------------------------
 
-fun browserClickTool(): Tool = Tool(
+fun browserClickTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.CLICK,
     description = "Click an element matching a CSS selector. Returns the diff between the page before and after the action by default ({added, removed, added_chars, removed_chars, truncated} truncated to 4000 chars total). Pass full:true to skip the diff and get post_click_url only — use when the click navigates to an entirely new page. Waits up to 8 s for readyState=complete.$TELEGRAM_HEADLESS_CUE",
     parameters = { selectorWithFullSchema("CSS selector to click") },
@@ -558,7 +649,7 @@ fun browserClickTool(): Tool = Tool(
             missingArgEnvelope("selector", "selector is required and must be a non-empty CSS selector")
         } else {
             withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     withDiff(full) {
                         val js = """(function(){
                             try {
@@ -569,10 +660,13 @@ fun browserClickTool(): Tool = Tool(
                                 return JSON.stringify({clicked:true});
                             } catch(e) { return JSON.stringify({error:'js_failed', detail:String(e)}); }
                         })()"""
+                        // Item A.1: stamp the current document so the settle wait below can
+                        // tell whether the click navigated (fresh doc) or not (stamped doc).
+                        webView.markPreNavigation()
                         val raw = webView.evaluateJavascriptAsync(js)
                         val res = parseJsResult(raw)
                         if (res.containsKey("error")) return@withDiff res
-                        webView.awaitReadyState(8_000L)
+                        webView.awaitActionSettled(8_000L)
                         BrowserController.appendAction("Click: $selector")
                         buildJsonObject {
                             put("success", true)
@@ -591,7 +685,7 @@ fun browserClickTool(): Tool = Tool(
     },
 )
 
-fun browserTypeTool(): Tool = Tool(
+fun browserTypeTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.TYPE,
     description = "Type text into an input/textarea/contenteditable matching a CSS selector. Focuses, optionally clears, sets the value + dispatches an 'input' event so SPA frameworks observe the change. Returns the diff between the page before and after by default; pass full:true to skip the diff. {success, [diff]}.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -611,7 +705,7 @@ fun browserTypeTool(): Tool = Tool(
             selector == null -> missingArgEnvelope("selector", "selector is required")
             text == null -> missingArgEnvelope("text", "text is required (use empty string to clear)")
             else -> withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     withDiff(full) {
                         // Use both 'input' and 'change' events to satisfy frameworks that listen
                         // to either; React's synthetic event layer needs the native value setter
@@ -647,7 +741,7 @@ fun browserTypeTool(): Tool = Tool(
     },
 )
 
-fun browserScrollTool(): Tool = Tool(
+fun browserScrollTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.SCROLL,
     description = "Scroll the page in a direction (up/down/top/bottom). amount is in pixels (default 600, ignored for top/bottom). {success, scroll_y}.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -666,7 +760,7 @@ fun browserScrollTool(): Tool = Tool(
             missingArgEnvelope("direction", "direction must be one of [up, down, top, bottom]")
         } else {
             withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     val js = """(function(){
                         try {
                             switch (${jsString(direction)}) {
@@ -702,7 +796,89 @@ fun browserScrollTool(): Tool = Tool(
     },
 )
 
-fun browserSubmitTool(): Tool = Tool(
+/**
+ * Item C.6 — precise scroll: bring a CSS-selected element into view in one call instead of
+ * the LLM blind-scrolling by fixed amounts until the element happens to be on screen.
+ */
+fun browserScrollToTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
+    name = BrowserToolDefaults.SCROLL_TO,
+    description = "Scroll the page so the element matching a CSS selector is in view (block/inline center). {success, scroll_y} or {error:'selector_not_found'}.$TELEGRAM_HEADLESS_CUE",
+    parameters = { selectorOnlySchema("CSS selector of the element to scroll into view") },
+    execute = { input ->
+        val selector = input.jsonObject["selector"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        val out = if (selector == null) {
+            missingArgEnvelope("selector", "selector is required and must be a non-empty CSS selector")
+        } else {
+            withTimeoutOrNull(toolTimeoutMs) {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
+                    val js = """(function(){
+                        try {
+                            var el = document.querySelector(${jsString(selector)});
+                            if (!el) return JSON.stringify({error:'selector_not_found', selector:${jsString(selector)}});
+                            el.scrollIntoView({block:'center', inline:'center'});
+                            return JSON.stringify({scroll_y: Math.round(window.scrollY)});
+                        } catch(e) { return JSON.stringify({error:'js_failed', detail:String(e)}); }
+                    })()"""
+                    val res = parseJsResult(webView.evaluateJavascriptAsync(js))
+                    if (res.containsKey("error")) return@withController res
+                    BrowserController.appendAction("Scroll to: $selector")
+                    buildJsonObject {
+                        put("success", true)
+                        put("scroll_y", res["scroll_y"]?.jsonPrimitive?.intOrNull ?: 0)
+                    }
+                }
+            } ?: timeoutEnvelope(BrowserToolDefaults.SCROLL_TO)
+        }
+        if (out["success"]?.toString() == "true") {
+            BrowserController.streamScreenshotIfHeadless("Scrolled to $selector")
+        }
+        textPart(out)
+    },
+)
+
+/** Item C.6 — precise scroll by an exact pixel delta (x, y). Negative values scroll up/left. */
+fun browserScrollByTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
+    name = BrowserToolDefaults.SCROLL_BY,
+    description = "Scroll the page by an exact pixel delta. x scrolls horizontally, y vertically; negative values scroll left/up. {success, scroll_x, scroll_y}.$TELEGRAM_HEADLESS_CUE",
+    parameters = {
+        InputSchema.Obj(properties = buildJsonObject {
+            put("x", buildJsonObject { put("type","integer"); put("description","Horizontal scroll delta in px (default 0)") })
+            put("y", buildJsonObject { put("type","integer"); put("description","Vertical scroll delta in px (default 0)") })
+        })
+    },
+    execute = { input ->
+        val x = input.jsonObject["x"]?.jsonPrimitive?.intOrNull ?: 0
+        val y = input.jsonObject["y"]?.jsonPrimitive?.intOrNull ?: 0
+        val out = if (x == 0 && y == 0) {
+            missingArgEnvelope("delta", "at least one of x / y must be a non-zero integer")
+        } else {
+            withTimeoutOrNull(toolTimeoutMs) {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
+                    val js = """(function(){
+                        try {
+                            window.scrollBy($x, $y);
+                            return JSON.stringify({scroll_x: Math.round(window.scrollX), scroll_y: Math.round(window.scrollY)});
+                        } catch(e) { return JSON.stringify({error:'js_failed', detail:String(e)}); }
+                    })()"""
+                    val res = parseJsResult(webView.evaluateJavascriptAsync(js))
+                    if (res.containsKey("error")) return@withController res
+                    BrowserController.appendAction("Scroll by ($x, $y)")
+                    buildJsonObject {
+                        put("success", true)
+                        put("scroll_x", res["scroll_x"]?.jsonPrimitive?.intOrNull ?: 0)
+                        put("scroll_y", res["scroll_y"]?.jsonPrimitive?.intOrNull ?: 0)
+                    }
+                }
+            } ?: timeoutEnvelope(BrowserToolDefaults.SCROLL_BY)
+        }
+        if (out["success"]?.toString() == "true") {
+            BrowserController.streamScreenshotIfHeadless("Scrolled by ($x, $y)")
+        }
+        textPart(out)
+    },
+)
+
+fun browserSubmitTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.SUBMIT,
     description = "Submit a form. If the selector is a <button type=submit> click it; otherwise locates the enclosing <form> and calls .submit(). Awaits the post-navigation readyState. Returns the diff between the page before and after by default; pass full:true to skip the diff (recommended when submission navigates to a brand-new page). {success, post_submit_url, [diff]}.$TELEGRAM_HEADLESS_CUE",
     parameters = { selectorWithFullSchema("CSS selector of a submit button or any element inside the target form") },
@@ -713,7 +889,7 @@ fun browserSubmitTool(): Tool = Tool(
             missingArgEnvelope("selector", "selector is required")
         } else {
             withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     withDiff(full) {
                         val js = """(function(){
                             try {
@@ -730,9 +906,10 @@ fun browserSubmitTool(): Tool = Tool(
                                 return JSON.stringify({submitted:true, via:'form_submit'});
                             } catch(e) { return JSON.stringify({error:'js_failed', detail:String(e)}); }
                         })()"""
+                        webView.markPreNavigation()
                         val res = parseJsResult(webView.evaluateJavascriptAsync(js))
                         if (res.containsKey("error")) return@withDiff res
-                        webView.awaitReadyState(8_000L)
+                        webView.awaitActionSettled(8_000L)
                         BrowserController.appendAction("Submit: $selector")
                         buildJsonObject {
                             put("success", true)
@@ -749,7 +926,7 @@ fun browserSubmitTool(): Tool = Tool(
     },
 )
 
-fun browserSelectTool(): Tool = Tool(
+fun browserSelectTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.SELECT,
     description = "Set a <select> element's value. Dispatches 'change' so framework listeners fire. Returns the diff between the page before and after by default; pass full:true to skip the diff. {success, [diff]}.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -767,7 +944,7 @@ fun browserSelectTool(): Tool = Tool(
             selector == null -> missingArgEnvelope("selector", "selector is required")
             value == null -> missingArgEnvelope("value", "value is required")
             else -> withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     withDiff(full) {
                         val js = """(function(){
                             try {
@@ -794,7 +971,7 @@ fun browserSelectTool(): Tool = Tool(
     },
 )
 
-fun browserPressKeyTool(): Tool = Tool(
+fun browserPressKeyTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.PRESS_KEY,
     description = "Synthesize keydown + keyup events on the active element. Use KeyboardEvent.key values like 'Enter', 'Escape', 'ArrowDown', 'Tab'. Returns the diff between the page before and after by default; pass full:true to skip the diff (recommended when Enter triggers a navigation). {success, [diff]}.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -815,7 +992,7 @@ fun browserPressKeyTool(): Tool = Tool(
             missingArgEnvelope("key", "key is required (e.g. 'Enter', 'Escape')")
         } else {
             withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     withDiff(full) {
                         val js = """(function(){
                             try {
@@ -842,7 +1019,7 @@ fun browserPressKeyTool(): Tool = Tool(
     },
 )
 
-fun browserEvalJsTool(): Tool = Tool(
+fun browserEvalJsTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.EVAL_JS,
     description = "Run arbitrary JavaScript in the page and return its last expression. HARDLINE-checked: shell-shaped strings, document.cookie writes, eval/Function constructors, and string-form setTimeout are all blocked at the tool dispatcher BEFORE the JS executes. Always asks for approval; never eligible for 'Always Allow'.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -862,7 +1039,7 @@ fun browserEvalJsTool(): Tool = Tool(
             missingArgEnvelope("code", "code is required")
         } else {
             withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     val raw = webView.evaluateJavascriptAsync(code, toolTimeoutMs - 1_000L)
                     BrowserController.appendAction("Run JS")
                     // Clamp the raw result before it enters the envelope. evaluateJavascript
@@ -903,7 +1080,7 @@ fun browserEvalJsTool(): Tool = Tool(
  * max_chars caps either the diff side OR the extracted text. The cap protects
  * against an LLM asking for a megabyte of text on a long-form page.
  */
-fun browserClickAndReadTool(): Tool = Tool(
+fun browserClickAndReadTool(invocationContext: ToolInvocationContext? = null): Tool = Tool(
     name = BrowserToolDefaults.CLICK_AND_READ,
     description = "One-shot click + read in a single round trip. Click an element, await readyState, then return either the diff (default extract_mode:'diff') or the extracted text (auto/readability/raw — same semantics as browser_get_text). Use this instead of browser_click + browser_get_text when you want to minimise tokens. {success, post_click_url, page_title, [diff], [text]}.$TELEGRAM_HEADLESS_CUE",
     parameters = {
@@ -933,7 +1110,7 @@ fun browserClickAndReadTool(): Tool = Tool(
             missingArgEnvelope("selector", "selector is required")
         } else {
             withTimeoutOrNull(toolTimeoutMs) {
-                BrowserControllerHandle.withController {
+                BrowserControllerHandle.withController(invocationContext?.callerConversationId) {
                     val before = if (mode == "diff") captureBodyText() else ""
                     val titleBefore = withContext(Dispatchers.Main) { webView.title.orEmpty() }
                     val clickJs = """(function(){
@@ -945,9 +1122,10 @@ fun browserClickAndReadTool(): Tool = Tool(
                             return JSON.stringify({clicked:true});
                         } catch(e) { return JSON.stringify({error:'js_failed', detail:String(e)}); }
                     })()"""
+                    webView.markPreNavigation()
                     val clickRes = parseJsResult(webView.evaluateJavascriptAsync(clickJs))
                     if (clickRes.containsKey("error")) return@withController clickRes
-                    webView.awaitReadyState(8_000L)
+                    webView.awaitActionSettled(8_000L)
                     BrowserController.appendAction("Click+read: $selector")
                     val postUrl = withContext(Dispatchers.Main) { webView.url.orEmpty() }
                     val postTitle = withContext(Dispatchers.Main) { webView.title.orEmpty() }
@@ -1038,6 +1216,11 @@ fun browserDoneTool(invocationContext: ToolInvocationContext? = null): Tool = To
         } else {
             BrowserController.appendAction("Done: $summary")
             BrowserController.clearTaskWindow()
+            // Item D: clean ownership handoff. Only the owner (or a context-less legacy
+            // caller) actually releases — releaseOwnership ignores a non-owner's call — so
+            // the next conversation's browser_open can claim the slot immediately instead
+            // of waiting for the previous owner's task window to lapse.
+            BrowserController.releaseOwnership(invocationContext?.callerConversationId)
             // Pass 3 design originally released the headless WebView here. Live-test feedback
             // (2026-05-08): users want the session to persist across LLM turns so a follow-up
             // "click the next link" doesn't have to re-open from scratch — that broke the
@@ -1205,6 +1388,7 @@ private suspend fun runReadHelper(
     input: kotlinx.serialization.json.JsonElement,
     toolName: String,
     defaultMax: Int,
+    callerConvId: String? = null,
     jsBuilder: (selector: String, maxChars: Int) -> String,
 ): JsonObject {
     val selector = (input.jsonObject["selector"]?.jsonPrimitive?.contentOrNull
@@ -1214,7 +1398,7 @@ private suspend fun runReadHelper(
     val maxChars = (input.jsonObject["max_chars"]?.jsonPrimitive?.intOrNull ?: defaultMax)
         .coerceIn(100, 64 * 1024)
     return withTimeoutOrNull(toolTimeoutMs) {
-        BrowserControllerHandle.withController {
+        BrowserControllerHandle.withController(callerConvId) {
             parseJsResult(webView.evaluateJavascriptAsync(jsBuilder(selector, maxChars)))
         }
     } ?: timeoutEnvelope(toolName)
@@ -1235,7 +1419,10 @@ private suspend fun runReadHelper(
  */
 private const val READABILITY_MIN_CHARS = 200
 
-private suspend fun runGetText(input: kotlinx.serialization.json.JsonElement): JsonObject {
+private suspend fun runGetText(
+    input: kotlinx.serialization.json.JsonElement,
+    callerConvId: String? = null,
+): JsonObject {
     val explicitSelector = input.jsonObject["selector"]?.jsonPrimitive?.contentOrNull
         ?.takeIf { it.isNotBlank() }
     val maxChars = (input.jsonObject["max_chars"]?.jsonPrimitive?.intOrNull ?: 8000)
@@ -1244,7 +1431,7 @@ private suspend fun runGetText(input: kotlinx.serialization.json.JsonElement): J
         ?.takeIf { it in setOf("auto", "readability", "raw") } ?: "auto"
 
     return withTimeoutOrNull(toolTimeoutMs) {
-        BrowserControllerHandle.withController {
+        BrowserControllerHandle.withController(callerConvId) {
             // Selector arg trumps everything — the model is being explicit, honour it.
             if (explicitSelector != null) {
                 return@withController runRawText(explicitSelector, maxChars, mode = "raw_selector")
@@ -1312,9 +1499,14 @@ private fun clipText(text: String, maxChars: Int): Pair<String, Boolean> =
     if (text.length <= maxChars) text to false
     else text.substring(0, maxChars) to true
 
-private suspend fun runHistoryNav(toolName: String, forward: Boolean): JsonObject {
+private suspend fun runHistoryNav(
+    toolName: String,
+    forward: Boolean,
+    callerConvId: String? = null,
+): JsonObject {
     val out = withTimeoutOrNull(toolTimeoutMs) {
-        BrowserControllerHandle.withController {
+        BrowserControllerHandle.withController(callerConvId) {
+            webView.markPreNavigation()
             val ok = withContext(Dispatchers.Main) {
                 if (forward) {
                     if (webView.canGoForward()) { webView.goForward(); true } else false
@@ -1322,7 +1514,7 @@ private suspend fun runHistoryNav(toolName: String, forward: Boolean): JsonObjec
                     if (webView.canGoBack()) { webView.goBack(); true } else false
                 }
             }
-            if (ok) webView.awaitReadyState(8_000L)
+            if (ok) webView.awaitActionSettled(8_000L)
             BrowserController.appendAction(if (forward) "Forward" else "Back")
             buildJsonObject {
                 put("success", ok)
@@ -1359,22 +1551,24 @@ fun createBrowserTool(
     invocationContext: ToolInvocationContext? = null,
 ): Tool? = when (toolName) {
     BrowserToolDefaults.OPEN -> browserOpenTool(context, invocationContext)
-    BrowserToolDefaults.CURRENT_URL -> browserCurrentUrlTool()
-    BrowserToolDefaults.SCREENSHOT -> browserScreenshotTool(context)
-    BrowserToolDefaults.GET_TEXT -> browserGetTextTool()
-    BrowserToolDefaults.GET_DOM -> browserGetDomTool()
-    BrowserToolDefaults.GET_LINKS -> browserGetLinksTool()
-    BrowserToolDefaults.BACK -> browserBackTool()
-    BrowserToolDefaults.FORWARD -> browserForwardTool()
-    BrowserToolDefaults.WAIT_FOR -> browserWaitForTool()
-    BrowserToolDefaults.CLICK -> browserClickTool()
-    BrowserToolDefaults.TYPE -> browserTypeTool()
-    BrowserToolDefaults.SCROLL -> browserScrollTool()
-    BrowserToolDefaults.SUBMIT -> browserSubmitTool()
-    BrowserToolDefaults.SELECT -> browserSelectTool()
-    BrowserToolDefaults.PRESS_KEY -> browserPressKeyTool()
-    BrowserToolDefaults.EVAL_JS -> browserEvalJsTool()
-    BrowserToolDefaults.CLICK_AND_READ -> browserClickAndReadTool()
+    BrowserToolDefaults.CURRENT_URL -> browserCurrentUrlTool(invocationContext)
+    BrowserToolDefaults.SCREENSHOT -> browserScreenshotTool(context, invocationContext)
+    BrowserToolDefaults.GET_TEXT -> browserGetTextTool(invocationContext)
+    BrowserToolDefaults.GET_DOM -> browserGetDomTool(invocationContext)
+    BrowserToolDefaults.GET_LINKS -> browserGetLinksTool(invocationContext)
+    BrowserToolDefaults.BACK -> browserBackTool(invocationContext)
+    BrowserToolDefaults.FORWARD -> browserForwardTool(invocationContext)
+    BrowserToolDefaults.WAIT_FOR -> browserWaitForTool(invocationContext)
+    BrowserToolDefaults.CLICK -> browserClickTool(invocationContext)
+    BrowserToolDefaults.TYPE -> browserTypeTool(invocationContext)
+    BrowserToolDefaults.SCROLL -> browserScrollTool(invocationContext)
+    BrowserToolDefaults.SCROLL_TO -> browserScrollToTool(invocationContext)
+    BrowserToolDefaults.SCROLL_BY -> browserScrollByTool(invocationContext)
+    BrowserToolDefaults.SUBMIT -> browserSubmitTool(invocationContext)
+    BrowserToolDefaults.SELECT -> browserSelectTool(invocationContext)
+    BrowserToolDefaults.PRESS_KEY -> browserPressKeyTool(invocationContext)
+    BrowserToolDefaults.EVAL_JS -> browserEvalJsTool(invocationContext)
+    BrowserToolDefaults.CLICK_AND_READ -> browserClickAndReadTool(invocationContext)
     BrowserToolDefaults.DONE -> browserDoneTool(invocationContext)
     else -> null
 }

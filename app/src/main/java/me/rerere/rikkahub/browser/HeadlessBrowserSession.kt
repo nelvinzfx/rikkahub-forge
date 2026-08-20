@@ -86,6 +86,10 @@ class HeadlessBrowserSession(private val context: Context) {
             layoutParams = LinearLayout.LayoutParams(VIEWPORT_WIDTH, VIEWPORT_HEIGHT)
         }
 
+        // Item 7 (full-page screenshot): must run before the WebView is constructed — makes
+        // draw(canvas) render the whole document for browser_screenshot(full_page:true).
+        // Same call as BrowserView's foreground path; idempotent and process-global.
+        WebView.enableSlowWholeDocumentDraw()
         val wv = WebView(context).apply {
             // Shared with foreground — every render-related setting (mixedContentMode,
             // hardware layer, autoplay, UA strip, file:// access) lives in

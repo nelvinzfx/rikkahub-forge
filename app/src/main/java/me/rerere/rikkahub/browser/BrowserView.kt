@@ -140,6 +140,12 @@ private fun WebViewHost(
         // session bodies. Gate behind BuildConfig.DEBUG — turning Chrome inspection on
         // in release is a privacy posture choice the user never consented to.
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+        // Item 7 (full-page screenshot): must run BEFORE any WebView instance exists in the
+        // process. Makes WebView.draw(canvas) render the ENTIRE document (not just the
+        // viewport) when the canvas is tall enough — the mechanism browser_screenshot's
+        // full_page:true capture relies on. Only affects software-canvas draws; normal
+        // on-screen rendering is untouched.
+        WebView.enableSlowWholeDocumentDraw()
         WebView(ctx).apply {
             // Shared with HeadlessBrowserSession — every render-related setting
             // (mixedContentMode, hardware layer, autoplay, UA strip, file:// access)

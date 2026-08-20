@@ -144,6 +144,22 @@ object BrowserController {
     var pendingTaskJob: Job? = null
 
     /**
+     * Reliability overhaul, item D (session isolation): the conversation that currently OWNS
+     * the browser session. The controller is a single global slot, so before this field
+     * existed any conversation's tools could drive — and read page state from — whichever
+     * session happened to be live ("sessions got mixed into one"). browser_open is the only
+     * entry point that can claim ownership; browser_done, every unbind path, and
+     * [stopCurrentTask] release it. Every other browser tool passes its caller's conversation
+     * id into [BrowserControllerHandle.withController], which rejects calls from a different
+     * conversation with [notOwnerEnvelope]. null = unowned (legacy callers without a
+     * conversation id keep the pre-isolation behaviour; conservative because those paths are
+     * the interactive foreground where the user is watching).
+     */
+    @Volatile
+    var ownerConvId: String? = null
+        private set
+
+    /**
      * De-dupe state for [streamScreenshotIfHeadless], keyed by [Mode.Headless.callerConvId].
      * When the LLM bounces between the same/very-similar URL (e.g. minimax-m2.7 occasionally
      * calls browser_open 5x in a row trying to find a page) every state-changing tool fires
@@ -170,6 +186,50 @@ object BrowserController {
 
     /** Returns the current execution mode. */
     fun currentMode(): Mode = mode
+
+    // --- Session ownership (item D) -----------------------------------------------------
+
+    /**
+     * browser_open calls this to claim the session for [callerConvId]. Succeeds when the
+     * slot is unowned, already owned by the same conversation, or the current owner's task
+     * window has been cleared (browser_done ran) or lapsed (owner forgot browser_done) —
+     * mirroring [bindHeadless]'s takeover rule so a dead conversation can't lock the
+     * browser forever. Guarded by [bindLock] so two concurrent opens can't both claim.
+     */
+    fun claimOwnership(callerConvId: String?): Boolean {
+        synchronized(bindLock) {
+            val owner = ownerConvId
+            if (owner != null && callerConvId != owner &&
+                currentTaskStartedAt != null && isWithinTaskWindow()
+            ) return false
+            ownerConvId = callerConvId
+            return true
+        }
+    }
+
+    /**
+     * Release ownership. Idempotent; only the owner itself (or a context-less legacy
+     * caller) can release, so a non-owner conversation calling browser_done can't yank
+     * the session out from under the owner.
+     */
+    fun releaseOwnership(callerConvId: String?) {
+        synchronized(bindLock) {
+            if (callerConvId == null || ownerConvId == null || ownerConvId == callerConvId) {
+                ownerConvId = null
+            }
+        }
+    }
+
+    /**
+     * True when [callerConvId] may drive the CURRENT session. Unlike [claimOwnership] this
+     * never allows a takeover — a non-owner must go through browser_open (which rebinds and
+     * re-navigates) so it can never silently read another conversation's page state, even
+     * after the owner's task window lapsed.
+     */
+    fun isOwnedBy(callerConvId: String?): Boolean {
+        val owner = ownerConvId ?: return true
+        return callerConvId == null || callerConvId == owner
+    }
 
     // --- Foreground bindings ----------------------------------------------------------
 
@@ -199,6 +259,7 @@ object BrowserController {
             // Reset task timer + action log when the visible Activity is torn down. Headless
             // mode has its own teardown via [unbindHeadless]; this branch is foreground-only.
             currentTaskStartedAt = null
+            ownerConvId = null
             _recentActions.value = emptyList()
             // Swap in a fresh deferred so the NEXT browser_open's awaitBind blocks correctly
             // until the next bind() — without this, a stale "completed" deferred from the
@@ -302,6 +363,7 @@ object BrowserController {
             if (m is Mode.Headless && m.callerConvId == callerConvId) {
                 mode = Mode.Idle
                 currentTaskStartedAt = null
+                ownerConvId = null
                 _recentActions.value = emptyList()
                 bindDeferred = CompletableDeferred()
             }
@@ -331,6 +393,7 @@ object BrowserController {
             if (m is Mode.Headless && m.callerConvId == callerConvId) {
                 mode = Mode.Idle
                 currentTaskStartedAt = null
+                ownerConvId = null
                 _recentActions.value = emptyList()
                 bindDeferred = CompletableDeferred()
             }
@@ -371,6 +434,9 @@ object BrowserController {
         pendingTaskJob?.cancel()
         pendingTaskJob = null
         currentTaskStartedAt = null
+        // The user explicitly stopped the AI — free the ownership slot so any conversation
+        // (including a different one) can start a fresh task without waiting for the lapse.
+        ownerConvId = null
         appendAction("AI task stopped by user")
     }
 
@@ -451,6 +517,18 @@ object BrowserController {
     fun bindBusyEnvelope(): JsonObject = buildJsonObject {
         put("error", "browser_busy")
         put("recovery", "Another conversation is currently driving the browser. Wait for it to finish (it calls browser_done), then retry browser_open.")
+    }
+
+    /**
+     * Item D: returned when any non-open browser tool call arrives from a conversation that
+     * doesn't own the live session. Distinct wording from [bindBusyEnvelope] because the fix
+     * for the caller is different: it must claim its OWN session via browser_open (allowed
+     * once the owner finishes or its task window lapses) rather than blindly retrying.
+     */
+    fun notOwnerEnvelope(): JsonObject = buildJsonObject {
+        put("error", "browser_busy")
+        put("detail", "Another conversation owns the current browser session; its page state is not readable from this conversation.")
+        put("recovery", "Call browser_open with your own URL to start a session (succeeds once the owner calls browser_done or its task window lapses), or wait and retry later.")
     }
 
     /**
@@ -589,9 +667,16 @@ object BrowserControllerHandle {
      * suspend on a `CompletableDeferred`, so they stay non-blocking even from main.
      */
     suspend fun withController(
+        callerConvId: String? = null,
         block: suspend WithControllerScope.() -> JsonObject,
     ): JsonObject {
         val wv = BrowserController.activeWebView() ?: return BrowserController.notOpenEnvelope()
+        // Item D: reject calls from a conversation that doesn't own the live session BEFORE
+        // touching the WebView, so cross-conversation reads/drives are impossible. Callers
+        // without a conversation id (legacy paths) skip the check — see [BrowserController.ownerConvId].
+        if (!BrowserController.isOwnedBy(callerConvId)) {
+            return BrowserController.notOwnerEnvelope()
+        }
         if (!BrowserController.isWithinTaskWindow()) {
             return BrowserController.taskTimeoutEnvelope()
         }
@@ -654,4 +739,135 @@ suspend fun WebView.awaitReadyState(timeoutMs: Long = 8_000L): Boolean {
         kotlinx.coroutines.delay(200)
     }
     return false
+}
+
+// --- Navigation coherence helpers (reliability overhaul, item A) ---------------------------
+
+/**
+ * Item A.1 root cause: right after `loadUrl(newUrl)` the PREVIOUS document is still the
+ * current document, and its `readyState` is already "complete" — so [awaitReadyState]
+ * returns instantly and the caller reads the OLD page's title/DOM (cross-page
+ * contamination). Fix: stamp the current document before triggering the navigation
+ * ([markPreNavigation]); a committed navigation replaces the document, wiping the stamp,
+ * so [awaitNavigationSettled] can distinguish "old doc, still complete" from "new doc,
+ * complete".
+ */
+private const val NAV_STAMP_JS =
+    "(function(){try{window.__rikkaNavStamp=true;return true;}catch(e){return false;}})()"
+
+/**
+ * Probe for [awaitNavigationSettled]: reports stamp presence + readyState + whether the
+ * current document is still the initial about:blank. Single round-trip so the three
+ * signals describe ONE document snapshot (no torn reads between separate evals).
+ */
+private const val NAV_SETTLED_PROBE_JS =
+    "(function(){try{return (window.__rikkaNavStamp?'stale':'fresh')+':'+document.readyState+':'+(document.URL==='about:blank'?'blank':'real');}catch(e){return 'err';}})()"
+
+/** Stamp the CURRENT document. Call immediately BEFORE loadUrl / reload. Best-effort. */
+suspend fun WebView.markPreNavigation() {
+    evaluateJavascriptAsync(NAV_STAMP_JS, 2_000L)
+}
+
+/**
+ * Wait until the WebView's current document is a NEW document (no pre-navigation stamp)
+ * whose readyState is "complete". With [requireNonBlank] the initial empty about:blank
+ * document also doesn't count — needed on a freshly-launched Activity/session where the
+ * initial doc is unstamped AND complete before the real load commits.
+ *
+ * Returns false on timeout; callers proceed anyway (same contract as [awaitReadyState] —
+ * a slow page shouldn't hard-fail the tool, the envelope just reflects what's there).
+ */
+suspend fun WebView.awaitNavigationSettled(
+    timeoutMs: Long = 12_000L,
+    requireNonBlank: Boolean = false,
+): Boolean {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+        val raw = evaluateJavascriptAsync(NAV_SETTLED_PROBE_JS, 1_500L)?.trim()
+        if (raw == "\"fresh:complete:real\"") return true
+        if (!requireNonBlank && raw == "\"fresh:complete:blank\"") return true
+        kotlinx.coroutines.delay(150)
+    }
+    return false
+}
+
+/**
+ * Item A.1 for ACTION tools (click / submit / history nav): after an action the page may or
+ * may not navigate, so a plain [awaitNavigationSettled] would hang for its full timeout on
+ * every non-navigating action (the stamp never clears). This variant settles on EITHER:
+ *  - a fresh (unstamped) complete document — the action navigated and the new page is ready;
+ *  - the stamped document still complete after [noNavGraceMs] — the action didn't navigate
+ *    (or navigation hasn't started by then, in which case the caller reads the current page,
+ *    which is the best coherent answer available).
+ * Callers must run [markPreNavigation] BEFORE dispatching the action.
+ */
+suspend fun WebView.awaitActionSettled(
+    timeoutMs: Long = 8_000L,
+    noNavGraceMs: Long = 700L,
+): Boolean {
+    val start = System.currentTimeMillis()
+    val deadline = start + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+        val raw = evaluateJavascriptAsync(NAV_SETTLED_PROBE_JS, 1_500L)?.trim()
+        when {
+            raw == "\"fresh:complete:real\"" || raw == "\"fresh:complete:blank\"" -> return true
+            raw != null && raw.startsWith("\"stale:complete") &&
+                System.currentTimeMillis() - start >= noNavGraceMs -> return true
+        }
+        kotlinx.coroutines.delay(150)
+    }
+    return false
+}
+
+/**
+ * Item A.2: `document.readyState === "complete"` means HTML + subresources are loaded,
+ * NOT that the renderer has produced a frame — `webView.draw(canvas)` at that moment
+ * captures the empty white backing. [WebView.postVisualStateCallback] fires when the
+ * current DOM state is ready to draw, which is the real signal. Bounded: on timeout the
+ * caller just captures whatever is there (bounded staleness beats a wedged tool).
+ */
+suspend fun WebView.awaitFirstPaint(timeoutMs: Long = 2_500L): Boolean {
+    val deferred = CompletableDeferred<Boolean>()
+    withContext(Dispatchers.Main) {
+        try {
+            postVisualStateCallback(
+                System.nanoTime(),
+                object : WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) {
+                        deferred.complete(true)
+                    }
+                },
+            )
+        } catch (e: Exception) {
+            // Destroyed WebView etc. — complete false so the caller proceeds immediately.
+            android.util.Log.w("BrowserController", "awaitFirstPaint: postVisualStateCallback threw", e)
+            deferred.complete(false)
+        }
+    }
+    return withTimeoutOrNull(timeoutMs) { deferred.await() } ?: false
+}
+
+/**
+ * Item A.3: navigating to a URL with a `#fragment` never scrolled to the anchor (layout
+ * often isn't final when the WebView performs its native anchor jump, and the jump is
+ * skipped entirely on same-document loads). Called by browser_open after the page
+ * settles: resolves the fragment against `getElementById` first (HTML5), then legacy
+ * `<a name=…>`, and scrolls it into view. Best-effort — a missing anchor is a no-op.
+ */
+suspend fun WebView.scrollToFragment(url: String) {
+    val fragment = url.substringAfter('#', "").takeIf { it.isNotEmpty() } ?: return
+    val fragJs = kotlinx.serialization.json.JsonPrimitive(fragment).toString()
+    val js = """(function(){
+        try {
+            var raw = $fragJs;
+            var id; try { id = decodeURIComponent(raw); } catch (e) { id = raw; }
+            var el = document.getElementById(id);
+            if (!el && window.CSS && CSS.escape) {
+                el = document.querySelector('a[name="' + CSS.escape(id) + '"]');
+            }
+            if (el) { el.scrollIntoView({block:'start'}); return true; }
+            return false;
+        } catch (e) { return false; }
+    })()"""
+    evaluateJavascriptAsync(js, 2_000L)
 }
