@@ -392,12 +392,18 @@ fun browserScreenshotTool(context: Context, invocationContext: ToolInvocationCon
                     val wasCapped = fullPage && rawHeight > MAX_SCREENSHOT_HEIGHT_PX
                     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val canvas = Canvas(bitmap)
-                    if (fullPage) {
-                        // WebView.draw renders the document shifted by the current scroll
-                        // (document y = docY - scrollY on the canvas). Translate by +scrollY
-                        // to put the document top back at the canvas origin, so full_page
-                        // captures start at the top of the page regardless of scroll state.
-                        canvas.translate(0f, webView.scrollY.toFloat())
+                    // Runtime-verified on device (agent.27): with enableSlowWholeDocumentDraw()
+                    // enabled, WebView.draw(canvas) renders the document from its ORIGIN and
+                    // IGNORES the current scroll offset entirely. Consequences:
+                    //  - full_page needs NO translation — the document top already lands at
+                    //    the canvas origin (a +scrollY shift would leave a white gap when
+                    //    the page is scrolled).
+                    //  - viewport captures must translate by -scrollY so the scrolled region
+                    //    is what actually lands in the view-height canvas; without it every
+                    //    screenshot of a scrolled page wrongly shows the document top
+                    //    (observed live: scrollY=3352 while the capture showed block 1).
+                    if (!fullPage) {
+                        canvas.translate(0f, -webView.scrollY.toFloat())
                     }
                     webView.draw(canvas)
                     val cacheDir = File(context.cacheDir, SCREENSHOT_CACHE_SUBDIR).apply { mkdirs() }

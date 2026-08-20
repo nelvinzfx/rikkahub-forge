@@ -594,6 +594,10 @@ object BrowserController {
                 val h = webView.height.coerceAtLeast(1)
                 val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(bitmap)
+                // Same scroll-offset semantics as browser_screenshot (agent.27 runtime
+                // finding): slow-whole-document draw renders from the document origin and
+                // ignores scroll, so shift the canvas up to capture the actual viewport.
+                canvas.translate(0f, -webView.scrollY.toFloat())
                 webView.draw(canvas)
                 val cacheDir = File(context.cacheDir, STREAM_CACHE_SUBDIR).apply { mkdirs() }
                 val out = File(cacheDir, "stream-${System.currentTimeMillis()}.png")

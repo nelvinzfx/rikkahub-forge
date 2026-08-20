@@ -1,5 +1,46 @@
 # Browser Reliability Overhaul — Fix Report
 
+> ## Runtime addendum (agent.27 on-device verification, Aug 20 2026)
+>
+> Verified live by driving the browser tools against a local probe page (`http.server` on
+> 127.0.0.1, page that prints `innerWidth`/`devicePixelRatio`/`scrollY` into the DOM):
+>
+> - **E (viewport): PASS.** `innerWidth=521` on a 720px-wide WebView at dpr 1.38125 —
+>   exactly `viewWidthPx / density`. Layout width is now deterministic.
+> - **A.1 (coherence): PASS** for fresh loads — `browser_open` returns the new URL + new
+>   title atomically; no cross-page contamination observed.
+> - **A.2 (blank screenshot): PASS** — viewport capture immediately after open rendered
+>   content, no white frame.
+> - **7 (full_page): PASS** — 720×6319 bitmap for a 4557 CSS px document (×1.38125 scale),
+>   full document rendered top to bottom.
+> - **A.3 (fragment scroll): FEATURE PASSES, but it exposed a capture bug.** Live probe
+>   reported `scrollY=3352` after opening `#target` while the viewport screenshot showed
+>   the document top. Root cause: `enableSlowWholeDocumentDraw()` changes
+>   `WebView.draw(canvas)` semantics — it renders the document from its origin and
+>   **ignores the scroll offset**. The initial full_page implementation translated the
+>   canvas by `+scrollY` under the opposite assumption (harmless only because it was tested
+>   at scrollY=0). **Fix (this addendum's patch):** viewport captures translate by
+>   `-scrollY`; full_page captures use no translation. Applied to both capture paths
+>   (`browserScreenshotTool` and `streamScreenshotIfHeadless`).
+> - **Incident — renderer wedge (open):** once during testing, after a full_page capture
+>   followed by fragment navigations, the WebView renderer became unresponsive: network
+>   loads kept reaching the server (HTTP 200s) but every `evaluateJavascript` stopped
+>   answering (all reads returned `selector_not_found`, title fell back to the raw URL,
+>   `draw()` kept showing the last frame). `browser_done` + reopen did NOT recover it;
+>   an app process restart did. No logcat access from Termux, so the exact trigger is
+>   unconfirmed — prime suspect is raster load from slow-whole-document draws on a tall
+>   page. If it recurs, capture `adb logcat` around `chromium`/`RenderProcess` and consider
+>   handling `WebViewClient.onRenderProcessGone` by recreating the WebView.
+> - **Minor:** the very first `browser_open` after installing the build returned success
+>   but the two immediately-following parallel calls got `browser_not_open` (bind race on
+>   first session creation; self-recovered on retry). Also: closing the browser UI with
+>   the X button mid-session tears down the WebView — subsequent read calls return
+>   `js_no_result` until the next `browser_open`. Both are survivable but worth knowing.
+
+---
+
+## Original report
+
 Branch: `fix/browser-reliability` (base master `d6976f21`, v2.3.1-agent.26).
 Scope: browser tool layer only. No git mutations performed; no local builds run (CI-only per policy).
 
