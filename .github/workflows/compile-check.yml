@@ -46,6 +46,7 @@ jobs:
           chmod +x gradlew
           ./gradlew compileDebugKotlin :app:testDebugUnitTest \
             --tests 'me.rerere.rikkahub.data.ai.GenerationHandlerToolCallTimeoutTest' \
+            --tests 'me.rerere.rikkahub.data.ai.ResolveTurnReasoningLevelTest' \
             --tests 'me.rerere.rikkahub.data.preferences.TermuxDefaultsTest' \
             --tests 'me.rerere.rikkahub.data.preferences.TermuxRuntimeWiringTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.TermuxSessionToolTest' \

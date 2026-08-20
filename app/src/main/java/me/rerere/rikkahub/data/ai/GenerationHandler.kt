@@ -330,6 +330,25 @@ internal fun buildOrchestratorPreamble(
 }
 
 /**
+ * Resolve the reasoning level actually sent to the provider for a turn. An explicit
+ * per-worker override (sub-agent dispatch) wins; otherwise the assistant's own
+ * selection is sent verbatim.
+ *
+ * Regression (2026-08-21): this resolution used to clamp the assistant's level to
+ * XHIGH whenever orchestratorMode != OFF. AUTO is the conversation default, so the
+ * clamp fired for nearly every ordinary chat: a user-selected MAX was silently
+ * rewritten to the wire effort "xhigh", which strict OpenAI-compatible providers
+ * reject (z.ai GLM-5.3: HTTP 400 code 1210, "This model always engages in thinking
+ * and cannot be disabled; please use low, high, or max"). Orchestrator mode does not
+ * need a reasoning cap; the user's explicit choice is the contract. Worker-level
+ * capping remains available through reasoningLevelOverride at dispatch time.
+ */
+internal fun resolveTurnReasoningLevel(
+    reasoningLevelOverride: ReasoningLevel?,
+    assistantReasoningLevel: ReasoningLevel,
+): ReasoningLevel = reasoningLevelOverride ?: assistantReasoningLevel
+
+/**
  * Hard ceiling of NORMAL tool-capable provider turns for ordinary chat. This remains a
  * last-resort cost guard, but 32 was too small for legitimate repository and device work.
  * The repeated-call guard, per-tool timeout, context compaction, and the mandatory final
@@ -1353,12 +1372,10 @@ class GenerationHandler(
             topP = assistant.topP,
             maxTokens = assistant.maxTokens,
             tools = tools,
-            reasoningLevel = when {
-                reasoningLevelOverride != null -> reasoningLevelOverride
-                !enforceSubAgentPromptRules && orchestratorMode != OrchestratorMode.OFF ->
-                    assistant.reasoningLevel.coerceAtMost(me.rerere.ai.core.ReasoningLevel.XHIGH)
-                else -> assistant.reasoningLevel
-            },
+            reasoningLevel = resolveTurnReasoningLevel(
+                reasoningLevelOverride = reasoningLevelOverride,
+                assistantReasoningLevel = assistant.reasoningLevel,
+            ),
             customHeaders = buildList {
                 addAll(assistant.customHeaders)
                 addAll(model.customHeaders)
