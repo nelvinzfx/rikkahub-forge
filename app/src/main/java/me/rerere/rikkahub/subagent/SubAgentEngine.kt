@@ -26,8 +26,9 @@ import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
-import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.ChatGenerationOverrides
+import me.rerere.rikkahub.service.ChatService
 import kotlin.uuid.Uuid
 
 private const val TAG = "SubAgentEngine"
@@ -524,6 +525,16 @@ class SubAgentEngine(
                 appendLine()
                 append("When you have finished, end with one short paragraph in plain text that summarises what you did and what you found. Do NOT stop on a tool call — finish with assistant text. The dispatcher harvests only your final text reply, so this paragraph is the entire response the parent sees.")
             }
+            // Baseline of ChatService's in-memory UI error channel, snapshotted before the
+            // worker generation starts. Provider failures (auth, quota, network) are caught
+            // by ChatService and published ONLY into this channel — the persisted worker
+            // conversation and the run record never see them — so without this baseline the
+            // no-final-text branch below cannot tell a mis-keyed provider (401) from genuine
+            // step exhaustion. sendMessageOwned runs handleMessageComplete (the addError
+            // site) inside the returned Job, so by the time join() returns, every error from
+            // this run has already landed in the flow. Continued conversations may carry
+            // errors from earlier attempts; the id diff below excludes those.
+            val chatErrorBaselineIds = chatService.errors.value.mapTo(mutableSetOf()) { it.id }
             val startedGeneration = chatService.sendMessageOwned(
                 workerConvId,
                 listOf(UIMessagePart.Text(taskWithWrapup)),
@@ -621,11 +632,23 @@ class SubAgentEngine(
                 // run as useful work. Partial tool outputs/assistant text stay in the
                 // worker conversation; markTerminal's own harvest keeps any walk-back
                 // text it can find.
+                //
+                // The channel diff (chatErrorBaselineIds above) recovers the real root
+                // cause when there is one: a provider 401 looks identical to step
+                // exhaustion from the transcript alone, because the exception never
+                // reaches this engine. Without the diff, diagnosing a failed dispatch
+                // means guessing between auth, quota, network, and budget from a
+                // generic envelope.
+                val failureText = formatGenerationFailure(
+                    firstNewChatError(chatService.errors.value, workerConvId, chatErrorBaselineIds),
+                ) ?: (
+                    me.rerere.rikkahub.data.ai.REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL +
+                        ": worker finished without any final assistant text"
+                    )
                 val failed = markTerminal(
                     runId,
                     SubAgentStatus.FAILED,
-                    me.rerere.rikkahub.data.ai.REASON_MAX_STEPS_EXHAUSTED_AFTER_TOOL +
-                        ": worker finished without any final assistant text",
+                    failureText,
                     continuationBoundary,
                 )
                 if (!failed && executionHandle.stopReason() != null) {
@@ -948,4 +971,33 @@ class SubAgentEngine(
             SubAgentUsage(tokensIn, tokensOut, trips, toolCalls)
         }.getOrDefault(SubAgentUsage())
     }
+}
+
+/**
+ * ChatService's in-memory error channel is the ONLY surface a provider failure inside a
+ * worker generation reaches: the exception is caught upstream, published there, and never
+ * propagates to SubAgentEngine. [firstNewChatError] diffs the channel against a baseline
+ * snapshot (ids captured before the run's generation started) and returns the earliest NEW
+ * error attributed to [conversationId] — the root cause of a no-final-text failure. Later
+ * entries for the same conversation are usually follow-on noise from the same failure.
+ */
+internal fun firstNewChatError(
+    errors: List<ChatError>,
+    conversationId: Uuid,
+    baselineIds: Set<Uuid>,
+): ChatError? = errors
+    .filter { it.conversationId == conversationId && it.id !in baselineIds }
+    .minByOrNull { it.timestamp }
+
+/**
+ * Formats the run-record error for a no-final-text failure whose root cause was recovered
+ * from ChatService's error channel, e.g.
+ * `generation_error: HttpException: HTTP 401 (worker produced no final assistant text)`.
+ * Null input means the channel held nothing new for this run (hollow upstream stop with
+ * no recorded error) and the caller falls back to the generic exhaustion reason.
+ */
+internal fun formatGenerationFailure(chatError: ChatError?): String? = chatError?.let {
+    val kind = it.error::class.simpleName.orEmpty()
+    "generation_error: $kind: ${it.error.message.orEmpty()}".trim() +
+        " (worker produced no final assistant text)"
 }

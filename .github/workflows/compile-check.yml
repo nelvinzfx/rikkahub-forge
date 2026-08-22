@@ -84,6 +84,7 @@ jobs:
             --tests 'me.rerere.rikkahub.subagent.SubAgentCompletionWaitTest' \
             --tests 'me.rerere.rikkahub.subagent.SubAgentRegistryTest' \
             --tests 'me.rerere.rikkahub.subagent.SubAgentCriticalRemediationTest' \
+            --tests 'me.rerere.rikkahub.subagent.SubAgentGenerationErrorAttributionTest' \
             --tests 'me.rerere.rikkahub.data.ai.mcp.McpAssistantToolScopeTest' \
             --tests 'me.rerere.rikkahub.ui.pages.editor.ExternalChangeTest' \
             --tests 'me.rerere.rikkahub.ui.pages.editor.EditorSessionCodecTest' \
