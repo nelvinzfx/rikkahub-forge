@@ -19,8 +19,8 @@ android {
         applicationId = "forge.rikkahub"
         minSdk = 26
         targetSdk = 37
-        versionCode = 218
-        versionName = "2.3.1-agent.30"
+        versionCode = 219
+        versionName = "2.3.1-agent.31"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
