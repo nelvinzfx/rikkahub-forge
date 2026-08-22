@@ -114,7 +114,7 @@ class AssistantMemoryExportTest {
     @Test
     fun `valid document parses with defaults for missing optional fields`() {
         val parsed = parseAssistantMemoryImport(
-            document("""[{"title":"a","content":"b"}]""")
+            document("""[{"content":"b"}]""")
         )
         val success = parsed as AssistantMemoryImportParse.Success
         assertEquals("src-uuid", success.sourceAssistantId)
@@ -217,7 +217,13 @@ class AssistantMemoryExportTest {
             AssistantMemory(id = 1, content = "c1", title = "t1", mode = "core"),
             AssistantMemory(id = 2, content = "c2", title = "t2", mode = "bank"),
         )
-        val plan = planMemoryImport(listOf(entry(title = "t1", content = "c1"), entry(title = "t2", content = "c2")), existing)
+        val plan = planMemoryImport(
+            listOf(
+                entry(title = "t1", content = "c1", mode = "core"),
+                entry(title = "t2", content = "c2", mode = "bank"),
+            ),
+            existing,
+        )
         assertEquals(0, plan.toImport.size)
         assertEquals(2, plan.skippedAsDuplicate)
     }
