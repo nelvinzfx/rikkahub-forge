@@ -33,10 +33,24 @@ class TermuxEditProtocolTest {
         val text = requireNotNull(diff.text)
 
         assertFalse(diff.omitted)
-        assertTrue(text.startsWith("--- a//tmp/large.kt\n+++ b//tmp/large.kt\n"))
+        assertTrue(text.startsWith("--- a/tmp/large.kt\n+++ b/tmp/large.kt\n"))
         assertTrue(text.contains("@@ -747,7 +747,7 @@"))
         assertTrue(text.contains("-line750\n+changed750"))
         assertTrue(text.contains(" line753"))
+    }
+
+    @Test fun myersPathRendersGitStyleHeaderForAbsoluteTermuxPaths() {
+        val diff = boundedEditDiff(
+            oldText = "old",
+            newText = "new",
+            path = "/data/data/com.termux/files/home/notes.txt",
+        )
+        val text = requireNotNull(diff.text)
+
+        assertFalse(diff.omitted)
+        assertTrue(text.startsWith("--- a/data/data/com.termux/files/home/notes.txt\n"))
+        assertTrue(text.contains("+++ b/data/data/com.termux/files/home/notes.txt\n"))
+        assertFalse("absolute path must not render as a// double slash", text.contains("a//"))
     }
 
     @Test fun linearFallbackIsBoundedButNeverDropsTheWholeDiff() {

@@ -202,9 +202,10 @@ private fun omittedTermuxEditDiffNotice(
 ): BoundedDiff {
     if (maxChars <= 0) return BoundedDiff(null, true)
     val safePath = path.takeIf(::isSafeTermuxEditDiffPath) ?: "[path-omitted]"
+    val headerPath = me.rerere.rikkahub.utils.diffHeaderPath(safePath)
     val notice = """
-        --- a/$safePath
-        +++ b/$safePath
+        --- a/$headerPath
+        +++ b/$headerPath
         @@ -0,0 +0,0 @@
         \ Diff preview truncated: $detail
     """.trimIndent()
@@ -294,9 +295,10 @@ internal fun generateLinearTermuxEditDiff(
 
     val oldStart = if (oldCount == 0) contextStart else contextStart + 1
     val newStart = if (newCount == 0) contextStart else contextStart + 1
+    val headerPath = me.rerere.rikkahub.utils.diffHeaderPath(path)
     val headerLines = listOf(
-        "--- a/$path",
-        "+++ b/$path",
+        "--- a/$headerPath",
+        "+++ b/$headerPath",
         "@@ -$oldStart,$oldCount +$newStart,$newCount @@",
     )
     for (line in headerLines) if (!appendDiffLine(line)) return BoundedDiff(builder.toString(), true)
