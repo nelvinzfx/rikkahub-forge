@@ -7,6 +7,7 @@ import android.widget.Toast
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Book02
 import me.rerere.hugeicons.stroke.Book04
+import me.rerere.hugeicons.stroke.Code
 import me.rerere.hugeicons.stroke.Earth
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Image02
@@ -85,6 +86,9 @@ import me.rerere.highlight.LocalHighlighter
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.export.buildConversationRawExport
+import me.rerere.rikkahub.data.export.rawExportFileName
+import me.rerere.rikkahub.data.export.serializeConversationRawExport
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.ui.components.message.MessagePartBlock
 import me.rerere.rikkahub.ui.components.message.ThinkingStep
@@ -160,6 +164,40 @@ fun ChatExportSheet(
                         },
                         leadingContent = {
                             Icon(HugeIcons.File02, contentDescription = null)
+                        }
+                    )
+                }
+
+                OutlinedCard(
+                    onClick = {
+                        scope.launch {
+                            runCatching {
+                                val path = exportToRawJson(context, conversation, settings)
+                                toaster.show(
+                                    message = context.getString(R.string.chat_page_export_success, path),
+                                    type = ToastType.Success
+                                )
+                            }.onFailure {
+                                it.printStackTrace()
+                                toaster.show(
+                                    message = "Failed to export raw JSON: ${it.message}",
+                                    type = ToastType.Error
+                                )
+                            }
+                        }
+                        onDismissRequest()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    ListItem(
+                        headlineContent = {
+                            Text(stringResource(id = R.string.chat_page_export_raw))
+                        },
+                        supportingContent = {
+                            Text(stringResource(id = R.string.chat_page_export_raw_desc))
+                        },
+                        leadingContent = {
+                            Icon(HugeIcons.Code, contentDescription = null)
                         }
                     )
                 }
@@ -449,6 +487,46 @@ private suspend fun exportToImage(
 }
 
 data class ImageExportOptions(val expandReasoning: Boolean = false)
+
+/**
+ * Raw JSON export: full-fidelity machine-readable dump of the whole conversation
+ * (all message-node branches and every part verbatim, usage tokens, persisted
+ * conversation settings) plus the assistant's configured system prompt resolved
+ * from settings. Written to the app temp folder and offered via the share sheet,
+ * same plumbing as the markdown export.
+ */
+private suspend fun exportToRawJson(
+    context: Context,
+    conversation: Conversation,
+    settings: Settings,
+): String {
+    val file = withContext(Dispatchers.IO) {
+        val export = buildConversationRawExport(
+            conversation = conversation,
+            settings = settings
+        )
+        val filename = rawExportFileName(conversation.title, conversation.id)
+        val dir = context.appTempFolder
+        val file = dir.resolve(filename)
+        if (file.exists()) {
+            file.delete()
+        }
+        file.createNewFile()
+        FileOutputStream(file).use {
+            it.write(serializeConversationRawExport(export).toByteArray())
+        }
+        file
+    }
+
+    // Share the file
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+    shareFile(context, uri, "application/json")
+    return file.absolutePath
+}
 
 @Composable
 private fun ExportedChatImage(
