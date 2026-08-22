@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
@@ -23,8 +24,15 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Tag
+import me.rerere.rikkahub.data.export.AssistantMemoryImportParse
+import me.rerere.rikkahub.data.export.AssistantMemoryImportResult
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.data.export.assistantMemoryExportFileName
+import me.rerere.rikkahub.data.export.buildAssistantMemoryExport
+import me.rerere.rikkahub.data.export.parseAssistantMemoryImport
+import me.rerere.rikkahub.data.export.planMemoryImport
+import me.rerere.rikkahub.data.export.serializeAssistantMemoryExport
 import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantDetailVM"
@@ -241,6 +249,54 @@ class AssistantDetailVM(
             memoryRepository.deleteMemory(id = memory.id)
         }
     }
+
+    /**
+     * Build a lossless memory export for the currently viewed store (the assistant's
+     * own memories, or the global pool when useGlobalMemory is on). Returns
+     * (fileName, pretty JSON document).
+     */
+    suspend fun buildMemoryExport(scope: String): Pair<String, String> =
+        withContext(Dispatchers.IO) {
+            val currentAssistant = assistant.value
+            val targetId = if (currentAssistant.useGlobalMemory) {
+                MemoryRepository.GLOBAL_MEMORY_ID
+            } else {
+                assistantId.toString()
+            }
+            val export = buildAssistantMemoryExport(
+                memories = memoryRepository.getExportEntries(targetId),
+                sourceAssistantId = assistantId.toString(),
+                sourceAssistantName = currentAssistant.name,
+                scope = scope,
+            )
+            assistantMemoryExportFileName(currentAssistant.name, assistantId.toString()) to
+                serializeAssistantMemoryExport(export)
+        }
+
+    /**
+     * Parse + validate an exported memory file and insert its entries into the
+     * CURRENTLY viewed assistant's memory store (assistantId remap: migration target
+     * semantics). Duplicates (mode+title+content already present) are skipped.
+     */
+    suspend fun importMemories(jsonText: String): AssistantMemoryImportResult =
+        withContext(Dispatchers.IO) {
+            val entries = when (val parsed = parseAssistantMemoryImport(jsonText)) {
+                is AssistantMemoryImportParse.Failure ->
+                    return@withContext AssistantMemoryImportResult.Failed(parsed.reason)
+                is AssistantMemoryImportParse.Success -> parsed.memories
+            }
+            val targetId = if (assistant.value.useGlobalMemory) {
+                MemoryRepository.GLOBAL_MEMORY_ID
+            } else {
+                assistantId.toString()
+            }
+            val plan = planMemoryImport(entries, memoryRepository.getMemoriesOfAssistant(targetId))
+            plan.toImport.forEach { memoryRepository.insertImportedMemory(targetId, it) }
+            AssistantMemoryImportResult.Imported(
+                importedCount = plan.toImport.size,
+                skippedCount = plan.skippedAsDuplicate,
+            )
+        }
 
     fun checkAvatarDelete(old: Assistant, new: Assistant) {
         if (old.avatar is Avatar.Image && old.avatar != new.avatar) {

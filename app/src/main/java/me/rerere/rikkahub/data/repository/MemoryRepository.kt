@@ -9,6 +9,7 @@ import me.rerere.rikkahub.data.db.dao.MemoryDAO
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
 import me.rerere.rikkahub.data.db.fts.MemoryFtsManager
 import me.rerere.rikkahub.data.db.fts.MemorySearchHit
+import me.rerere.rikkahub.data.export.AssistantMemoryEntry
 import me.rerere.rikkahub.data.model.AssistantMemory
 
 class MemoryRepository(
@@ -134,6 +135,47 @@ class MemoryRepository(
     suspend fun deleteMemory(id: Int) {
         memoryDAO.deleteMemory(id)
         fts.delete(id)
+    }
+
+    /**
+     * Full-fidelity rows for export: unlike [AssistantMemory] (UI model) these carry
+     * lastAccessedAt/accessCount too, so migration between devices is lossless.
+     */
+    suspend fun getExportEntries(assistantId: String): List<AssistantMemoryEntry> =
+        memoryDAO.getMemoriesOfAssistant(assistantId).map { row ->
+            AssistantMemoryEntry(
+                title = row.title,
+                content = row.content,
+                mode = normalizeMode(row.mode),
+                tags = decodeTags(row.tags),
+                importance = row.importance,
+                createdAt = row.createdAt,
+                updatedAt = row.updatedAt,
+                lastAccessedAt = row.lastAccessedAt,
+                accessCount = row.accessCount,
+                sourceConversationId = row.sourceConversationId,
+                archived = row.archived,
+            )
+        }
+
+    /**
+     * Insert an imported memory attributed to [assistantId], preserving ALL persisted
+     * metadata (mode, tags, importance, timestamps, access stats, archived flag,
+     * source conversation). Goes through the same insert + FTS index path as
+     * [addMemory] so the search index stays consistent.
+     */
+    suspend fun insertImportedMemory(assistantId: String, entry: AssistantMemoryEntry): AssistantMemory {
+        val base = MemoryEntity(
+            assistantId = assistantId, content = entry.content.trim(), title = entry.title.trim(),
+            mode = normalizeMode(entry.mode), tags = encodeTags(entry.tags),
+            importance = entry.importance.coerceIn(0, 100), createdAt = entry.createdAt,
+            updatedAt = entry.updatedAt, lastAccessedAt = entry.lastAccessedAt,
+            accessCount = entry.accessCount.coerceAtLeast(0),
+            sourceConversationId = entry.sourceConversationId, archived = entry.archived,
+        )
+        val row = base.copy(id = memoryDAO.insertMemory(base).toInt())
+        fts.index(row)
+        return toModel(row)
     }
 
     private suspend fun ensureIndex() {

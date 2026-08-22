@@ -1950,6 +1950,15 @@
   <string name="memory_bank_search">Search memory bank</string>
   <string name="memory_bank_core_budget">Core memory token budget</string>
   <string name="memory_bank_core_budget_desc">Only core memories within this budget are added to every prompt. Bank memories stay searchable on demand.</string>
+  <string name="memory_export">Export</string>
+  <string name="memory_import">Import</string>
+  <string name="memory_export_scope_title">Export memories</string>
+  <string name="memory_export_done">Memory export saved: %1$s</string>
+  <string name="memory_export_failed">Memory export failed</string>
+  <string name="memory_import_done">Imported %1$d memories, skipped %2$d duplicates</string>
+  <string name="memory_import_invalid_format">Not a valid RikkaHub assistant memory export file</string>
+  <string name="memory_import_failed">Memory import failed</string>
+  <string name="memory_import_read_failed">Could not read the selected file</string>
 
   <!-- Sub-agent runs card -->
   <string name="sub_agents_title">%1$d sub-agents</string>
