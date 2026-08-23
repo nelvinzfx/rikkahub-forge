@@ -19,6 +19,7 @@ internal const val MAX_TERMUX_EDIT_TOTAL_SOURCE_BYTES = 16 * 1024 * 1024
 internal const val MAX_TERMUX_EDIT_TOTAL_RESULT_BYTES = 16 * 1024 * 1024
 internal const val MAX_TERMUX_EDIT_DIAGNOSTIC_CHARS = 500
 private const val MAX_TERMUX_EDIT_MATCH_CANDIDATES = 6
+internal const val MAX_TERMUX_EDIT_OCCURRENCE_MATCHES = 256
 private const val MAX_TERMUX_EDIT_SIMILARITY_CHARS = 512
 
 internal enum class TermuxEditMode(val wireName: String) {
@@ -34,7 +35,24 @@ internal enum class TermuxEditMode(val wireName: String) {
     }
 }
 
-internal data class TermuxEditSpec(val mode: TermuxEditMode, val matchText: String, val writeText: String)
+/**
+ * Occurrence selector for one edit. null (the default) keeps strict single-match semantics:
+ * more than one match is ambiguous_match. "first"/"last"/nth pick one occurrence by source
+ * order; "all" applies the same edit to every occurrence and reports the count.
+ */
+internal sealed class TermuxEditOccurrence {
+    data object First : TermuxEditOccurrence()
+    data object Last : TermuxEditOccurrence()
+    data object All : TermuxEditOccurrence()
+    data class Nth(val position: Int) : TermuxEditOccurrence()
+}
+
+internal data class TermuxEditSpec(
+    val mode: TermuxEditMode,
+    val matchText: String,
+    val writeText: String,
+    val occurrence: TermuxEditOccurrence? = null,
+)
 internal data class TermuxEditFileSpec(
     val path: String,
     val pathBytes: ByteArray,
@@ -51,6 +69,8 @@ internal data class TermuxEditDiagnostic(
     val strategy: String? = null,
     val reason: String? = null,
     val candidateLines: List<Pair<Int, String>> = emptyList(),
+    val occurrencesApplied: Int? = null,
+    val occurrenceTotal: Int? = null,
     val closestLine: Int? = null,
     val similarity: Double? = null,
     val nearbyText: String? = null,
@@ -183,7 +203,7 @@ private fun parseEditFile(obj: JsonObject, prefix: String): PublicInputResult<Te
 }
 
 private fun parseEdit(obj: JsonObject, label: String): PublicInputResult<TermuxEditSpec> {
-    val allowed = setOf("mode", "match_text", "matchText", "write_text", "writeText")
+    val allowed = setOf("mode", "match_text", "matchText", "write_text", "writeText", "occurrence")
     val legacy = obj.keys.intersect(setOf("old_text", "new_text", "oldText", "newText"))
     if (legacy.isNotEmpty()) return PublicInputResult.Error(PublicInputError("$label.unsupported_fields:${legacy.sorted().joinToString(",")}"))
     (obj.keys - allowed).takeIf { it.isNotEmpty() }?.let {
@@ -213,7 +233,24 @@ private fun parseEdit(obj: JsonObject, label: String): PublicInputResult<TermuxE
         is PublicInputResult.Ok -> result.value
         is PublicInputResult.Error -> return result
     }
-    return PublicInputResult.Ok(TermuxEditSpec(mode, normalizeInputLines(match), normalizeInputLines(write)))
+    val occurrence = when (val raw = obj["occurrence"]) {
+        null, JsonNull -> null
+        is JsonPrimitive -> when (raw.content) {
+            "first" -> TermuxEditOccurrence.First
+            "last" -> TermuxEditOccurrence.Last
+            "all" -> TermuxEditOccurrence.All
+            else -> {
+                // Accept the nth selector as a JSON integer or a quoted digit string; anything
+                // else (booleans, floats, unknown keywords) is a structured input error.
+                val nth = raw.content.toIntOrNull()
+                    ?: return PublicInputResult.Error(PublicInputError("$label.invalid_occurrence"))
+                if (nth < 1) return PublicInputResult.Error(PublicInputError("$label.invalid_occurrence"))
+                TermuxEditOccurrence.Nth(nth)
+            }
+        }
+        else -> return PublicInputResult.Error(PublicInputError("$label.invalid_occurrence"))
+    }
+    return PublicInputResult.Ok(TermuxEditSpec(mode, normalizeInputLines(match), normalizeInputLines(write), occurrence))
 }
 
 private fun normalizeInputLines(value: String): String = value.replace("\r\n", "\n").replace('\r', '\n')
@@ -339,6 +376,7 @@ private fun occurrenceStarts(
     content: String,
     needle: String,
     budget: TermuxEditWorkBudget,
+    limit: Int = MAX_TERMUX_EDIT_MATCH_CANDIDATES,
     allowed: (start: Int, endExclusive: Int) -> Boolean = { _, _ -> true },
 ): List<Int> {
     if (needle.isEmpty()) return emptyList()
@@ -350,7 +388,7 @@ private fun occurrenceStarts(
         if (needle[index] == needle[matched]) matched++
         prefix[index] = matched
     }
-    val result = ArrayList<Int>(MAX_TERMUX_EDIT_MATCH_CANDIDATES)
+    val result = ArrayList<Int>(minOf(limit, 64))
     matched = 0
     for (index in content.indices) {
         while (matched > 0 && content[index] != needle[matched]) matched = prefix[matched - 1]
@@ -359,7 +397,7 @@ private fun occurrenceStarts(
             val start = index - needle.length + 1
             if (allowed(start, index + 1)) {
                 result += start
-                if (result.size >= MAX_TERMUX_EDIT_MATCH_CANDIDATES) return result
+                if (result.size >= limit) return result
             }
             matched = prefix[matched - 1]
         }
@@ -376,7 +414,11 @@ private fun isCompleteProjectedSpan(projection: Projection, start: Int, endExclu
     return startsAtClusterBoundary && endsAtClusterBoundary
 }
 
-private class SourceMatcher(private val content: String, private val budget: TermuxEditWorkBudget) {
+private class SourceMatcher(
+    private val content: String,
+    private val budget: TermuxEditWorkBudget,
+    private val limit: Int = MAX_TERMUX_EDIT_MATCH_CANDIDATES,
+) {
     private val source: Projection by lazy { fuzzyProjection(content, budget, withSpans = true) }
     private val patternCache = HashMap<String, String>()
     private val matchCache = HashMap<String, List<Match>>()
@@ -396,7 +438,7 @@ private class SourceMatcher(private val content: String, private val budget: Ter
 
     fun matches(search: String): List<Match> = matchCache.getOrPut(search) {
         if ('\n' !in search) {
-            val exact = occurrenceStarts(content, search, budget) { start, end ->
+            val exact = occurrenceStarts(content, search, budget, limit) { start, end ->
                 characterBoundaries[start] && characterBoundaries[end]
             }
             if (exact.isNotEmpty()) return@getOrPut exact.map { start ->
@@ -407,7 +449,7 @@ private class SourceMatcher(private val content: String, private val budget: Ter
         if (target.isEmpty()) return@getOrPut emptyList()
         val projected = source
         val result = ArrayList<Match>()
-        val starts = occurrenceStarts(projected.text, target, budget) { start, end ->
+        val starts = occurrenceStarts(projected.text, target, budget, limit) { start, end ->
             isCompleteProjectedSpan(projected, start, end)
         }
         for (projectedStart in starts) {
@@ -437,7 +479,7 @@ private class SourceMatcher(private val content: String, private val budget: Ter
                 val start = index.starts[line]
                 val end = index.ends[line + targetLines.lastIndex]
                 result += Match(start, end, "indent", content.substring(start, end))
-                if (result.size >= MAX_TERMUX_EDIT_MATCH_CANDIDATES) break
+                if (result.size >= limit) break
             }
         }
         return result
@@ -734,13 +776,14 @@ internal fun applyTermuxEdits(
     val resolved = mutableListOf<Resolved>()
     val diagnostics = mutableListOf<TermuxEditDiagnostic>()
     var failed = false
+    val matchLimit = if (edits.any { it.occurrence != null }) MAX_TERMUX_EDIT_OCCURRENCE_MATCHES else MAX_TERMUX_EDIT_MATCH_CANDIDATES
     try {
-        val matcher = SourceMatcher(original, budget)
+        val matcher = SourceMatcher(original, budget, matchLimit)
         edits.forEachIndexed { index, edit ->
             val direct = matcher.matches(edit.matchText)
             val found = if (direct.isNotEmpty()) direct else matcher.indentMatches(edit.matchText)
             when {
-                found.size > 1 -> {
+                found.size > 1 && edit.occurrence == null -> {
                     failed = true
                     diagnostics += TermuxEditDiagnostic(index, edit.mode.wireName, "failed", false, reason = "ambiguous_match", candidateLines = ambiguity(original, matcher.lineIndex(), found))
                 }
@@ -760,21 +803,66 @@ internal fun applyTermuxEdits(
                     )
                 }
                 else -> {
-                    val match = found.single()
-                    val replacement = when {
-                        edit.mode == TermuxEditMode.REPLACE && normalizeInputLines(match.matchedText) == edit.writeText -> match.matchedText
-                        edit.mode == TermuxEditMode.REPLACE && match.strategy == "indent" ->
-                            reindent(edit.writeText, match.matchedText, edit.matchText, budget)
-                        else -> edit.writeText
+                    val occurrence = edit.occurrence
+                    val sortedMatches = found.sortedBy { it.start }
+                    // found.size == matchLimit means enumeration may be truncated: every selector
+                    // except "first" would silently act on an incomplete set, so fail loudly.
+                    val possiblyTruncated = found.size >= matchLimit
+                    val selected: List<Match>? = when {
+                        occurrence != null && occurrence != TermuxEditOccurrence.First && possiblyTruncated -> {
+                            failed = true
+                            diagnostics += TermuxEditDiagnostic(
+                                index, edit.mode.wireName, "failed", false,
+                                reason = "too_many_occurrences", occurrenceTotal = found.size,
+                            )
+                            null
+                        }
+                        occurrence is TermuxEditOccurrence.Nth && occurrence.position > sortedMatches.size -> {
+                            failed = true
+                            diagnostics += TermuxEditDiagnostic(
+                                index, edit.mode.wireName, "failed", false,
+                                reason = "occurrence_out_of_range",
+                                nearbyText = "requested occurrence ${occurrence.position} but only ${sortedMatches.size} match(es) exist",
+                                occurrenceTotal = sortedMatches.size,
+                            )
+                            null
+                        }
+                        occurrence == TermuxEditOccurrence.First -> listOf(sortedMatches.first())
+                        occurrence == TermuxEditOccurrence.Last -> listOf(sortedMatches.last())
+                        occurrence is TermuxEditOccurrence.Nth -> listOf(sortedMatches[occurrence.position - 1])
+                        occurrence == TermuxEditOccurrence.All -> {
+                            // Keep only non-overlapping matches, greedily by source order, so
+                            // self-overlapping needles (e.g. "aa" in "aaa") behave like replace-all.
+                            val kept = ArrayList<Match>(sortedMatches.size)
+                            var lastEnd = -1
+                            for (candidate in sortedMatches) {
+                                if (candidate.start >= lastEnd) { kept += candidate; lastEnd = candidate.end }
+                            }
+                            kept
+                        }
+                        else -> sortedMatches // default unique match
                     }
-                    val start = if (edit.mode == TermuxEditMode.AFTER) match.end else match.start
-                    val end = if (edit.mode == TermuxEditMode.REPLACE) match.end else start
-                    val changesSource = when (edit.mode) {
-                        TermuxEditMode.REPLACE -> replacement != match.matchedText
-                        TermuxEditMode.BEFORE, TermuxEditMode.AFTER -> replacement.isNotEmpty()
+                    if (selected != null) {
+                        selected.forEach { match ->
+                            val replacement = when {
+                                edit.mode == TermuxEditMode.REPLACE && normalizeInputLines(match.matchedText) == edit.writeText -> match.matchedText
+                                edit.mode == TermuxEditMode.REPLACE && match.strategy == "indent" ->
+                                    reindent(edit.writeText, match.matchedText, edit.matchText, budget)
+                                else -> edit.writeText
+                            }
+                            val start = if (edit.mode == TermuxEditMode.AFTER) match.end else match.start
+                            val end = if (edit.mode == TermuxEditMode.REPLACE) match.end else start
+                            val changesSource = when (edit.mode) {
+                                TermuxEditMode.REPLACE -> replacement != match.matchedText
+                                TermuxEditMode.BEFORE, TermuxEditMode.AFTER -> replacement.isNotEmpty()
+                            }
+                            resolved += Resolved(index, start, end, replacement, changesSource)
+                        }
+                        diagnostics += TermuxEditDiagnostic(
+                            index, edit.mode.wireName, "matched", true, selected.first().strategy,
+                            occurrencesApplied = if (occurrence != null) selected.size else null,
+                        )
                     }
-                    resolved += Resolved(index, start, end, replacement, changesSource)
-                    diagnostics += TermuxEditDiagnostic(index, edit.mode.wireName, "matched", true, match.strategy)
                 }
             }
         }

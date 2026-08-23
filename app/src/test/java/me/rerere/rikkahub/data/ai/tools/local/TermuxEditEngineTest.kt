@@ -16,7 +16,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TermuxEditEngineTest {
-    private fun edit(mode: TermuxEditMode, match: String, write: String) = TermuxEditSpec(mode, match, write)
+    private fun edit(
+        mode: TermuxEditMode,
+        match: String,
+        write: String,
+        occurrence: TermuxEditOccurrence? = null,
+    ) = TermuxEditSpec(mode, match, write, occurrence)
 
     @Test fun exactAdjacentAndLiteralInsertionsResolveAgainstOriginalSource() {
         val result = applyTermuxEdits("abcd", listOf(
@@ -83,6 +88,168 @@ class TermuxEditEngineTest {
         assertTrue(result.success)
         assertEquals("fun x() {\n        if (done) {\n            stop()\n        }\n}\n", result.edited)
         assertEquals("indent", result.diagnostics.single().strategy)
+    }
+
+    // BUG 1 regression pins (live-session evidence): insert modes must never emit the anchor
+    // twice. The splice math keeps the anchor exactly once for exact, indent, and fuzzy
+    // strategies, single-line and multi-line anchors, insert_before and insert_after.
+    @Test fun insertModesNeverDuplicateTheAnchor() {
+        val before = applyTermuxEdits("AAA\nBBB\nCCC", listOf(edit(TermuxEditMode.BEFORE, "BBB", "X\n")))
+        assertTrue(before.success)
+        assertEquals("AAA\nX\nBBB\nCCC", before.edited)
+
+        val after = applyTermuxEdits("AAA\nBBB\nCCC", listOf(edit(TermuxEditMode.AFTER, "BBB", "\nX")))
+        assertTrue(after.success)
+        assertEquals("AAA\nBBB\nX\nCCC", after.edited)
+
+        // Evidence A shape: indented single-line anchor, insert_before (exact strategy).
+        val jsx = "    <main>\n      {/* Inspector inline at >=1280px */}\n      <div>body</div>\n    </main>\n"
+        val anchor = "{/* Inspector inline at >=1280px */}"
+        val insertedBefore = applyTermuxEdits(jsx, listOf(edit(TermuxEditMode.BEFORE, anchor, "{open && (<aside/>)}\n      ")))
+        assertTrue(insertedBefore.success)
+        assertEquals(1, Regex(Regex.escape(anchor)).findAll(insertedBefore.edited).count())
+        assertEquals(
+            "    <main>\n      {open && (<aside/>)}\n      {/* Inspector inline at >=1280px */}\n      <div>body</div>\n    </main>\n",
+            insertedBefore.edited,
+        )
+
+        // Evidence B shape: multi-line block ending in ");", insert_after via the indent strategy.
+        val routes = "  router.get(\n    '/items',\n    handler,\n  );\n  next();\n"
+        val insertedAfter = applyTermuxEdits(routes, listOf(edit(
+            TermuxEditMode.AFTER,
+            "router.get(\n  '/items',\n  handler,\n);",
+            "\n  router.delete(\n    '/items/:id',\n    remover,\n  );",
+        )))
+        assertTrue(insertedAfter.success)
+        assertEquals("indent", insertedAfter.diagnostics.single().strategy)
+        assertEquals(1, Regex(Regex.escape("router.get(")).findAll(insertedAfter.edited).count())
+        assertEquals(
+            "  router.get(\n    '/items',\n    handler,\n  );\n  router.delete(\n    '/items/:id',\n    remover,\n  );\n  next();\n",
+            insertedAfter.edited,
+        )
+
+        // Fuzzy strategy: NBSP in source, plain space in match text; multi-line anchor.
+        val fuzzySource = "  start  \n  middle\u00a0x\n  end\n  tail\n"
+        val fuzzy = applyTermuxEdits(fuzzySource, listOf(edit(TermuxEditMode.AFTER, "  start\n  middle x\n  end", "\n  INSERTED")))
+        assertTrue(fuzzy.success)
+        assertEquals("fuzzy", fuzzy.diagnostics.single().strategy)
+        assertEquals(1, Regex("start").findAll(fuzzy.edited).count())
+        assertEquals("  start  \n  middle\u00a0x\n  end\n  INSERTED\n  tail\n", fuzzy.edited)
+    }
+
+    @Test fun occurrenceSelectorsPickFirstLastNthAndReplaceAll() {
+        val source = "a=1\nb=2\na=1\nc=3\na=1\n"
+
+        val all = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "a=1", "a=9", TermuxEditOccurrence.All)))
+        assertTrue(all.success)
+        assertEquals("a=9\nb=2\na=9\nc=3\na=9\n", all.edited)
+        assertEquals(3, all.diagnostics.single().occurrencesApplied)
+        assertEquals("applied", all.diagnostics.single().status)
+
+        val first = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "a=1", "a=9", TermuxEditOccurrence.First)))
+        assertTrue(first.success)
+        assertEquals("a=9\nb=2\na=1\nc=3\na=1\n", first.edited)
+        assertEquals(1, first.diagnostics.single().occurrencesApplied)
+
+        val last = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "a=1", "a=9", TermuxEditOccurrence.Last)))
+        assertTrue(last.success)
+        assertEquals("a=1\nb=2\na=1\nc=3\na=9\n", last.edited)
+
+        val second = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "a=1", "a=9", TermuxEditOccurrence.Nth(2))))
+        assertTrue(second.success)
+        assertEquals("a=1\nb=2\na=9\nc=3\na=1\n", second.edited)
+
+        // Insert modes work with occurrence too and never duplicate anchors.
+        val insertAll = applyTermuxEdits(source, listOf(edit(TermuxEditMode.BEFORE, "a=1", "# note\n", TermuxEditOccurrence.All)))
+        assertTrue(insertAll.success)
+        assertEquals("# note\na=1\nb=2\n# note\na=1\nc=3\n# note\na=1\n", insertAll.edited)
+        assertEquals(3, insertAll.diagnostics.single().occurrencesApplied)
+
+        // Default (no occurrence) stays strictly ambiguous.
+        val strict = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "a=1", "a=9")))
+        assertFalse(strict.success)
+        assertEquals("ambiguous_match", strict.diagnostics.single().reason)
+        assertNull(strict.diagnostics.single().occurrencesApplied)
+
+        // Unique match with an occurrence selector still succeeds and reports the count.
+        val unique = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "b=2", "b=8", TermuxEditOccurrence.All)))
+        assertTrue(unique.success)
+        assertEquals(1, unique.diagnostics.single().occurrencesApplied)
+    }
+
+    @Test fun occurrenceOutOfRangeFailsWithTotalCountAndSelfOverlapIsNonGreedy() {
+        val source = "a=1\nb=2\na=1\n"
+        val outOfRange = applyTermuxEdits(source, listOf(edit(TermuxEditMode.REPLACE, "a=1", "a=9", TermuxEditOccurrence.Nth(3))))
+        assertFalse(outOfRange.success)
+        val diagnostic = outOfRange.diagnostics.single()
+        assertEquals("occurrence_out_of_range", diagnostic.reason)
+        assertEquals(2, diagnostic.occurrenceTotal)
+        assertTrue(diagnostic.nearbyText!!.contains("only 2 match(es)"))
+        assertEquals(source, outOfRange.edited)
+
+        // "aa" in "aaaa": all-mode keeps non-overlapping matches only (replace-all semantics).
+        val selfOverlap = applyTermuxEdits("aaaa", listOf(edit(TermuxEditMode.REPLACE, "aa", "b", TermuxEditOccurrence.All)))
+        assertTrue(selfOverlap.success)
+        assertEquals("bb", selfOverlap.edited)
+        assertEquals(2, selfOverlap.diagnostics.single().occurrencesApplied)
+    }
+
+    @Test fun occurrenceEditsCoexistWithStrictEditsInOneBatch() {
+        val source = "key=old\nrepeat\nmiddle\nrepeat\n"
+        val result = applyTermuxEdits(source, listOf(
+            edit(TermuxEditMode.REPLACE, "key=old", "key=new"),
+            edit(TermuxEditMode.REPLACE, "repeat", "twice", TermuxEditOccurrence.All),
+        ))
+        assertTrue(result.success)
+        assertEquals("key=new\ntwice\nmiddle\ntwice\n", result.edited)
+        assertNull(result.diagnostics[0].occurrencesApplied)
+        assertEquals(2, result.diagnostics[1].occurrencesApplied)
+
+        // A strict edit that is ambiguous still fails the batch even when another edit
+        // uses an occurrence selector.
+        val mixedFailure = applyTermuxEdits(source, listOf(
+            edit(TermuxEditMode.REPLACE, "repeat", "once"),
+            edit(TermuxEditMode.REPLACE, "key=old", "key=new", TermuxEditOccurrence.First),
+        ))
+        assertFalse(mixedFailure.success)
+        assertEquals("ambiguous_match", mixedFailure.diagnostics[0].reason)
+        assertEquals(source, mixedFailure.edited)
+    }
+
+    @Test fun occurrenceParserAcceptsKeywordsAndPositiveIntegersOnly() {
+        fun parse(occurrence: String): Any = parseTermuxEditRequest(
+            Json.parseToJsonElement("""{"path":"x","edits":[{"mode":"replace_match","match_text":"a","write_text":"b","occurrence":$occurrence}]}"""),
+            single = true,
+        )
+        fun spec(occurrence: String): TermuxEditOccurrence? =
+            (parse(occurrence) as PublicInputResult.Ok<TermuxEditRequest>).value.files.single().edits.single().occurrence
+        fun errorCode(occurrence: String): String = (parse(occurrence) as PublicInputResult.Error).value.code
+
+        assertEquals(TermuxEditOccurrence.First, spec("\"first\""))
+        assertEquals(TermuxEditOccurrence.Last, spec("\"last\""))
+        assertEquals(TermuxEditOccurrence.All, spec("\"all\""))
+        assertEquals(TermuxEditOccurrence.Nth(2), spec("2"))
+        assertEquals(TermuxEditOccurrence.Nth(7), spec("\"7\""))
+        assertNull(spec("null"))
+        assertEquals("edits[0].invalid_occurrence", errorCode("0"))
+        assertEquals("edits[0].invalid_occurrence", errorCode("-1"))
+        assertEquals("edits[0].invalid_occurrence", errorCode("1.5"))
+        assertEquals("edits[0].invalid_occurrence", errorCode("true"))
+        assertEquals("edits[0].invalid_occurrence", errorCode("\"everything\""))
+        assertEquals("edits[0].invalid_occurrence", errorCode("[1]"))
+    }
+
+    @Test fun occurrenceDiagnosticJsonReportsAppliedCountAndOutOfRangeTotal() {
+        val applied = applyTermuxEdits("x\nx\n", listOf(edit(TermuxEditMode.REPLACE, "x", "y", TermuxEditOccurrence.All)))
+        assertTrue(applied.success)
+        val appliedJson = diagnosticJson(applied.diagnostics.single())
+        assertEquals(2, appliedJson["occurrences_applied"]!!.jsonPrimitive.int)
+
+        val outOfRange = applyTermuxEdits("x\nx\n", listOf(edit(TermuxEditMode.REPLACE, "x", "y", TermuxEditOccurrence.Nth(9))))
+        assertFalse(outOfRange.success)
+        val failedJson = diagnosticJson(outOfRange.diagnostics.single())
+        assertEquals("occurrence_out_of_range", failedJson["reason"]!!.jsonPrimitive.content)
+        assertEquals(2, failedJson["occurrence_total"]!!.jsonPrimitive.int)
     }
 
     @Test fun ambiguityOverlapAndSamePositionAbortWholeFileWithBoundedDiagnostics() {
