@@ -56,7 +56,12 @@ class TermuxEditToolSchemaTest {
         val schema = editSpecSchema()
 
         val props = schema["properties"]!!.jsonObject.keys
-        assertTrue(props.containsAll(listOf("mode", "match_text", "matchText", "write_text", "writeText")))
+        assertTrue(props.containsAll(listOf("mode", "match_text", "matchText", "write_text", "writeText", "occurrence")))
+
+        // occurrence stays a combinator-free union type array (like expected_sha256's
+        // ["string","null"]), which strict provider dialects accept.
+        val occurrenceType = schema["properties"]!!.jsonObject["occurrence"]!!.jsonObject["type"]!!.jsonArray
+        assertEquals(listOf("string", "integer"), occurrenceType.map { it.jsonPrimitive.content })
 
         // only mode is schema-required; the match/write constraint lives in the engine
         assertEquals(

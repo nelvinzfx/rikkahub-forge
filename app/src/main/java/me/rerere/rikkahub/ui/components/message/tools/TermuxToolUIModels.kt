@@ -53,6 +53,8 @@ private val EDIT_REASONS = setOf(
     "work_budget_exceeded",
     "result_too_large",
     "overlapping_or_same_position",
+    "occurrence_out_of_range",
+    "too_many_occurrences",
 )
 
 internal data class TermuxEditUIModel(
