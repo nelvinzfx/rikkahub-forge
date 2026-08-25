@@ -93,9 +93,9 @@ import me.rerere.rikkahub.ui.components.ai.FilesPicker
 import me.rerere.rikkahub.ui.components.ai.completion.SkillCompletionProvider
 import me.rerere.rikkahub.ui.components.ai.completion.WorkspaceCompletionProvider
 import me.rerere.rikkahub.ui.components.ai.useCropLauncher
-import me.rerere.rikkahub.ui.components.ui.ContextWindowGauge
 import me.rerere.rikkahub.ui.components.ui.DEFAULT_CONTEXT_LENGTH
 import me.rerere.rikkahub.ui.components.ui.RabbitLoadingIndicator
+import me.rerere.rikkahub.ui.components.ui.computeCacheHitRate
 import me.rerere.rikkahub.ui.components.ui.computeContextUsage
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionCamera
 import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
@@ -322,6 +322,16 @@ private fun ChatPageContent(
     val hazeState = rememberHazeState()
     val assistant = setting.getAssistantById(conversation.assistantId)
         ?: setting.getCurrentAssistant()
+    val dockCacheUsage = remember(conversation) { computeCacheHitRate(conversation) }
+    val dockUsedTokens = remember(conversation) { computeContextUsage(conversation) }
+    val dockContextModel = setting.findModelById(
+        conversation.chatModelId,
+        fallback = assistant.chatModelId ?: setting.chatModelId,
+    ) ?: conversation.currentMessages.mapNotNull { it.modelId }.lastOrNull()
+        ?.let { setting.providers.findModelById(it) }
+    val dockContextLength = assistant.autoCompactionContextWindow.takeIf { it > 0 }
+        ?: dockContextModel?.contextLength
+        ?: DEFAULT_CONTEXT_LENGTH
     var showFilesSheet by remember { mutableStateOf(false) }
     var forceOrchestratorNextTurn by rememberSaveable(conversation.id) { mutableStateOf(false) }
     val displayedOrchestratorMode = if (forceOrchestratorNextTurn) {
@@ -402,6 +412,10 @@ private fun ChatPageContent(
                     loading = loadingJob?.isActive == true,
                     settings = setting,
                     hazeState = hazeState,
+                    usedTokens = dockUsedTokens,
+                    contextLength = dockContextLength,
+                    cachedTokens = dockCacheUsage.cachedTokens,
+                    promptTokens = dockCacheUsage.promptTokens,
                     completionProviders = completionProviders,
                     onCancelClick = {
                         vm.stopGeneration()
@@ -894,21 +908,6 @@ private fun TopBar(
                 Icon(HugeIcons.MessageAdd01, "New Message")
             }
         },
-    )
-    val conversationAssistant = settings.getAssistantById(conversation.assistantId)
-        ?: settings.getCurrentAssistant()
-    val gaugeModel = settings.findModelById(
-        conversation.chatModelId,
-        fallback = conversationAssistant.chatModelId ?: settings.chatModelId,
-    ) ?: conversation.currentMessages.mapNotNull { it.modelId }.lastOrNull()
-        ?.let { settings.providers.findModelById(it) }
-    val usedTokens = remember(conversation) { computeContextUsage(conversation) }
-    ContextWindowGauge(
-        usedTokens = usedTokens,
-        contextLength = conversationAssistant.autoCompactionContextWindow.takeIf { it > 0 }
-            ?: gaugeModel?.contextLength
-            ?: DEFAULT_CONTEXT_LENGTH,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     )
     }
     titleState.EditStateContent { title, onUpdate ->

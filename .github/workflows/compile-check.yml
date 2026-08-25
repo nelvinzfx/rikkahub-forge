@@ -100,6 +100,7 @@ jobs:
             --tests 'me.rerere.rikkahub.data.ai.tools.local.SearchConversationsToolTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.local.ConversationRecallToolsTest' \
             --tests 'me.rerere.rikkahub.data.ai.tools.ConversationRecallAlwaysOnTest' \
+            --tests 'me.rerere.rikkahub.ui.components.ui.InputDockTelemetryTest' \
             --no-daemon --stacktrace
           ./gradlew :ai:testDebugUnitTest \
             --tests 'me.rerere.ai.provider.providers.StreamedToolCallIdResolverTest' \
