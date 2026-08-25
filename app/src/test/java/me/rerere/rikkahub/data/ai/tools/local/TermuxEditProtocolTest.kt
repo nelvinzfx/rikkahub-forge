@@ -97,7 +97,7 @@ class TermuxEditProtocolTest {
         assertTrue(text.contains("-line1050\n+changed1050"))
     }
 
-    @Test fun extremeLineCountUsesVisibleBoundedNotice() {
+    @Test fun extremeLineCountWithTinyEditNowRendersMinimalDiff() {
         val oldLines = MutableList(20_001) { "x" }
         val oldText = oldLines.joinToString("\n")
         oldLines[0] = "y"
@@ -105,9 +105,68 @@ class TermuxEditProtocolTest {
         val diff = boundedEditDiff(oldText, newText, "extreme.txt")
         val text = requireNotNull(diff.text)
 
+        // 20,001 lines used to force the whole-file linear fallback; after prefix/suffix
+        // trimming the changed middle is four lines, so Myers renders one minimal hunk.
+        assertFalse(diff.omitted)
+        assertTrue(text.contains("-x"))
+        assertTrue(text.contains("+y"))
+        assertTrue(text.lines().count { it.startsWith("-") && !it.startsWith("---") } <= 1)
+        assertTrue(text.length <= TERMUX_EDIT_DIFF_MAX_CHARS)
+    }
+
+    @Test fun extremeChangedMiddleStillUsesVisibleBoundedNotice() {
+        val oldText = (1..20_001).joinToString("\n") { "old$it" }
+        val newText = (1..20_001).joinToString("\n") { "new$it" }
+        val diff = boundedEditDiff(oldText, newText, "extreme.txt")
+        val text = requireNotNull(diff.text)
+
         assertTrue(diff.omitted)
         assertTrue(text.contains("20000-line fallback limit"))
         assertTrue(text.length <= TERMUX_EDIT_DIFF_MAX_CHARS)
+    }
+
+    @Test fun bigFileWithNearbyScatteredEditsRendersPerEditHunks() {
+        val oldLines = (1..2_500).map { "line%05d".format(it) }
+        val newLines = oldLines.toMutableList().also {
+            it[99] = "replaced100"
+            it.add(900, "insertA")
+            it.add(901, "insertB")
+        }
+        val diff = boundedEditDiff(
+            oldLines.joinToString("\n"),
+            newLines.joinToString("\n"),
+            "big-spread.kt",
+        )
+        val text = requireNotNull(diff.text)
+
+        assertFalse(diff.omitted)
+        val hunks = text.lines().filter { it.startsWith("@@ ") }
+        assertEquals(2, hunks.size)
+        assertEquals("@@ -97,7 +97,7 @@", hunks[0])
+        assertEquals("@@ -898,6 +898,8 @@", hunks[1])
+        assertEquals(1, text.lines().count { it.startsWith("-") && !it.startsWith("---") })
+        assertEquals(3, text.lines().count { it.startsWith("+") && !it.startsWith("+++") })
+    }
+
+    @Test fun distantEditsBeyondWorkBudgetStillUseLinearFallback() {
+        val oldLines = (1..2_500).map { "line$it" }
+        val newLines = oldLines.toMutableList().also {
+            it[99] = "changed100"
+            it[1_999] = "changed2000"
+        }
+        val diff = boundedEditDiff(
+            oldLines.joinToString("\n"),
+            newLines.joinToString("\n"),
+            "far-spread.kt",
+        )
+        val text = requireNotNull(diff.text)
+
+        assertFalse(diff.omitted)
+        // Edits ~1,900 lines apart leave a middle too large for the work budget, so the
+        // whole-span linear renderer keeps handling it with one bounded hunk.
+        assertEquals(1, text.lines().count { it.startsWith("@@ ") })
+        assertTrue(text.lines().count { it.startsWith("-") } > 1_000)
+        assertTrue(text.contains("-changed100\n+changed100"))
     }
 
     @Test fun snapshotParserRequiresCanonicalCorrelationAndBounds() {

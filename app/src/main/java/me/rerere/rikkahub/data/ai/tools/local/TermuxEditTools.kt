@@ -327,18 +327,49 @@ internal fun boundedEditDiff(oldText: String, newText: String, path: String): Bo
             detail = "the path contains line separators and was omitted from the diff header.",
         )
     }
-    val oldLines = physicalTermuxDiffLines(oldText)
-    val newLines = physicalTermuxDiffLines(newText)
-    val needsLinearFallback = oldText.length.toLong() + newText.length > MAX_TERMUX_DIFF_INPUT_CHARS ||
-        oldLines > MAX_TERMUX_DIFF_LINES || newLines > MAX_TERMUX_DIFF_LINES ||
-        oldLines * newLines > MAX_TERMUX_DIFF_WORK_UNITS
-    if (needsLinearFallback) return generateLinearTermuxEditDiff(oldText, newText, path)
-    val diff = me.rerere.rikkahub.utils.generateUnifiedDiff(oldText, newText, path)
-    return if (diff == null) {
-        generateLinearTermuxEditDiff(oldText, newText, path)
-    } else {
-        BoundedDiff(diff, false)
+    // Trim the common line prefix/suffix before the budget gates so large files with
+    // small scattered edits pay for a Myers diff of the changed middle only, instead of
+    // always tripping the quadratic full-size work gate and rendering the whole span
+    // between first and last change as one -/+ block.
+    val middle = trimmedEditDiffMiddle(oldText, newText)
+    val needsLinearFallback = middle.oldChars + middle.newChars > MAX_TERMUX_DIFF_INPUT_CHARS ||
+        middle.oldLines > MAX_TERMUX_DIFF_LINES || middle.newLines > MAX_TERMUX_DIFF_LINES ||
+        middle.oldLines * middle.newLines > MAX_TERMUX_DIFF_WORK_UNITS
+    if (!needsLinearFallback) {
+        val diff = me.rerere.rikkahub.utils.generateTrimmedUnifiedDiff(oldText, newText, path)
+        if (diff != null) return BoundedDiff(diff, false)
     }
+    return generateLinearTermuxEditDiff(oldText, newText, path)
+}
+
+private data class TrimmedEditDiffMiddle(
+    val prefix: Int,
+    val suffix: Int,
+    val oldLines: Long,
+    val newLines: Long,
+    val oldChars: Int,
+    val newChars: Int,
+)
+
+private fun trimmedEditDiffMiddle(oldText: String, newText: String): TrimmedEditDiffMiddle {
+    val oldLines = oldText.lines()
+    val newLines = newText.lines()
+    val (rawPrefix, rawSuffix) = me.rerere.rikkahub.utils.commonLineTrim(oldLines, newLines)
+    // Keep the same context allowance as generateTrimmedUnifiedDiff's default so the
+    // gate measures the exact slice that will actually be diffed.
+    val context = 3
+    val prefix = maxOf(0, rawPrefix - context)
+    val suffix = maxOf(0, rawSuffix - context)
+    val oldSlice = oldLines.subList(prefix, oldLines.size - suffix)
+    val newSlice = newLines.subList(prefix, newLines.size - suffix)
+    return TrimmedEditDiffMiddle(
+        prefix = prefix,
+        suffix = suffix,
+        oldLines = oldSlice.size.toLong(),
+        newLines = newSlice.size.toLong(),
+        oldChars = oldSlice.sumOf { it.length + 1 },
+        newChars = newSlice.sumOf { it.length + 1 },
+    )
 }
 
 private fun truncateDiffs(prepared: List<PreparedTermuxEdit>): Pair<List<PreparedTermuxEdit>, Boolean> {

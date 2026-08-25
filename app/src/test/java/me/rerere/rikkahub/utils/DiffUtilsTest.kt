@@ -2,9 +2,46 @@ package me.rerere.rikkahub.utils
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiffUtilsTest {
+
+    @Test
+    fun `trimmed diff keeps global line numbers for scattered small edits`() {
+        val oldLines = (1..30).map { "row$it" }
+        val newLines = oldLines.toMutableList().also {
+            it[4] = "edit5"
+            it[19] = "edit20"
+        }
+        val diff = requireNotNull(
+            generateTrimmedUnifiedDiff(oldLines.joinToString("\n"), newLines.joinToString("\n"), "spread.txt"),
+        )
+        val hunks = diff.split("\n").filter { it.startsWith("@@ ") }
+        assertEquals(2, hunks.size)
+        assertEquals("@@ -2,7 +2,7 @@", hunks[0])
+        assertEquals("@@ -17,7 +17,7 @@", hunks[1])
+        assertTrue(diff.contains("-row5\n+edit5"))
+        assertTrue(diff.contains("-row20\n+edit20"))
+    }
+
+    @Test
+    fun `trimmed diff merges nearby edits into one hunk`() {
+        val oldLines = (1..30).map { "row$it" }
+        val newLines = oldLines.toMutableList().also {
+            it[4] = "edit5"
+            it[6] = "edit7"
+        }
+        val diff = requireNotNull(
+            generateTrimmedUnifiedDiff(oldLines.joinToString("\n"), newLines.joinToString("\n"), "near.txt"),
+        )
+        assertEquals(1, diff.split("\n").count { it.startsWith("@@ ") })
+    }
+
+    @Test
+    fun `trimmed diff returns null when only line separators differ`() {
+        assertNull(generateTrimmedUnifiedDiff("first\r\nsecond", "first\nsecond", "crlf.txt"))
+    }
 
     @Test
     fun `returns null when texts are identical`() {
