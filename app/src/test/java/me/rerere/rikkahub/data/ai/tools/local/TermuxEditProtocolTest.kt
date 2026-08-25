@@ -166,10 +166,12 @@ class TermuxEditProtocolTest {
         // whole-span linear renderer keeps handling it with one bounded hunk.
         assertEquals(1, text.lines().count { it.startsWith("@@ ") })
         assertTrue(text.lines().count { it.startsWith("-") } > 1_000)
-        // Linear fallback renders the whole span as one minus block then one plus block,
-        // so the paired edit lines are present but never contiguous.
-        assertTrue(text.contains("-changed100"))
+        // Linear fallback renders the whole span as one minus block (old lines) then one
+        // plus block (new lines); the changed lines are present but never contiguous.
+        assertTrue(text.contains("-line100"))
+        assertTrue(text.contains("-line2000"))
         assertTrue(text.contains("+changed100"))
+        assertTrue(text.contains("+changed2000"))
     }
 
     @Test fun snapshotParserRequiresCanonicalCorrelationAndBounds() {
