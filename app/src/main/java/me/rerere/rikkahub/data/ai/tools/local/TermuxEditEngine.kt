@@ -607,6 +607,37 @@ private fun reindent(write: String, matched: String, intended: String, budget: T
     return output.toString()
 }
 
+/**
+ * Line-boundary insert discipline: a before-insert whose anchor sits at a line start but
+ * whose write text lacks a trailing newline would fuse with the following line, and an
+ * after-insert at a line end without a leading newline fuses with the preceding line. Both
+ * junctions are completed with the file's local line ending. Mid-line inserts stay verbatim.
+ */
+private fun insertBeforeWithLineBreak(content: String, start: Int, write: String): String {
+    if (write.isEmpty() || write.endsWith("\n")) return write
+    val junctionBreak = when {
+        start == 0 -> "\n"
+        content[start - 1] == '\n' -> if (start >= 2 && content[start - 2] == '\r') "\r\n" else "\n"
+        content[start - 1] == '\r' && content.getOrNull(start) != '\n' -> "\r"
+        else -> null
+    }
+    if (junctionBreak == null) return write
+    return write + junctionBreak
+}
+
+private fun insertAfterWithLineBreak(content: String, end: Int, write: String): String {
+    if (write.isEmpty() || write.startsWith("\n")) return write
+    val junctionBreak = when {
+        end == content.length -> "\n"
+        end + 1 < content.length && content[end] == '\r' && content[end + 1] == '\n' -> "\r\n"
+        content[end] == '\n' -> "\n"
+        content[end] == '\r' -> "\r"
+        else -> null
+    }
+    if (junctionBreak == null) return write
+    return junctionBreak + write
+}
+
 private fun bounded(value: String, max: Int = 200): String = value.replace("\r", "\\r").take(max)
 
 private fun ambiguity(content: String, lines: LineIndex, found: List<Match>): List<Pair<Int, String>> {
@@ -848,6 +879,8 @@ internal fun applyTermuxEdits(
                                 edit.mode == TermuxEditMode.REPLACE && normalizeInputLines(match.matchedText) == edit.writeText -> match.matchedText
                                 edit.mode == TermuxEditMode.REPLACE && match.strategy == "indent" ->
                                     reindent(edit.writeText, match.matchedText, edit.matchText, budget)
+                                edit.mode == TermuxEditMode.BEFORE -> insertBeforeWithLineBreak(original, match.start, edit.writeText)
+                                edit.mode == TermuxEditMode.AFTER -> insertAfterWithLineBreak(original, match.end, edit.writeText)
                                 else -> edit.writeText
                             }
                             val start = if (edit.mode == TermuxEditMode.AFTER) match.end else match.start

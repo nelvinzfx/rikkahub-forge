@@ -32,8 +32,14 @@ class TermuxEditEngineTest {
         assertEquals("ABCD", result.edited)
         assertEquals(listOf("exact", "exact"), result.diagnostics.map { it.strategy })
 
+        // insert_after at end of file is a line-boundary insert: the engine completes the
+        // junction with a newline instead of fusing the new text onto the anchor line.
         val inserted = applyTermuxEdits("anchor", listOf(edit(TermuxEditMode.AFTER, "anchor", "literal")))
-        assertEquals("anchorliteral", inserted.edited)
+        assertEquals("anchor\nliteral", inserted.edited)
+
+        // Mid-line inserts stay verbatim: no line boundary at the insertion point.
+        val midLine = applyTermuxEdits("anchorX", listOf(edit(TermuxEditMode.AFTER, "anchor", "literal")))
+        assertEquals("anchorliteralX", midLine.edited)
 
 
         val literalMixedEndingInsert = applyTermuxEdits(
@@ -436,6 +442,41 @@ class TermuxEditEngineTest {
             edit(TermuxEditMode.BEFORE, "ab", "|"),
         ))
         assertFalse(sameStart.success)
+    }
+
+    // Line-boundary insert discipline: a before-insert at a line start without a trailing
+    // newline, and an after-insert at a line end without a leading newline, are completed
+    // with the file's local line ending instead of fusing lines. Mid-line inserts stay
+    // verbatim. Regression pin for live-session evidence (fused import line).
+    @Test fun lineBoundaryInsertsNeverFuseLines() {
+        val source = "fun a() {\n}\n\nfun b() {\n}\n"
+
+        val before = applyTermuxEdits(source, listOf(edit(TermuxEditMode.BEFORE, "fun b() {\n}", "// second")))
+        assertTrue(before.success)
+        assertEquals("fun a() {\n}\n\n// second\nfun b() {\n}\n", before.edited)
+
+        val beforeOk = applyTermuxEdits(source, listOf(edit(TermuxEditMode.BEFORE, "fun b() {\n}", "// second\n")))
+        assertEquals("fun a() {\n}\n\n// second\nfun b() {\n}\n", beforeOk.edited)
+
+        val after = applyTermuxEdits(source, listOf(edit(TermuxEditMode.AFTER, "fun a() {\n}", "// note")))
+        assertTrue(after.success)
+        assertEquals("fun a() {\n}\n// note\n\nfun b() {\n}\n", after.edited)
+
+        val afterOk = applyTermuxEdits(source, listOf(edit(TermuxEditMode.AFTER, "fun a() {\n}", "\n// note")))
+        assertEquals("fun a() {\n}\n// note\n\nfun b() {\n}\n", afterOk.edited)
+
+        val midAfter = applyTermuxEdits("fooBar", listOf(edit(TermuxEditMode.AFTER, "foo", "X")))
+        assertEquals("fooXBar", midAfter.edited)
+        val midBefore = applyTermuxEdits("fooBar", listOf(edit(TermuxEditMode.BEFORE, "Bar", "X")))
+        assertEquals("fooXBar", midBefore.edited)
+
+        val head = applyTermuxEdits("first\nsecond\n", listOf(edit(TermuxEditMode.BEFORE, "first", "zero")))
+        assertEquals("zero\nfirst\nsecond\n", head.edited)
+
+        val crlfBefore = applyTermuxEdits("a\r\nb\r\n", listOf(edit(TermuxEditMode.BEFORE, "b", "x")))
+        assertEquals("a\r\nx\r\nb\r\n", crlfBefore.edited)
+        val crlfAfter = applyTermuxEdits("a\r\nb\r\n", listOf(edit(TermuxEditMode.AFTER, "a", "x")))
+        assertEquals("a\r\nx\r\nb\r\n", crlfAfter.edited)
     }
 
     @Test fun parserAcceptsOnlyDocumentedAliasesAndCanonicalizesModes() {
